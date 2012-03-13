@@ -4,62 +4,41 @@ Cabal-Version: >= 1.2
 Synopsis: Simply Reactive! Declarative orchestration. Not quite FRP.
 Category: Reactive, FRP
 Description:
-  Reactive Demand Programming (RDP) is a declarative paradigm for
-  orchestrating effects, based on observer effect: access to signals
-  is observable and may carry parameters. These `demand` signals can
-  carry both query and command information, while response signals 
-  represent observable state. Composition is possible; response from
-  one service can be directed as demand to another, with functional
-  transforms as necessary. Concurrent demands on resources and state 
-  are idempotent and commutative, achieving declarative control. 
+  Reactive Demand Programming (RDP) is a paradigm for declarative
+  orchestration of systems - continuous observation and influence.
+  It is distinct from most reactive paradigms in how it represents
+  effects: RDP parameterizes the demand for a signal - a command or
+  query - as another signal. Demands react to observed conditions,
+  and observable conditions are influenced by demand. Demands on a
+  service are idempotent and commutative, resulting in a declarative
+  programming experience.
   .
-  By adjusting demands in reaction to observed conditions, and with
-  conditions changing in reaction to demands, a single RDP program
-  can coordinate multiple sensors, actuators, and UIs. Logical time
-  and optimistic concurrency with limited backtracking are the basis
-  for consistency; use of explicit logical delay and synchronization
-  can even support deterministic temporal behavior. Delay becomes a
-  buffer that accommodates variations in scheduling or networking.
-  RDP does depend on closely synchronized clocks, though some drift
-  is permissible. (Use of NTP will achieve sufficient synch.)
+  RDP behaviors are eventless and stateless. However, events can be
+  represented by signals of short duration (e.g. button is down for
+  a few milliseconds, then back up) and RDP allows observation and
+  influence on external state resources (filesystems, databases, and
+  registers). 
   .
-  There are other impure paradigms with declarative control, such as
-  temporal concurrent constraint, event calculus, temporal logic.
-  RDP differs from these by placing signals on the real timeline and
-  accessing resources through encapsulated behaviors reminiscent of
-  functions. Despite surface similarities, the idioms and patterns 
-  for RDP behaviors are different from functional programming (e.g. 
-  recursion is deemphasized). The encapsulation of RDP behaviors 
-  supports object capability model security patterns.
+  Sirea is an implementation of a simplified RDP model. Sirea makes
+  several simplifying assumptions:
+    * discrete-varying signals 
+    * one concrete signal kind
+    * one concrete time type
+    * one concrete behavior type 
+    * forever loop, comandeers calling thread
+    * crash-only behavior; kill the thread
+    * single-threaded behaviors (up to IO)
+    * self-discipline for safe legacy integration
   .
-  Unlike most reactive models, RDP has no concept of events, and no
-  support for `internal` state. State in RDP is modeled as external
-  to the application: an abstract filesystem, registry, or database.
-  Events can be modeled as signals of short duration, e.g. a signal
-  that reflects the state of a button (down for a few milliseconds,
-  then back up). Event processing requires state to accumulate past
-  events, and RDP developers are encouraged to push events quickly
-  to RESTful state. 
+  RDP is designed for all scales, from embedded real-time systems to 
+  parallel, open distributed systems. Further, RDP is designed for
+  live programming and orthogonal persistence. RDP is more robust,
+  resilient, and securable than most other paradigms. 
   .
-  Sirea is an implementation of a simplified subset of RDP, enough
-  to demonstrate RDP and experiment with it. Relevant simplifying 
-  assumptions:
-    * discrete-varying signals only
-    * finite signal representations only
-    * one concrete signal type is good enough
-    * one concrete time type is good enough
-    * one concrete behavior type is good enough
-    * commandeer calling thread, i.e. `run` is forever
-    * crash-only behavior; nothing sophisticated, just kill thread
-  These assumptions save me from carrying fistfuls of type variables
-  and hence from tearing out fistfuls of hair. The synchronization
-  between independent behaviors is also far weaker.  
-  .
-  IO and FFI can be integrated with Sirea, and must be to obtain a
-  mouse position or effect a windowed display. While Sirea does not
-  enforce RDP constraints on effects, libraries and design patterns
-  will enable developers to integrate IO in an RDP-safe way and thus
-  support effectful declarative programming. 
+  Sirea offers only a subset of RDP's advantages, but should be
+  suitable at least for mid-scale soft real-time applications, such
+  as multi-media, servers, command and control, augmented reality, 
+  and video games. 
 
 Author: David Barbour
 Maintainer: dmbarbour@gmail.com

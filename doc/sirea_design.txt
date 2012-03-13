@@ -1,6 +1,12 @@
 
 
 Similar to the RDPIO, I would like to simplify integration with IO.
+- At most one call to external IO per `instant`, with a consistent snapshot of the signal at that point. That implies keeping some state to capture multiple signals.
+- All IO responses processed the next instant. Ability to handle responses from other threads, too, which is necessary when conditions change over time.
+- Might be multiple `rounds` of internal calls to reach consistency between external rounds.
+
+
+Time model: pair of strict integers tmMJD::!Int32, tmPicos::!Int64 for MJD and picoseconds.
 
 One thing I do NOT want is a lot of calls to `getUTCTime` every time an IO action is taken. Obtaining the current time is expensive, and multiple calls would return inconsistent values. So I should probably support IO integration where the current `logical` time is provided to the IO operation as a parameter.
 

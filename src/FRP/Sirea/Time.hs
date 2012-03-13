@@ -1,41 +1,47 @@
 
 module FRP.Sirea.Time
- (T,tmMJD,tmPicos
+ (T
+ ,tmDay,tmNanos
  ,mkTime,getTime      
  ,DT
- ,dtToPicos,picosToDt
+ ,dtToNanos,nanosToDt
  ,addTime,diffTime
  ) where
 
 import Data.Int (Int32,Int64)
+import Data.Ratio ((%),numerator,denominator)
 import qualified Data.Time.Clock as CW
-import Data.Time.Calendar (toModifiedJulianDay)
+import qualified Data.Time.Calendar as Cal
 import Data.Function (on)
 
--- | T - a fixpoint representation of universal time with picosecond
--- precision, as a pair of integers. Time in Sirea is modeled as 
+-- | T - a fixpoint representation of time UTC with nanosecond
+-- precision, as a pair of integers. Time in Sirea is modeled as  
 -- continuous, but the actual implementation is limited precision.
---    tmMJD   - Modified Julian Day (days since Nov 17, 1858)
---    tmPicos - Picoseconds in the day. (0..86400*10^12-1)
+--    tmDay   - Modified Julian Day (days since Nov 17, 1858)
+--    tmNanos - Nanoseconds in the day. [0,86400*10^9)
 -- Simplified. Strict. No leap seconds. Limited range, but over
 -- plus or minus five million years.
+--
+-- The choice of nanoseconds is so we can squeeze time-of-day into
+-- a double value, for interaction with most scripting languages
+-- (JavaScript, most importantly). 
 -- 
 -- Construct via mkTime, fromUTC, or getTime. 
-data T { _tmMJD :: !Int32, _tmPicos :: !Int64 }
+data T = T { _tmDay :: !Int32, _tmNanos :: !Int64 }
 
-tmMJD :: T -> Integer
-tmMJD = toInteger . _tmMJD
+tmDay :: T -> Integer
+tmDay = toInteger . _tmDay
 
-tmPicos :: T -> Integer
-tmPicos = toInteger . _tmPicos
+tmNanos :: T -> Integer
+tmNanos = toInteger . _tmNanos
 
--- | mkTime days picos, smart constructor; will convert
--- picos to days.
+-- | mkTime days nanos, smart constructor; will convert
+-- nanos to days.
 mkTime :: Integer -> Integer -> T
-mkTime days picos =
-    let (q,r) = picos `divMod` picosInDay in
-    T { _tmMJD = fromInteger (days + q)
-      , _tmPicos = fromInteger r 
+mkTime days nanos =
+    let (q,r) = nanos `divMod` nanosInDay in
+    T { _tmDay = fromInteger (days + q)
+      , _tmNanos = fromInteger r 
       }
 
 -- | Obtain estimate of current time from operating system.
@@ -46,43 +52,48 @@ fromUTC :: CW.UTCTime -> T
 fromUTC utc =
     let d = Cal.toModifiedJulianDay (CW.utctDay utc)
         r = toRational (CW.utctDayTime utc)
-        p = numerator r * picosInSec `div` denominator r
-    in mkTime d p
+        n = numerator r * nanosInSec `div` denominator r
+    in mkTime d n
 
 -- | DT - a representation of a difference in two times, accessible
---   as a distance in picoseconds. 
-newtype DT = DT T 
+--   as a distance in nanoseconds. 
+newtype DT = DT { unDT :: T }
 
-dtToPicos :: DT -> Integer
-dtToPicos (DT tm) = (picosInDay * tmMJD tm) + tmPicos tm
+dtToNanos :: DT -> Integer
+dtToNanos (DT tm) = (nanosInDay * tmDay tm) + tmNanos tm
 
-picosToDt :: Integer -> DT
-picosToDT = DT . mkTime 0 
+nanosToDt :: Integer -> DT
+nanosToDt = DT . mkTime 0 
 
 -- | Add a difference in time to an absolute time.
 addTime :: T -> DT -> T
 addTime tm (DT dt) =
-    let d' = _tmMJD tm + _tmMJD dt in 
-    let p' = _tmPicos dt + _tmPicos tm in
-    if (p < ppd) 
-    then T { _tmMJD = d', _tmPicos = p' }
-    else T { _tmMJD = d'+1, _tmPicos = p'-ppd }
+    let d = _tmDay tm + _tmDay dt in 
+    let n = _tmNanos dt + _tmNanos tm in
+    if (n < nnid) 
+    then T { _tmDay = d, _tmNanos = n }
+    else T { _tmDay = d+1, _tmNanos = n-nnid }
+    where nnid = fromInteger nanosInDay
 
 -- | Find the difference in time, diffTime a b = a - b
 diffTime :: T -> T -> DT
+diffTime tm tm' =
+    let d = _tmDay tm - _tmDay tm' in
+    let n = _tmNanos tm - _tmNanos tm' in
+    if (n < 0)
+    then DT $ T { _tmDay = (d-1), _tmNanos = (n+nnid) }
+    else DT $ T { _tmDay = d, _tmNanos = n }
+    where nnid = fromInteger nanosInDay
 
-picosInDay, secondsInDay, picosInSec :: Integer
-picosInDay = secondsInDay * picosInSec
+nanosInDay, secondsInDay, nanosInSec :: Integer
+nanosInDay = secondsInDay * nanosInSec
 secondsInDay = 24 * 60 * 60
-picosInSec = 1000 * 1000 * 1000 * 1000
-
-ppd :: Int64
-ppd = fromInteger picosInDay 
+nanosInSec = 1000 * 1000 * 1000 
 
 instance Eq T where
-  (==) a b = eqPicos a b && eqMJD a b
-    where eqPicos = (==) `on` _tmPicos
-          eqMJD = (==) `on` _tmMJD
+  (==) a b = eqNanos a b && eqMJD a b
+    where eqNanos = (==) `on` _tmNanos
+          eqMJD = (==) `on` _tmDay
 
 instance Eq DT where
   (==) = (==) `on` unDT
@@ -90,72 +101,47 @@ instance Eq DT where
 instance Ord T where
   compare a b = 
      case cmpDays a b of
-        EQ -> cmpPicos a b
+        EQ -> cmpNanos a b
         x -> x
-     where cmpDays = compare `on` _tmMJD
-           cmpPicos = compare `on` _tmPicos
+     where cmpDays = compare `on` _tmDay
+           cmpNanos = compare `on` _tmNanos
 
 instance Ord DT where
   compare = compare `on` unDT
 
-unDT :: DT -> T
-unDT (DT t) = t
-
-
 instance Num DT where
-    (+) a b = 
-        let p = picos a + picos b in
-        let d = days a + days b in
-        if (p > picosInDay) 
-        then UT { days = (d + 1), picos = (p - picosInDay) }
-        else UT { days = d, picos = p }
-    (-) a b = 
-        let p = picos a - picos b in
-        let d = days a - days b in
-        if (p < 0) 
-        then UT { days = (d - 1), picos = (p + picosInDay) }
-        else UT { days = d, picos = p }
-    (*) a b = picosToUT (q + c)
-        where pa = utToPicos a
-              pb = utToPicos b
-              (q,r) = (pa * pb) `divMod` toInteger picosInSec
-              c = if (r > toInteger (picosInSec `div` 2)) then 1 else 0 
-    negate b = 
-        if (picos b == 0)
-        then UT { days = negate (days b), picos = 0 }
-        else UT { days = negate (days b) - 1, picos = picosInDay - (picos b) }
-
-    abs b = if (days b < 0) then negate b else b
-    signum b =
-        case compare (utToPicos b) 0 of
-            LT -> fromInteger (-1)
-            EQ -> fromInteger 0
-            GT -> fromInteger 1
-    fromInteger n = picosToUT (n * toInteger picosInSec)
+    (+) (DT a) b = DT (addTime a b)
+    (-) = diffTime `on` unDT
+    (*) a b = nanosToDt (q + c)
+        where na = dtToNanos a
+              nb = dtToNanos b
+              (q,r) = (na * nb) `divMod` nanosInSec
+              c = if (r > (nanosInSec `div` 2)) then 1 else 0
+    negate = nanosToDt . negate . dtToNanos
+    abs = nanosToDt . abs . dtToNanos
+    signum = fromInteger . signum . dtToNanos
+    fromInteger = nanosToDt . (*) nanosInSec
 
 -- 'Fractional' is primarily for the 'fromRational' 
 -- numeric conversions in seconds.
 instance Fractional DT where
-    (/) a b = picosToUT (q + c) 
-        where pa = utToPicos a
-              pb = utToPicos b
-              (q,r) = (pa * toInteger picosInSec) `divMod` pb
-              c = if (r > pb `div` 2) then 1 else 0
+    (/) a b = nanosToDt (q + c) 
+        where na = dtToNanos a
+              nb = dtToNanos b
+              (q,r) = (na * nanosInSec) `divMod` nb  -- 
+              c = if (r > nb `div` 2) then 1 else 0  -- carry
     recip = (1 /) 
-    fromRational r = picosToUT ps
-        where ps = numerator r * toInteger picosInSec `div` denominator r
+    fromRational r = nanosToDt ps
+        where ps = (numerator r * nanosInSec) `div` denominator r
 
--- show instances for debugging, approximate.
 instance Show T where
-    show tm =
-       let dblDay = fromInteger (tmDay tm) :: Double
-           dblFrac = fromRational (tmPicos tm % picosInDay) :: Double
-       in show (dblDay + dblFrac)
+    show tm = "MJD " ++ sDay ++ sFrac
+      where dblFrac = fromRational (tmNanos tm % nanosInDay) :: Double
+            sDay = show (tmDay tm)
+            sFrac = tail $ show dblFrac
 
 instance Show DT where
-    show = show . unDT
-
-
-
+    show dt = show fsec ++ "s"
+      where fsec = fromRational (dtToNanos dt % nanosInSec) :: Double
 
 
