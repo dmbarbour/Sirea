@@ -34,7 +34,7 @@ data (:&:) x y
 -- statically known, periods.
 data (:|:) x y
 
--- | (S p a) describes a signal of type `a` in partition `p`.
+-- | (S p a) is a Sig in a blanket - Sig a in partition p. 
 --
 -- See FRP.Sirea.Signal for a description of signals. RDP developers
 -- do not work directly with signals, but rather with behaviors that
@@ -44,13 +44,14 @@ data (:|:) x y
 -- Partitions represent the spatial distribution of signals, across
 -- threads, processes, or heterogeneous systems. Developers can keep
 -- certain functionality to certain partitions (or classes thereof).
--- Communication between partitions happens only by explicit bcross
--- behaviors.
+-- Communication between partitions requires explicit behavior, such
+-- as `bcross`.
 --
 -- Partitions are Data.Typeable. A small subset of partition types
 -- have special meaning, telling Sirea to fork threads to run the
 -- behavior in parallel.
 newtype S p a
+
 
 -- | (B x y) describes an RDP behavior - a signal transformer with
 -- potential for declarative `demand effects`. Signal x is called
@@ -106,37 +107,49 @@ instance Category B where
   id  = B_fwd
   (.) = flip B_seq
 
--- | Identity for behaviors. (Same as Control.Category.id)
-bfwd :: B x x
-bfwd = B_fwd
-
--- | Represent latency of calculation or communication by delaying
--- a signal a small, logical difftime. Appropriate use of delay can
--- greatly improve system consistency and efficiency. In case of a
--- complex signal, every signal receives the same delay.
-bdelay :: DT -> B x x
-bdelay = B_delay
-
--- | Synch automatically delays all signals to match the slowest in
--- a composite. Immediately after synchronization, you can be sure 
--- (x :&: y) products precisely overlap, and (x :|: y) sums handoff
--- smoothly without gap or overlap. For non-composte signals, bsynch
--- has no effect. bsynch twice has no extra effect. Synchronization
--- is logical in RDP, and the implementation is wait-free.
---
--- Signals even in different partitions may be synchronized. 
-bsynch :: B x x
-bsynch = B_synch
-
 -- | RDP behaviors are arrows, but incompatible with Control.Arrow
 -- due to `arr` being more powerful than RDP allows. A number of
 -- behaviors support arrow composition, and several serve as basic
 -- data plumbing that `arr` would perform in Control.Arrow.
 --
--- In Sirea, all this data plumbing is essentially free at runtime.
--- You'll pay for it once when initializing the behavior, but it is
--- easy to eliminate. A major exception is `merge`, which requires
--- synchronization and intermediate state. 
+-- In Sirea, most data plumbing is essentially free at runtime. But
+-- there are a few exceptions - bzip, bmerge, bconjoin, bsplit have
+-- runtime overheads.
+--
+-- DATA PLUMBING BEHAVIORS (~ARROWS)
+--  TRIVIAL
+--   bfwd - identity behavior
+--   (>>>) - forward composition
+--  PRODUCTS
+--   bfirst b - apply b on first element in product
+--   bsecond b - apply b on second element in product
+--   (***) b1 b2 = bfirst b1 >>> bsecond b2
+--   bswap - flip first and second signals
+--   bcopy - duplicate signal
+--   bfst - keep first signal, drop second
+--   bsnd - keep second signal, drop first
+--   bassoclp - associate left on product
+--   bassocrp - associate right on product
+--   bzip - combine two concrete signals 
+--  SUM (CHOICE)
+--   bleft b - apply b on left option in sum
+--   bright b - apply b on right option in sum
+--   (+++) bl br - bleft bl >>> bright br
+--   bmirror - flip left and right signals
+--   bmerge - combine two choices into one signal (implicit synch)
+--   binl - static choice of left option (~ if true) 
+--   binr - static choice or right option (~ if false)
+--   bassocls - associate left on sum
+--   bassocrp - associate right on sum
+--   bsplit - lift a decision in a signal to asynchronous layer
+--  OTHER (see below for details)
+--   bconjoin - partial merge on a product of sums
+--   bdelay - delay signals (multi-part signals delayed equally)
+--   bsynch - synch an asynchronous signal (to slowest)
+--   bfmap - apply an arbitrary Haskell function to a signal 
+--   bcross - communicate a signal between partitions
+--
+bfwd     :: B x x
 bfirst   :: B x x' -> B (x :&: y) (x' :&: y)
 bsecond  :: B y y' -> B (x :&: y) (x :&: y')
 (***)    :: B x x' -> B y y' -> B (x :&: y) (x' :&: y')
@@ -156,6 +169,8 @@ binl     :: B x (x :|: y)
 binr     :: B y (x :|: y)
 bassocls :: B (x :|: (y :|: z)) ((x :|: y) :|: z)
 bassocrs :: B ((x :|: y) :|: z) (x :|: (y :|: z))
+
+bfwd = B_fwd
 
 bfirst = B_on_fst
 bsecond f = bswap >>> bfirst f >>> bswap 
@@ -187,53 +202,59 @@ bconjoinl = bcopy >>> (isolateX *** isolateYZ)
          isolateYZ = (bsnd +++ bsnd)
 bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
 
-{- Disjoin is a conceptually difficult behavior. It seems to describe
-   a split at a distance, i.e. we split `x` based on the division of
-   y or z. This would be 
+
+-- | Partition classes are a useful approach to constrain behavior
+-- to certain partitions. A few default classes are provided with
+-- Sirea, but developers can create more using bUnsafeExt for new
+-- primitives. 
+--
+-- The first example of these classes supports applying Haskell
+-- functions to signals. This is restricted because some partitions
+-- might represent remote or heterogeneous elements for which an
+-- opaque Haskell function cannot readily be serialized.
+
+
+
+
+{- Disjoin would be a powerful behavior:
+
+     bdisjoinl :: B (x :&: (y :|: z)) ((x :&: y) :|: (x :&: z))
+
+   This essentially expresses a decision for remote processes on x
+   based on a decision in another partition (y or z). However, it
+   seems impossible to express while respecting a certain rule, that
+   communication be explicit.
   
-   This would be a useful behavior. For example, if I want to model
-   a lexical scope across a decision, and how my decision affects 
-   further use of my lexical scope, I could use a disjoin. To model
-   something like ArrowReader requires disjoin, too. 
-
-   Yet it seems infeasible in RDP due to the partitioning. x, y, z
-   may be in different processes. Communication between partitions 
-   should be obvious and well constrained in RDP code, but disjoin
-   would require much implicit distribution of data.
-   Also, if y = (v :|: w) or similar, then it isn't even clear when
-   y is active without extra merges.
-  
-   I might need a much weaker version of disjoin, i.e. that keeps it
-   in the partition.
-
--- Disjoin is a distributed split?
-bdisjoinl :: B (x :&: (y :|: z)) ((x :&: y) :|: (x :&: z))
-bdisjoinr :: B ((x :|: y) :&: z) ((x :&: z) :|: (y :&: z))
-bdisjoinl = (???)
-bdisjoinr = bswap >>> bdisjoinl >>> (bswap +++ bswap)
-
+   So there is no disjoin in Sirea, not in the general case anyway.
+   A weaker version of disjoin on particular signals will be viable.
 -}
 
--- todo:
---   bcross: change partitions.
---     Note: this might be a typeclass.
---       Ability to constrain signal-type for the partition.
---       Ability to constrain 
---   bfmap
---   bdrop
---   bdelay
---   bpeek (anticipate)
---   
--- weaker disjoin?
+-- | Represent latency of calculation or communication by delaying
+-- a signal a small, logical difftime. Appropriate use of delay can
+-- greatly improve system consistency and efficiency. In case of a
+-- complex signal, every signal receives the same delay.
+bdelay :: DT -> B x x
+bdelay = B_delay
+
+-- | Synch automatically delays all signals to match the slowest in
+-- a composite. Immediately after synchronization, you can be sure 
+-- (x :&: y) products precisely overlap, and (x :|: y) sums handoff
+-- smoothly without gap or overlap. For non-composte signals, bsynch
+-- has no effect. bsynch twice has no extra effect. Synchronization
+-- is logical in RDP, and the implementation is wait-free.
+--
+-- Signals even in different partitions may be synchronized. 
+bsynch :: B x x
+bsynch = B_synch
 
 -- | bUnsafeExt supports extend Sirea with primitive behaviors, FFI,
 -- foreign services, legacy adapters. It's also used to implement
 -- many primitive behavior types in Sirea, such as bfmap, bsplit,
--- and bzip.
+-- and bzip. 
 --
 -- As indicated in the name, bUnsafeExt is unsafe - it can easily
 -- violate the RDP abstraction. Developers must be cautious, use it
--- safely, hide them behind safe behaviors in libraries. Concerns
+-- safely, hide it behind safe behaviors in libraries. Concerns
 -- include duration coupling, spatial commutativity and idempotence,
 -- and eventual GC of old Lnk objects.
 --
@@ -245,9 +266,9 @@ bdisjoinr = bswap >>> bdisjoinl >>> (bswap +++ bswap)
 bUnsafeExt :: MkLnk x y -> B x y
 bUnsafeExt mkLnk = bsynch >>> B_ext mkLnk
 
-
 -- | MkLnk - constructors and metadata for including a new behavior
 -- primitive in Sirea. There are currently two metadata values:
+--
 --   ln_tsense - time sensitive; if false, may shift delays across
 --   ln_effect - effectful behavior; if false, may treat as dead
 --     code if the response is dropped (e.g. via bfst). 
@@ -258,10 +279,14 @@ bUnsafeExt mkLnk = bsynch >>> B_ext mkLnk
 -- observable effects. The link will later be activated by a signal
 -- update. (The assumed signal before first update is inactive.)
 --
+-- An additional string, ln_desc, is provided for debugging or
+-- display purposes. 
+--
 data MkLnk x y = MkLnk 
     { ln_tsense :: Bool 
     , ln_effect :: Bool  
     , ln_build  :: Lnk y -> IO (Lnk x)
+    , ln_desc   :: String
     }
 
 
@@ -298,9 +323,22 @@ data instance Lnk (S p a) =
 data instance Lnk (x :&: y) = LnkProd (Lnk x) (Lnk y)
 data instance Lnk (x :|: y) = LnkSum (Lnk x) (Lnk y)
 -- Try to generalize on this for folds? 
---  No. Keep it simple and sufficient.
+--  No! Keep it simple and sufficient.
 
 
+-- | Partition classes are a useful way to constrain behaviors. This
+-- HaskPart class s
+
+
+-- todo:
+--   bcross: change partitions. Specific to signal and partition types.
+--     Likely a typeclass!
+--   bfmap
+--   bdrop
+--   bdelay
+--   bpeek (anticipate)
+--   
+-- weaker disjoin?
 
 
 

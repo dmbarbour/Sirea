@@ -1,11 +1,12 @@
 
 module FRP.Sirea.Time
- (T
+  (T
  ,tmDay,tmNanos
- ,mkTime,getTime      
+ ,mkTime,timeFromDays
+ ,getTime      
  ,DT
  ,dtToNanos,nanosToDt
- ,addTime,diffTime
+ ,addTime,subtractTime,diffTime
  ) where
 
 import Data.Int (Int32,Int64)
@@ -13,6 +14,7 @@ import Data.Ratio ((%),numerator,denominator)
 import qualified Data.Time.Clock as CW
 import qualified Data.Time.Calendar as Cal
 import Data.Function (on)
+import Control.Exception (assert)
 
 -- | T - a fixpoint representation of time UTC with nanosecond
 -- precision, as a pair of integers. Time in Sirea is modeled as  
@@ -35,14 +37,22 @@ tmDay = toInteger . _tmDay
 tmNanos :: T -> Integer
 tmNanos = toInteger . _tmNanos
 
--- | mkTime days nanos, smart constructor; will convert
--- nanos to days.
+-- | `mkTime days nanos`
+-- smart constructor for time 
 mkTime :: Integer -> Integer -> T
 mkTime days nanos =
     let (q,r) = nanos `divMod` nanosInDay in
     T { _tmDay = fromInteger (days + q)
       , _tmNanos = fromInteger r 
       }
+
+-- | timeFromDays will convert a Modified Julian Day, stored as a
+-- rational, to a T value. 
+timeFromDays :: Rational -> T
+timeFromDays r = mkTime days (nanos + carry)
+    where (days,dayFrac) = numerator r `divMod` denominator r
+          (nanos,nanoFrac) = (dayFrac * nanosInDay) `divMod` denominator r
+          carry = if (nanoFrac * 2 > denominator r) then 1 else 0
 
 -- | Obtain estimate of current time from operating system.
 getTime :: IO T
@@ -74,6 +84,10 @@ addTime tm (DT dt) =
     then T { _tmDay = d, _tmNanos = n }
     else T { _tmDay = d+1, _tmNanos = n-nnid }
     where nnid = fromInteger nanosInDay
+
+-- | Subtract a difference in time from an absolute time
+subtractTime :: T -> DT -> T
+subtractTime tm (DT dt) = unDT (diffTime tm dt)
 
 -- | Find the difference in time, diffTime a b = a - b
 diffTime :: T -> T -> DT
@@ -117,9 +131,18 @@ instance Num DT where
               nb = dtToNanos b
               (q,r) = (na * nb) `divMod` nanosInSec
               c = if (r > (nanosInSec `div` 2)) then 1 else 0
-    negate = nanosToDt . negate . dtToNanos
-    abs = nanosToDt . abs . dtToNanos
-    signum = fromInteger . signum . dtToNanos
+    negate (DT a) = 
+        if (_tmNanos a == 0) 
+            then DT $ T { _tmDay   = negate (_tmDay a), 
+                          _tmNanos = 0 }
+            else DT $ T { _tmDay   = negate (_tmDay a) - 1, 
+                          _tmNanos = nnid - _tmNanos a }
+        where nnid = fromInteger nanosInDay
+    abs (DT a) = if (_tmDay a < 0) then negate (DT a) else (DT a)
+    signum (DT a) = 
+        if (_tmDay a < 0) 
+            then fromInteger (negate 1) 
+            else fromInteger 1
     fromInteger = nanosToDt . (*) nanosInSec
 
 -- 'Fractional' is primarily for the 'fromRational' 
@@ -129,19 +152,41 @@ instance Fractional DT where
         where na = dtToNanos a
               nb = dtToNanos b
               (q,r) = (na * nanosInSec) `divMod` nb  -- 
-              c = if (r > nb `div` 2) then 1 else 0  -- carry
+              c = if (2 * r > nb) then 1 else 0  -- carry
     recip = (1 /) 
-    fromRational r = nanosToDt ps
-        where ps = (numerator r * nanosInSec) `div` denominator r
+    fromRational rat = nanosToDt (q + c)
+        where (q,rem) = (numerator rat * nanosInSec) `divMod` denominator rat
+              c = if (2 * rem > denominator rat) then 1 else 0
 
+-- show fixpoint days and seconds
 instance Show T where
-    show tm = "MJD " ++ sDay ++ sFrac
-      where dblFrac = fromRational (tmNanos tm % nanosInDay) :: Double
-            sDay = show (tmDay tm)
-            sFrac = tail $ show dblFrac
+    show tm = "MJD " ++ showFrac 14 days -- 14 places for 86400s * 1000000000 ns
+      where days = (fromInteger (tmDay tm) * nanosInDay + tmNanos tm) % nanosInDay
 
 instance Show DT where
-    show dt = show fsec ++ "s"
-      where fsec = fromRational (dtToNanos dt % nanosInSec) :: Double
+    show dt = showFrac 9 (dtToNanos dt % nanosInSec) ++ "s"
 
+-- represent the rational as a decimal string up to n places.
+-- note that rounding is necessary to restore the data precisely.
+showFrac :: Int -> Rational -> String
+showFrac nPlaces r = 
+    assert (nPlaces > 0) $
+    let (sign,posR) = if (r < 0) then ("-",negate r) else ("",r) in
+    let (q,rem) = numerator posR `divMod` denominator posR in
+    let (bcarry,sFrac) = showFrac' (denominator posR) rem nPlaces in
+    let c = if bcarry then 1 else 0 in
+    sign ++ show (q + c) ++ "." ++ sFrac
+
+showFrac' :: Integer -> Integer -> Int -> (Bool,String)
+showFrac' den num nPlaces =
+    if (nPlaces == 0) then ((num*2 > den),"") else
+    let (q,rem) = (num * 10) `divMod` den in
+    let (bc,sRem) = showFrac' den rem (nPlaces - 1) in
+    let c = if bc then 1 else 0 in
+    let q' = c + fromInteger q in
+    if (q' == 10) then (True,  '0' : sRem) 
+                  else (False, showDec q' : sRem)
+
+showDec :: Int -> Char
+showDec n = assert ((0 <= n) && (n <= 9)) $ toEnum (n + 48)
 

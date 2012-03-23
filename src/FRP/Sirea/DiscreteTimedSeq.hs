@@ -25,7 +25,7 @@ module FRP.Sirea.DiscreteTimedSeq
     , ds_query
     , ds_sigup, ds_sigup'
     , ds_filter
-    , ds_adjeqf, ds_adjeqfx
+    , ds_adjeqfx
     , ds_adjn0, ds_adjn1
     , ds_zip
     , ds_merge 
@@ -168,17 +168,6 @@ ds_filter fnKeep ds = DSeq $ \ tq ->
             let rest = ds_filter fnKeep ds' in
             if (fnKeep x) then DSNext tx x rest
                 else dstep rest tq
-
--- | filter adjacent entries by a given equality function. Uses 
--- first discovered value for further comparisons, and updates
--- whenever the function *fails* (i.e. when values are not equal).  
--- The value remains on the left.
-ds_adjeqf :: (a -> a -> Bool) -> DSeq t a -> DSeq t a
-ds_adjeqf eq ds = DSeq $ \ tq ->
-    case dstep ds tq of
-        DSDone      -> DSDone
-        DSWait ds'  -> DSWait $ ds_adjeqf eq ds'
-        DSNext tx x ds' -> DSNext tx x (ds_adjeqfx eq x ds')
 
 -- | filter adjacent entries by a given equality function, with an 
 -- initial value. The test value to the filter updates whenever a
@@ -370,14 +359,6 @@ ds_mask1_step_right x tq ux xs ty y' ys' =
 
 
 -- | filter duplicate 'Nothing' values. 
-ds_adjn :: DSeq t (Maybe a) -> DSeq t (Maybe a)
-ds_adjn ds = DSeq $ \ tq ->
-    case dstep ds tq of
-        DSDone  -> DSDone
-        DSWait ds' -> DSWait $ ds_adjn ds'
-        DSNext tm Nothing ds' -> DSNext tm Nothing (ds_adjn0 ds')
-        DSNext tm v ds' -> DSNext tm v (ds_adjn1 ds')
-
 -- assume prior element was 'Nothing'
 ds_adjn0 :: DSeq t (Maybe a) -> DSeq t (Maybe a)
 ds_adjn0 ds = DSeq $ \ tq ->
@@ -387,7 +368,7 @@ ds_adjn0 ds = DSeq $ \ tq ->
         DSNext _ Nothing ds' -> dstep ds' tq
         DSNext tm v ds' -> DSNext tm v (ds_adjn1 ds')
 
-
+-- same as ds_adjn1, but assuming prior value was Just
 ds_adjn1 :: DSeq t (Maybe a) -> DSeq t (Maybe a)
 ds_adjn1 ds = DSeq $ \ tq ->
     case dstep ds tq of
