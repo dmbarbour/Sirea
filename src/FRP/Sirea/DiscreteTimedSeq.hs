@@ -30,7 +30,6 @@ module FRP.Sirea.DiscreteTimedSeq
     , ds_zip
     , ds_merge 
     , ds_mask0, ds_mask1
-    , ds_tshift
     ) where
 
 import Control.Exception (assert)

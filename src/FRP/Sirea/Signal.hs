@@ -25,7 +25,7 @@ module FRP.Sirea.Signal
  , listToSig, sigToList
  , s_sample, s_sample_d
  , s_never, s_always
- , s_const, 
+ , s_const 
  , s_fmap, s_full_map
  , s_zip, s_full_zip
  , s_mask
@@ -65,6 +65,7 @@ mkSig v0 ds = Sig { s_head = v0, s_tail = ds }
 -- also provided. 
 listToSig :: (Maybe a) -> [(T,Maybe a)] -> Sig a
 listToSig v0 = mkSig v0 . ds_fromList 
+
 
 -- | Sample a signal for its value at given instant. The signal
 -- may be inactive at the given instant, in which case 'Nothing'
@@ -107,7 +108,16 @@ s_sample_d s0 tLower tUpper =
             if tLower < tx
                 then s_sample_d (mkSig x' xs') tLower tUpper
                 else (Just (tx,x'), mkSig x' xs')
-    
+
+
+-- | sigToList will obtain the [(T,Maybe a)] states in a given time
+-- range, similar to s_sample_d. Note that there will always be at
+-- least one value for the signal's state at the lower bound time.
+sigToList :: Sig a -> T -> T -> [(T, Maybe a)]
+sigToList s0 tLower tUpper =
+    assert (tLower < tUpper) $
+    let (x,xs) = ds_query (s_head s0) tLower (s_tail s0) in
+    (tLower,x):(ds_takeList tUpper xs)
 
 -- | a signal that is never active (`Nothing` at all times)
 -- Same as `empty` from Alternative.
@@ -115,6 +125,7 @@ s_never  :: Sig a_
 s_never = mkSig Nothing ds_done
 
 -- | a signal that is always active with a specific value c
+-- Same as `pure` from Applicative.
 s_always :: c -> Sig c
 s_always c = mkSig (Just c) ds_done
 
@@ -153,7 +164,7 @@ s_full_zip jf sa sb =
     let bs = s_tail sb in
     let c  = jf a b in
     let cs = ds_zip jf a b as bs in 
-    mkSig hdc tlc
+    mkSig c cs
 
 -- | Mask one signal with the activity profile of another. That is,
 -- the resulting signal is only active when both input signals are
@@ -185,8 +196,7 @@ s_merge sl sr =
 -- then the right signal is used starting at that instant.
 s_switch :: Sig a -> T -> Sig a -> Sig a
 s_switch s0 t sf =
-    let ds' = ds_sigup' (s_tail s0) t (s_head s0) in
-    mkSig (s_head s0) ds'
+    mkSig (s_head s0) (ds_sigup' (s_tail s0) t (s_head sf) (s_tail sf))
 
 
 -- | Split an Either signal into two separate signals active at
@@ -265,10 +275,15 @@ s_adjeqf s0 =
     mkSig x (ds_adjeqfx (==) x xs)
 
 -- IDEAS:
---  choke - updates at a certain rate. 
+--  choke - limit updates to a certain rate. 
 --    risks temporal aliasing, and doesn't likely combine well with
---    update by switching.
+--    update by switching. Probably doesn't help much if we assume
+--    lazy computation of signal values anyway.
 --  chokeqf - choke with a filter for similar updates
+--
+--  sample one signal based on another? (i.e. slave a signal)
+--    illegal as pure behavior, but okay if we model it with
+--    external state authority and a model of uniqueness in RDP. 
 --
 -- These might be useful for performance but I'm hesitant to supply
 -- them. Developers would be better off sampling discretely to get
@@ -284,7 +299,7 @@ s_adjeqf s0 =
 -- The output at any given instant will be ordered the same as the
 -- collection of signals. The input list must be finite.
 s_select :: [Sig a] -> Sig [a]
-s_select = foldr (s_zip_full jf) (s_always [])
+s_select = foldr (s_full_zip jf) (s_always [])
   where jf (Just x) (Just xs) = Just (x:xs)
         jf _ xs = xs
 
@@ -296,7 +311,7 @@ instance Applicative Sig where
     pure  = s_always
     (<*>) = s_zip ($)
     (<*)  = s_mask
-    (*>)  = flip s_mask 
+    (*>)  = flip s_mask
 
 instance Alternative Sig where
     empty = s_never

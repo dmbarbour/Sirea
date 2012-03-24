@@ -47,9 +47,9 @@ data (:|:) x y
 -- Communication between partitions requires explicit behavior, such
 -- as `bcross`.
 --
--- Partitions are Data.Typeable. A small subset of partition types
--- have special meaning, telling Sirea to fork threads to run the
--- behavior in parallel.
+-- Partitions should be Data.Typeable to support analysis of types
+-- as values. Some types may have special meaning, indicating that
+-- extra threads should be constructed when behavior is initiated.
 newtype S p a
 
 
@@ -212,7 +212,6 @@ bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
 -- functions to signals. This is restricted because some partitions
 -- might represent remote or heterogeneous elements for which an
 -- opaque Haskell function cannot readily be serialized.
-
 
 
 

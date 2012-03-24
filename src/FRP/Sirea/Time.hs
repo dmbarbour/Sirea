@@ -160,11 +160,11 @@ instance Fractional DT where
 
 -- show fixpoint days and seconds
 instance Show T where
-    show tm = "MJD " ++ showFrac 14 days -- 14 places for 86400s * 1000000000 ns
+    show tm = showFrac 14 days -- 14 places for 86400s * 1000000000 ns
       where days = (fromInteger (tmDay tm) * nanosInDay + tmNanos tm) % nanosInDay
 
 instance Show DT where
-    show dt = showFrac 9 (dtToNanos dt % nanosInSec) ++ "s"
+    show dt = showFrac 9 (dtToNanos dt % nanosInSec)
 
 -- represent the rational as a decimal string up to n places.
 -- note that rounding is necessary to restore the data precisely.
