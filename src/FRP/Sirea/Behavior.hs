@@ -8,8 +8,12 @@ module FRP.Sirea.Behavior
   , bfirst, bsecond, (***), bswap, bcopy, bfst, bsnd, bassoclp, bassocrp
   , bleft, bright, (+++), bmirror, bmerge, binl, binr, bassocls, bassocrs
   , bconjoinl, bconjoinr
-  --, bUnsafeExt
-  --, MkLnk(..), Lnk(..), LnkSig(..), LnkProd(..), LnkSum(..)
+  , bvoid
+  , bfmap, bzip, bsplit
+  , bUnsafeFmap, bUnsafeZipWith, bUnsafeSplitWith
+  , bUnsafeExt
+  , MkLnk(..), Lnk(..), LnkProd(..), LnkSum(..), SigUp(..)
+  , ln_fmap, su_fmap, su_delay
   ) where
 
 import Prelude hiding (id,(.))
@@ -24,14 +28,16 @@ infixr 2 +++
 -- x and y will have equal and tightly coupled active periods. For
 -- example, if x is active for 300ms, inactive 100ms, then active
 -- 600ms, then y will have the same profile. However, asynchronous
--- signals might not overlap for short, statically known, periods.
+-- delays enable a small divergence of exactly when these periods
+-- occur. (They'll be synchronized before recombining signals.)
 data (:&:) x y
 
 -- | (x :|: y). Union or Sum of asynchronous or partitioned signals.
--- x and y split a duration, i.e. over the course of one second,
--- if x is active for 300ms then y cannot be active for more than
--- 700ms. However, asynchronous signals might overlap for short,
--- statically known, periods.
+-- Signals are active for different durations, i.e. if x is active
+-- 100 ms, inactive 400 ms, then active 100 ms: then y is inactive
+-- 100 ms, active up to 400 ms, then inactive 100 ms. (There may be
+-- durations where both are inactive.) Due to asynchronous delays 
+-- the active periods might overlap for statically known periods.
 data (:|:) x y
 
 -- | (S p a) is a Sig in a blanket - Sig a in partition p. 
@@ -51,6 +57,12 @@ data (:|:) x y
 -- as values. Some types may have special meaning, indicating that
 -- extra threads should be constructed when behavior is initiated.
 newtype S p a
+
+-- | PtHask is a simple partition class that indicates the partition
+-- is local to the Haskell process and supports the full gamut of 
+-- Haskell types and functions.
+class PtHask p
+instance PtHask ()
 
 
 -- | (B x y) describes an RDP behavior - a signal transformer with
@@ -81,21 +93,21 @@ newtype S p a
 -- coupling. 
 --
 data B x y where
-  B_ext     :: MkLnk x y -> B x y
+  B_ext     :: !(MkLnk x y) -> B x y
 
   B_fwd     :: B x x
-  B_seq     :: B x y -> B y z -> B x z
-  B_delay   :: DT -> B x x
+  B_seq     :: !(B x y) -> !(B y z) -> B x z
+  B_delay   :: !DT -> B x x
   B_synch   :: B x x
 
   B_fst     :: B (x :&: y) x
-  B_on_fst  :: B x x' -> B (x :&: y) (x' :&: y)
+  B_on_fst  :: !(B x x') -> B (x :&: y) (x' :&: y)
   B_swap    :: B (x :&: y) (y :&: x)
   B_copy    :: B x (x :&: x)
   B_asso_p  :: B (x :&: (y :&: z)) ((x :&: y) :&: z)
   
   B_lft     :: B x (x :|: y)
-  B_on_lft  :: B x x' -> B (x :|: y) (x' :|: y)
+  B_on_lft  :: !(B x x') -> B (x :|: y) (x' :|: y)
   B_mirror  :: B (x :|: y) (y :|: x)
   B_merge   :: B (x :|: x) x
   B_asso_s  :: B (x :|: (y :|: z)) ((x :|: y) :|: z) 
@@ -110,16 +122,18 @@ instance Category B where
 -- | RDP behaviors are arrows, but incompatible with Control.Arrow
 -- due to `arr` being more powerful than RDP allows. A number of
 -- behaviors support arrow composition, and several serve as basic
--- data plumbing that `arr` would perform in Control.Arrow.
+-- data plumbing that `arr` would perform in Control.Arrow. These
+-- are also incompatible with Megacz's Generalized Arrows because no 
+-- generic unit signal exists (cannot just create signals).
 --
 -- In Sirea, most data plumbing is essentially free at runtime. But
 -- there are a few exceptions - bzip, bmerge, bconjoin, bsplit have
 -- runtime overheads.
 --
--- DATA PLUMBING BEHAVIORS (~ARROWS)
 --  TRIVIAL
---   bfwd - identity behavior
---   (>>>) - forward composition
+--   bfwd - identity behavior 
+--   (>>>) - forward composition (Control.Category)
+--
 --  PRODUCTS
 --   bfirst b - apply b on first element in product
 --   bsecond b - apply b on second element in product
@@ -130,7 +144,8 @@ instance Category B where
 --   bsnd - keep second signal, drop first
 --   bassoclp - associate left on product
 --   bassocrp - associate right on product
---   bzip - combine two concrete signals 
+--   bzipWith, bzip - combine two concrete signals
+-- 
 --  SUM (CHOICE)
 --   bleft b - apply b on left option in sum
 --   bright b - apply b on right option in sum
@@ -142,12 +157,18 @@ instance Category B where
 --   bassocls - associate left on sum
 --   bassocrp - associate right on sum
 --   bsplit - lift a decision in a signal to asynchronous layer
---  OTHER (see below for details)
+--
+--  MISCELLANEOUS
 --   bconjoin - partial merge on a product of sums
+--   bvoid - execute a behavior for side-effects
+--
+--  SPATIAL or TEMPORAL
 --   bdelay - delay signals (multi-part signals delayed equally)
 --   bsynch - synch an asynchronous signal (to slowest)
---   bfmap - apply an arbitrary Haskell function to a signal 
 --   bcross - communicate a signal between partitions
+--
+-- DATA OPERATIONS
+--   bfmap - apply an arbitrary Haskell function to a signal 
 --
 bfwd     :: B x x
 bfirst   :: B x x' -> B (x :&: y) (x' :&: y)
@@ -194,6 +215,10 @@ bassocls = B_asso_s
 bassocrs = mirr3 >>> bassocls >>> mirr3
   where mirr3 = bleft bmirror >>> bmirror
 
+-- | bvoid executes a behavior for side-effects only.
+bvoid :: B x y -> B x x
+bvoid b = bcopy >>> bfirst b >>> bsnd 
+
 -- | Conjoin is a partial merge.
 bconjoinl :: B ((x :&: y) :|: (x :&: z)) (x :&: (y :|: z))
 bconjoinr :: B ((x :&: z) :|: (y :&: z)) ((x :|: y) :&: z)
@@ -201,19 +226,6 @@ bconjoinl = bcopy >>> (isolateX *** isolateYZ)
    where isolateX = (bfst +++ bfst) >>> bmerge
          isolateYZ = (bsnd +++ bsnd)
 bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
-
-
--- | Partition classes are a useful approach to constrain behavior
--- to certain partitions. A few default classes are provided with
--- Sirea, but developers can create more using bUnsafeExt for new
--- primitives. 
---
--- The first example of these classes supports applying Haskell
--- functions to signals. This is restricted because some partitions
--- might represent remote or heterogeneous elements for which an
--- opaque Haskell function cannot readily be serialized.
-
-
 
 {- Disjoin would be a powerful behavior:
 
@@ -226,6 +238,7 @@ bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
   
    So there is no disjoin in Sirea, not in the general case anyway.
    A weaker version of disjoin on particular signals will be viable.
+     
 -}
 
 -- | Represent latency of calculation or communication by delaying
@@ -245,6 +258,42 @@ bdelay = B_delay
 -- Signals even in different partitions may be synchronized. 
 bsynch :: B x x
 bsynch = B_synch
+
+-- | map an arbitrary Haskell function across an input signal.
+bfmap :: (PtHask p) => (a -> b) -> B (S p a) (S p b)
+bfmap = bUnsafeFmap
+
+-- | as bfmap, but not constrained to valid partition class
+bUnsafeFmap :: (a -> b) -> B (S p1 a) (S p2 b)
+bUnsafeFmap fn = bUnsafeExt $ MkLnk 
+        { ln_time_sensitive = False
+        , ln_effectful = False
+        , ln_build  = return . ln_fmap (su_fmap $ s_fmap fn)
+        }
+
+-- | combine signals from parallel pipelines with a common function.
+bzip :: (PtHask p) => B (S p a :&: S p b) (S p (a,b))
+bzip = bUnsafeZipWith (,)
+
+-- | as bzip, but not constrained to valid partition class
+bUnsafeZipWith :: (a -> b -> c) -> B (S p1 a :&: S p2 b) (S p3 c)
+bUnsafeZipWith fn = bUnsafeExt $ MkLnk 
+        { ln_time_sensitive = False
+        , ln_effectful = False
+        , ln_build = mkln_zip (s_zip fn)
+        }
+
+-- | lift choice of data to choice of behaviors
+bsplit :: (PtHask p) => B (S p (Either a b)) (S p a :|: S p b)
+bsplit = bUnsafeSplitWith id
+
+-- | as bsplit, but not constrained to valid partition class
+bUnsafeSplitWith :: (c -> Either a b) -> B (S p1 c) (S p2 a :|: S p3 b)
+bUnsafeSplitWith fn = bUnsafeExt $ MkLnk
+        { ln_time_sensitive = False
+        , ln_effectful = False
+        , ln_build = return . ln_split fn
+        }
 
 -- | bUnsafeExt supports extend Sirea with primitive behaviors, FFI,
 -- foreign services, legacy adapters. It's also used to implement
@@ -268,65 +317,85 @@ bUnsafeExt mkLnk = bsynch >>> B_ext mkLnk
 -- | MkLnk - constructors and metadata for including a new behavior
 -- primitive in Sirea. There are currently two metadata values:
 --
---   ln_tsense - time sensitive; if false, may shift delays across
---   ln_effect - effectful behavior; if false, may treat as dead
---     code if the response is dropped (e.g. via bfst). 
+--   time sensitive - if false, may shift delays before or after
+--     (affecting delay-aggregation optimizations)
+--   effectful - if false, assume behavior only needed for output
+--     (affecting dead-code optimizations)
 --   
 -- The primary operation is ln_build, which receives a link to put
 -- output and must return a link to receive input. Construction in
--- IO allows creating intermediate state, but should not have any
+-- IO allows allocating intermediate state, but should not have any
 -- observable effects. The link will later be activated by a signal
--- update. (The assumed signal before first update is inactive.)
---
--- An additional string, ln_desc, is provided for debugging or
--- display purposes. 
---
+-- update. (Assume signal empty until first update.)
 data MkLnk x y = MkLnk 
-    { ln_tsense :: Bool 
-    , ln_effect :: Bool  
+    { ln_time_sensitive :: Bool 
+    , ln_effectful :: Bool  
     , ln_build  :: Lnk y -> IO (Lnk x)
-    , ln_desc   :: String
     }
-
 
 -- | A Lnk will process updates to a signal - potentially a complex,
--- asynchronous, partitioned signal using (:&:) or (:|:). 
---
--- The main update operation is ln_update, which receives a signal
--- update for a concrete, discrete-varying signal type. The 
---
--- See `bext` for how Lnk is used.
---
---
--
--- Lnk-based behaviors are built back to front. That is, they are
--- provided an output Lnk and must generate an input Lnk. This
--- occurs when the behavior is initially run, and should have no
--- observable side-effects. 
---
---    bforeign :: ((Lnk p y) -> IO (Lnk p x)) -> B x y
---
--- If x and y are composite signal types, there will be a set of
--- update capabilities for each individual signal (using LnkProd
--- or LnkSum), and the behavior is implicitly synchronized
+-- asynchronous, partitioned signal using (:&:) or (:|:), but most
+-- often mapping concrete signal (S p a) to another.
 -- 
+--   ln_touch - may be called to indicate an update is coming soon.
+--     This can be used to avoid redundant computation, i.e. by
+--     delaying processing of updates on one input when it is known
+--     that updates will arrive on another input.
+--   ln_update - called to deliver an update on the link.
 --
--- The basic Lnk is on just a plain signal.
+-- Lnk is used indirectly by bUnsafeExt to adapt foreign services.
+-- Developers creating a link must be careful to maintain RDP's set
+-- of properties - commutativity, idempotence, continuity, duration
+-- coupling, locally stateless (not counting regenerable state such
+-- as caches or memoization), etc. 
 data family Lnk a 
-data instance Lnk (S p a) = 
-    LnkSig {
-      ln_touch  :: IO (),
-      ln_update :: SigUp a -> IO (),
-      ln_drop   :: Bool
+data instance Lnk (S p a) = LnkSig 
+    { ln_touch  :: !(IO ())
+    , ln_update :: !(SigUp a -> IO ())
     }
-data instance Lnk (x :&: y) = LnkProd (Lnk x) (Lnk y)
-data instance Lnk (x :|: y) = LnkSum (Lnk x) (Lnk y)
+data instance Lnk (x :&: y) = LnkProd !(Lnk x) !(Lnk y)
+data instance Lnk (x :|: y) = LnkSum !(Lnk x) !(Lnk y)
 -- Try to generalize on this for folds? 
 --  No! Keep it simple and sufficient.
 
+-- | Each signal update carries:
+--    stability - a promise that the signal is stable up to a given
+--      time. The value Nothing indicates that a signal is stable
+--      forever. Stability is useful for garbage collecting state.
+--    state - the new state of the signal, starting at a given time.
+--      The value Nothing here means that the state did not change.
+-- Stability always updates. State might not update, i.e. to avoid
+-- recomputing a signal when it is known it did not change.
+data SigUp a = SigUp 
+    { su_state :: !(Maybe (Sig a , T))
+    , su_stable :: !(Maybe T)
+    }
 
--- | Partition classes are a useful way to constrain behaviors. This
--- HaskPart class s
+-- utility operations 
+
+-- | simple link update from a signal update transformer
+ln_fmap :: (SigUp a -> SigUp b) -> Lnk (S p a) -> Lnk (S p b)
+ln_fmap fn ln = LnkSig 
+  { ln_touch = ln_touch ln
+  , ln_update = ln_update ln . fn 
+  }
+
+-- | modify the primary function of a signal update
+--
+-- Note that this function on signals should not delay the signal or
+-- otherwise change its activity profile.
+su_fmap :: (Sig a -> Sig b) -> SigUp a -> SigUp b
+su_fmap fn su =
+    let state' = fmap (\(s0,t) -> (fn s0, t)) (su_state su) in
+    SigUp { su_state = state', su_stable = su_stable su }
+
+-- | delay all aspects of a signal update
+su_delay :: DT -> SigUp a -> SigUp a
+su_delay dt = if (0 == dt) then id else suDelay
+    where suDelay su = 
+        let state' = fmap (\(s0,t) -> (s_delay dt s0, addTime t dt)) (su_state su) in
+        let stable' = fmap (flip addTime dt) (su_stable su) in
+        SigUp { su_state = state', su_stable = stable' }
 
 
 -- todo:
