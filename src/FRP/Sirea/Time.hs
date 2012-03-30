@@ -130,7 +130,7 @@ instance Num DT where
         where na = dtToNanos a
               nb = dtToNanos b
               (q,r) = (na * nb) `divMod` nanosInSec
-              c = if (r > (nanosInSec `div` 2)) then 1 else 0
+              c = if (2 * r > nanosInSec) then 1 else 0
     negate (DT a) = 
         if (_tmNanos a == 0) 
             then DT $ T { _tmDay   = negate (_tmDay a), 

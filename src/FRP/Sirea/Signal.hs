@@ -36,8 +36,7 @@ module FRP.Sirea.Signal
  , s_delay, s_peek
  , s_select
  , s_adjeqf
-
- -- instances: functor, applicative, alternative, (monad?)
+ -- instances: functor, applicative, alternative
  ) where
 
 import FRP.Sirea.Time
