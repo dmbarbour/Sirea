@@ -23,7 +23,7 @@
 module FRP.Sirea.Signal 
  ( Sig
  , listToSig, sigToList
- , s_sample, s_sample_d
+ , s_sample, s_sample_d, s_trim
  , s_never, s_always
  , s_const 
  , s_fmap, s_full_map
@@ -68,14 +68,20 @@ listToSig v0 = mkSig v0 . ds_fromList
 
 -- | Sample a signal for its value at given instant. The signal
 -- may be inactive at the given instant, in which case 'Nothing'
--- is returned. In addition, a signal is returned for further
--- sampling in non-decreasing time; it may be lossy for all times
--- strictly less than the time sampled. 
+-- is returned. In addition, the trimmed signal is returned for 
+-- further sampling (to avoid redundant computation)
 s_sample :: Sig a -> T -> (Maybe a, Sig a)
-s_sample s0 tm = 
+s_sample s0 tm =
+    let sf = s_trim s0 tm in
+    (s_head sf, sf)
+
+-- | Trim a signal to clear unnecessary history data. Collecting the
+-- past while computing the future can ensure predictable space cost
+-- and avoid space-time leaks.
+s_trim :: Sig a -> T -> Sig a
+s_trim s0 tm = 
     let (x,ds) = ds_query (s_head s0) tm (s_tail s0) in
-    let sf = mkSig x ds in
-    (x, sf)
+    mkSig x ds
 
 -- | Discrete sample of a signal: rather than finding a value at a
 -- given instant, returns the first instant of change between two
@@ -92,9 +98,11 @@ s_sample s0 tm =
 -- can help eliminate duplicates and avoid redundant computations, 
 -- but must be applied judiciously (or itself becomes redundant).
 --
--- A signal for further sampling is also returned, though this will
--- be from the returned instant if it exists (otherwise from upper).
--- In general, the returned instant should be the next lower.
+-- A trimmed signal for further sampling is also returned. The trim
+-- is up to 'upper' if no sample was found, otherwise only up to 
+-- the discovered sample. One can use this to efficiently acquire
+-- multiple samples in a given time range (though sigToList is more
+-- efficient).
 s_sample_d :: Sig a -> T -> T -> (Maybe (T, Maybe a), Sig a)
 s_sample_d s0 tLower tUpper =
     assert (tLower < tUpper) $
@@ -292,8 +300,8 @@ s_adjeqf s0 =
 -- | Select will essentially zip a collection of signals into a
 -- signal of collections. The resulting signal is awlays active, but 
 -- has value [] when the argument contains no active signals. In RDP
--- this is used for demand monitors, and the signal is masked by the
--- observer.
+-- this is used for demand monitors, where the signal is masked by 
+-- the observer's demand (to ensure duration coupling).
 --
 -- The output at any given instant will be ordered the same as the
 -- collection of signals. The input list must be finite.

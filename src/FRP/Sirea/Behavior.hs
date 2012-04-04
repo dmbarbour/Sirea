@@ -82,13 +82,18 @@ instance PtHask ()
 --
 -- RDP demand effects are constrained: 
 --   * spatial idempotence - in any given instant, the same demand
---     twice has no additional effect
+--     twice, or a thousand times, has no additional effect. 
 --   * spatial commutativity - the origin of a demand signal does
---     not affect its meaning; demands are unordered
+--     not affect its meaning; demands at any given instant must be
+--     processed as an unordered set.
 --   * duration coupling - the active periods of response y are
---     tightly coupled to the active periods of demand x. 
+--     tightly coupled to the active periods of demand x. If x is
+--     active 100 ms, inactive 300 ms, active 200 ms then so will
+--     be y (albeit, possibly delayed a little).
 --   * continuous & eventless - no instantaneous states or values, 
---     and conceptually infinite instants between times.
+--     and conceptually infinite instants between times. Rather than
+--     a button-press event, for example, developers will see the
+--     button down state a few milliseconds then back in up-state.
 --
 -- These constraints make RDP very declarative. But developers must
 -- learn new patterns, idioms, and state models.
@@ -132,10 +137,14 @@ instance Category B where
 -- generic unit signal exists (cannot just create signals).
 --
 -- In Sirea, most data plumbing is essentially free at runtime. But
--- there are a few exceptions - bzip, bmerge, bconjoin, bsplit have
--- runtime overheads.
+-- there are exceptions; bzip, bmerge, bconjoin, bsplit have runtime 
+-- overheads, for example.
 --
---  TRIVIAL
+-- Listed here are several `generic` behaviors, excluding resource
+-- specific behaviors (e.g. state, clock, mouse, display, network,
+-- filesystem, etc.) which are provided by dedicated modules.
+--
+--  CATEGORY
 --   bfwd - identity behavior
 --   (>>>) - forward composition (from Control.Category)
 --
@@ -163,17 +172,27 @@ instance Category B where
 --   bassocrp - associate right on sum
 --   bsplit - lift a decision in a signal to asynchronous layer
 --
---  MISCELLANEOUS
---   bconjoin - partial merge on a product of sums
+--  ARROW MISC
+--   bfmap - apply function to a concrete signal
 --   bvoid - execute a behavior for side-effects
+--   bconjoin - partial merge on a product of sums
 --
---  SPATIAL or TEMPORAL
+--  SPATIAL-TEMPORAL
 --   bdelay - delay signals (multi-part signals delayed equally)
 --   bsynch - synch an asynchronous signal (to slowest)
 --   bcross - communicate a signal between partitions
 --
--- DATA OPERATIONS
---   bfmap - apply an arbitrary Haskell function to a signal 
+--  EXTENSIONS AND ADAPTERS
+--   bUnsafeLnk - hook FFI, legacy services, external resources
+--
+--  PERFORMANCE
+--   bforce - evaluate next several samples before progress. 
+--   bspark - evaluate next several samples in a spark 
+--   bstrat - sequence strategy [a] -> () on several samples
+--   bpstrat - periodic application of strategy in dedicated thread
+--   badjeqf - eliminate adjacent equal updates  
+--   bUnsafeChoke - limit rate of updates, skip intermediate values
+--   bUnsafeChokeEq - choke small changes; pass big changes
 --
 bfwd     :: B x x
 
@@ -220,9 +239,11 @@ bassocls = B_asso_s
 bassocrs = bmirr3 >>> bassocls >>> bmirr3
 
 -- utility
+
 bswap3 :: B ((x :&: y) :&: z) (z :&: (y :&: x))
-bmirr3 :: B ((x :|: y) :|: z) (z :|: (y :|: x))
 bswap3 = bfirst bswap >>> bswap
+
+bmirr3 :: B ((x :|: y) :|: z) (z :|: (y :|: x))
 bmirr3 = bleft bmirror >>> bmirror
 
 -- | bvoid executes a behavior for side-effects only,
@@ -261,6 +282,11 @@ benvseq bx by = bcopy >>> (bfst *** bx) >>> by
    So there is no disjoin in Sirea, not in the general case anyway.
    A weaker version of disjoin on particular signals will be viable.
      
+   What would I need here...
+  
+   At moment, developers need to zip data before splitting. Kinda painful.
+
+
 -}
 
 -- | Represent latency of calculation or communication by delaying
@@ -338,19 +364,22 @@ bUnsafeSplit = bUnsafeLnk $ MkLnk
 -- Each instance of this behavior (excluding dead code) results in
 -- construction of one link (the ln_build operation) when the Sirea
 -- behavior is initiated. This construction allows for intermediate
--- state, intended for caches and other `safe` uses. The link will
+-- state, intended for caches and other safe uses. The link will
 -- also have access to Haskell IO on each update. The updates may
 -- specify future times for when they become active or expire.
 --
--- As indicated in the name, bUnsafeLnk is unsafe - it can easily
+-- As indicated in the name, bUnsafeLnk is unsafe - it may easily
 -- violate the RDP abstraction. It can be used safely, but caution
 -- is warranted. Developers must avoid violating the tenets of RDP:
 -- duration coupling, spatial commutativity, spatial idempotence, 
--- no local state, eventless, eventual consistency and resilience.
--- One must also garbage-collect dead links (which are created by
--- dynamic behaviors) by testing for stability or s_fini.
+-- locally stateless (except for regenerable-from-scratch state like
+-- caches or memoization), eventless (ignore zero-duration signals),
+-- and so on. Further, developers must avoid structure that hinders 
+-- GC of a behavior after shutdown, and sometimes explicitly remove 
+-- dead links (by testing s_fini).
 --
 -- Safe uses of bUnsafeLnk should be hidden behind a library API.
+-- Unsafe uses should still have the word 'Unsafe' in their name.
 --
 -- Note: Developers must not introduce delay by use of bUnsafeLnk.
 -- Delay must be visible for analysis at bsynch, so use bdelay. Use
@@ -396,6 +425,9 @@ su_delay dt = if (0 == dt) then id else \ su ->
 --     Likely a typeclass!
 --   bdrop
 --   bpeek (anticipate)
+
+--   bspark (spark a calculation)
+--   bforce
 --   
 -- weaker disjoin?
 -- initial stateful and pseudo-state ops
@@ -407,175 +439,6 @@ su_delay dt = if (0 == dt) then id else \ su ->
  -- UTILITY TYPES --
 ---------------------
 
--- SigSt represents the state of one signal.
-data SigSt a = SigSt
-    { st_signal :: !(Sig a)    -- signal value
-    , st_stable :: !(Maybe T)  -- signal stability
-    , st_expect :: !Bool       -- recent `touch`
-    }
-
-st_update :: SigUp a -> SigSt a -> SigSt a
-st_update su s0 = 
-    assert (monotonicStability t0 tf) $
-    SigSt { st_signal = sf, st_stable = tf, st_expect = False }
-    where t0 = st_stable s0
-          tf = su_stable su
-          s0 = st_signal s0
-          sf = case su_state su of
-                Nothing -> s0
-                Just (su',tu') -> s_switch s0 tu' su'
-
-st_zero :: SigSt a
-st_zero = SigSt { st_signal = empty, st_stable = Nothing, st_expect = False }
-
-st_poke :: SigSt a -> SigSt a
-st_poke st = st { st_expect = True }
-
--- clear history up to T
-st_clear :: T -> SigSt a -> SigSt a 
-st_clear tt st = sf `seq` st { st_signal = sf }
-    where (_,sf) = s_sample (st_signal st) tt
-
--- for some extra validation and debugging, ensure that stability
--- increases (excepting when it is Forever; then it may decrease).
-monotonicStability :: Maybe T -> Maybe T -> Bool
-monotonicStability (Just t0) (Just tf) = (tf >= t0)
-monotonicStability _ _ = True
-
--- SigM represents states for two signals, useful for merge.
--- 
-
--- SigMerge is mutable data for merging two signals in one vat.
--- Merging signals always requires building intermediate state.
--- The goal is to keep this intermediate state to a minimum. 
-data SigM t s x y = SigM
-    { sm_lsig :: SigSt t s x    -- state for left signal
-    , sm_rsig :: SigSt t s y    -- state for right signal
-    , sm_tmup :: Maybe t        -- earliest update (how far to look back)
-    }
-
-zeroSigM :: (Signal s t) => SigM t s x y
-zeroSigM = SigM 
-    { sm_lsig = zeroSigSt
-    , sm_rsig = zeroSigSt
-    , sm_tmup = Nothing 
-    }
-
-updlSigM :: (SigSt t s x -> SigSt t s x) -> (SigM t s x y -> SigM t s x y)
-updrSigM :: (SigSt t s y -> SigSt t s y) -> (SigM t s x y -> SigM t s x y)
-updlSigM fn sm = sm { sm_lsig = fn (sm_lsig sm) }
-updrSigM fn sm = sm { sm_rsig = fn (sm_rsig sm) }
-luUpdlSigM :: (Signal s t) => LinkUp t s x -> (SigM t s x y -> SigM t s x y)
-luUpdrSigM :: (Signal s t) => LinkUp t s y -> (SigM t s x y -> SigM t s x y)
-luUpdlSigM lu = luUpdtSigM lu . updlSigM (luUpdSigSt lu)
-luUpdrSigM lu = luUpdtSigM lu . updrSigM (luUpdSigSt lu)
-
-updtSigM :: (SigTime t) => t -> (SigM t s x y -> SigM t s x y)
-updtSigM tm sm = sm { sm_tmup = tm' }
-    where tm' = case sm_tmup sm of
-                    Nothing -> (Just tm)
-                    Just tx -> Just $! (min tm tx)
-
-luUpdtSigM :: (Signal s t) => LinkUp t s xy -> (SigM t s x y -> SigM t s x y)
-luUpdtSigM lu =
-    case lu_update lu of
-        Nothing -> id
-        Just up -> updtSigM (su_time up)
-
-
--- For update aggregation: poke and wait
-waitSigM :: SigM t s x y -> Bool
-waitSigM sm = (st_expect $ sm_lsig sm) || (st_expect $ sm_rsig sm)
-
-
--- current stability. Note that 'Nothing' means 'infinite' stability.
--- But I don't locally enforce this; instead, I just report stability
--- based on the most recent updates.
-stableSigM :: (SigTime t) => SigM t s x y -> Maybe t
-stableSigM sm = mbs ltm rtm
-  where mbs Nothing r = r
-        mbs l Nothing = l
-        mbs (Just lt) (Just rt) = Just (min lt rt)
-        ltm = st_stable (sm_lsig sm)
-        rtm = st_stable (sm_rsig sm)
-
--- generate a link-update from a SigM
-emitSigM :: (Signal s t) => (s x -> s y -> s xy) 
-         -> SigM t s x y -> Maybe (SigUp s xy)
-emitSigM fn sm =
-    case sm_tmup sm of
-        Nothing -> Nothing
-        Just tt ->
-            let sx = st_signal (sm_lsig sm) in
-            let sy = st_signal (sm_rsig sm) in
-            Just (s_future tt (fn sx sy))
-
--- clear a signal up to a given stability.
-clearSigM :: (Signal s t) => Maybe t -> SigM t s x y -> SigM t s x y
-clearSigM Nothing _    = zeroSigM -- 'Nothing' means infinite stability
-clearSigM (Just tt) sm = 
-    let lsig' = clearSigSt tt (sm_lsig sm) in
-    let rsig' = clearSigSt tt (sm_rsig sm) in
-    lsig' `seq` rsig' `seq` SigM 
-        { sm_lsig = lsig'
-        , sm_rsig = rsig'
-        , sm_tmup = Nothing
-        }
-
--- This is the main body for zip and merge, which combine two signals.
--- Some intermediate state is created based on the destination vat,
--- and this is potentially subject to 'poking' to indicate that an
--- update will be coming soon on a given path. Use of poke can avoid
--- redundant operations in most dataflow graphs - essentially, it 
--- slows down the fast path to wait for the slow path within a vat.
-mkSigM :: (Signal s t) => (s x -> s y -> s xy)
-       -> LB h t s xy -> RDPIO h (LB h t s x, LB h t s y)
-mkSigM jf lb =
-    let vtMerge = lb_vat lb
-        lcFwd   = lb_cap lb vtMerge
-    in 
-    newVarInVat vtMerge zeroSigM >>= \ rfSigM ->
-    newVarInVat vtMerge False    >>= \ rfSched ->
-    let pkl    = readVar rfSigM >>= \ sm ->
-                 if (st_expect . sm_lsig) sm then return () else
-                 writeVar rfSigM (updlSigM pokeSigSt sm) >>
-                 lc_poke lcFwd
-        pkr    = readVar rfSigM >>= \ sm ->
-                 if (st_expect . sm_rsig) sm then return () else
-                 writeVar rfSigM (updrSigM pokeSigSt sm) >>
-                 lc_poke lcFwd
-        sched  = readVar rfSched >>= \ bSched ->
-                 if bSched then return () else
-                 readVar rfSigM >>= \ sm ->
-                 if waitSigM sm then return () else
-                 writeVar rfSched True >>
-                 lc_poke lcFwd >>
-                 schedRdpIn vtMerge deliver
-        deliver= writeVar rfSched False >>
-                 readVar rfSigM >>= \ sm ->
-                 if waitSigM sm then return () else
-                 let su  = emitSigM jf sm
-                     tm  = stableSigM sm
-                     lu  = LinkUp { lu_update = su, lu_stable = tm }
-                     sm' = clearSigM tm sm
-                 in 
-                 sm' `seq` writeVar rfSigM sm' >>
-                 lc_send lcFwd lu
-        upl lu = modifyVar rfSigM (luUpdlSigM lu) >> sched
-        upr lu = modifyVar rfSigM (luUpdrSigM lu) >> sched
-        cpl vb = if (vtMerge == vb)
-                   then LC { lc_poke = pkl, lc_send = upl }
-                   else LC { lc_poke = return ()
-                           , lc_send = runRdpIn vtMerge upl }
-        cpr vb = if (vtMerge == vb)
-                   then LC { lc_poke = pkr, lc_send = upr }
-                   else LC { lc_poke = return ()
-                           , lc_send = runRdpIn vtMerge upr }
-        lbl = LB { lb_vat = vtMerge, lb_cap = cpl }
-        lbr = LB { lb_vat = vtMerge, lb_cap = cpr }
-    in return (lbl,lbr)
-
- 
 
 
 
