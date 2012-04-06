@@ -274,12 +274,17 @@ s_peek dt s0 =
     masked
 
 -- | Erase adjacent signal values that are equal in value. This will
--- eliminate redundant updates.
+-- eliminate redundant updates. It is intended for performance, but
+-- must be used judiciously (the filter itself has a cost).
 s_adjeqf :: Eq a => Sig a -> Sig a
 s_adjeqf s0 = 
     let x = s_head s0 in
     let xs = s_tail s0 in
     mkSig x (ds_adjeqfx (==) x xs)
+
+-- Apply a strategy incrementally to a signal, such that you are
+-- evaluating always slightly ahead of the current element. 
+
 
 -- IDEAS:
 --  choke - limit updates to a certain rate. 
@@ -287,6 +292,9 @@ s_adjeqf s0 =
 --    update by switching. Probably doesn't help much if we assume
 --    lazy computation of signal values anyway.
 --  chokeqf - choke with a filter for similar updates
+--  strat - apply a parallel strategy incrementally to the signal, 
+--    such that evaluation of sparks is always slightly ahead of 
+--    the current element. (Maybe a separate module?)
 --
 --  sample one signal based on another? (i.e. slave a signal)
 --    illegal as pure behavior, but okay if we model it with

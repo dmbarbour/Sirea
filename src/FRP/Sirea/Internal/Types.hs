@@ -1,14 +1,87 @@
+{-# GADTs #-}
 
-
+-- This module is a dumping ground for types that aren't intended
+-- for export yet should be available to multiple modules within
+-- Sirea. I might organize it eventually. 
 module FRP.Sirea.Internal.Types where
 
 import FRP.Sirea.Time
 import FRP.Sirea.Signal
-import FRP.Sirea.Link(SigUp(..))
+import FRP.Sirea.Link
+
+-------------------------------------------
+-- The complete B type is available from here.
+--  It is renamed to B by the Behavior module.
+data B' x y where
+  -- most signal operations (other than fmap)
+  B_mkLnk   :: !(MkLnk x y) -> B' x y
+
+  -- fmap (special case for optimization)
+  B_fmap    :: !(x -> y) -> B' (S p x) (S p y)
+
+  -- time modeling, logical delay
+  B_tshift  :: !(TS x) -> B' x x 
+
+  -- category
+  B_fwd     :: B' x x
+  B_pipe    :: !(B' x y) -> !(B' y z) -> B' x z
+
+  -- data plumbing (products)
+  B_fst     :: B' (x :&: y) x
+  B_on_fst  :: !(B' x x') -> B' (x :&: y) (x' :&: y)
+  B_swap    :: B' (x :&: y) (y :&: x)
+  B_dup     :: B' x (x :&: x)
+  B_asso_p  :: B' (x :&: (y :&: z)) ((x :&: y) :&: z)
+  
+  -- data plumbing (choices)
+  B_lft     :: B' x (x :|: y)
+  B_on_lft  :: !(B' x x') -> B' (x :|: y) (x' :|: y)
+  B_mirror  :: B' (x :|: y) (y :|: x)
+  B_merge   :: B' (x :|: x) x
+  B_asso_s  :: B' (x :|: (y :|: z)) ((x :|: y) :|: z) 
 
 ---------------------------------------------------------
+-- A simple model for time-shifts. We have a current delay and a
+-- goal delay. A time-shift can move either or both. Differences
+-- in current delay can be turned into a final behavior. 
+type TS x = LnkD LDT x -> LnkD LDT x
+data LDT = LDT 
+    { ldt_curr :: !DT -- actual delay from start of behavior
+    , ldt_goal :: !DT -- aggregated but unapplied logical delay
+    }
 
--- | SigSt represents the state of one signal.
+----------------------------------------------------------
+-- LnkD is a more generic version of LnkW for metadata.
+-- It allows a single value to represent a group. Usefully
+-- it can be propagated even if the type is unknown.
+data LnkD d x where
+    LnkDUnit :: !d -> LnkD d x
+    LnkDProd :: !(LnkD d x) -> !(LnkD d y) -> LnkD d (x :&: y)
+    LnkDSum  :: !(LnkD d x) -> !(LnkD d y) -> LnkD d (x :|: y)
+
+lnd_fst :: LnkD d (x :&: y) -> LnkD d x
+lnd_snd :: LnkD d (x :&: y) -> LnkD d y
+lnd_left :: LnkD d (x :|: y) -> LnkD d x
+lnd_right :: LnkD d (x :|: y) -> LnkD d y
+lnd_sig  :: LnkD d (S p x) -> d
+
+lnd_fst (LnkDUnit d) = LnkDUnit d
+lnd_fst (LnkDProd x _) = x
+lnd_snd (LnkDUnit d) = LnkDUnit d
+lnd_snd (LnkDProd _ y) = y
+lnd_left (LnkDUnit d) = LnkDUnit d
+lnd_left (LnkDSum x _) = x
+lnd_right (LnkDUnit d) = LnkDUnit d
+lnd_right (LnkDSum _ y) = y 
+lnd_sig (LnkDUnit d) = d
+
+lnd_fmap :: (a -> b) -> LnkD a x -> LnkD b x
+lnd_fmap fn (LnkDUnit d) = LnkDUnit (fn d)
+lnd_fmap fn (LnkDProd l r) = LnkDProd (lnd_fmap fn l) (lnd_fmap fn r)
+lnd_fmap fn (LnkDSum l r) = LnkDSum (lnd_fmap fn l) (lnd_fmap fn r)
+
+---------------------------------------------------------
+-- SigSt represents the state of one signal.
 -- This is intended for use with SigM, primarily. 
 data SigSt a = SigSt
     { st_signal :: !(Sig a)    -- signal value
@@ -45,8 +118,9 @@ monotonicStability :: Maybe T -> Maybe T -> Bool
 monotonicStability (Just t0) (Just tf) = (tf >= t0)
 monotonicStability _ _ = True
 
--- | SigM represents states for two signals, for zip, merge, and 
--- similar mechanisms.
+------------------------------------------------------------------
+-- SigM represents states for two signals, for zip, merge, and 
+-- similar behaviors.
 data SigM x y = SigM
     { sm_lsig :: !(SigSt x)  -- state for left signal
     , sm_rsig :: !(SigSt y)  -- state for right signal
@@ -129,4 +203,6 @@ sm_cleanup (Just tt) sm =
         , sm_rsig = sy'
         , sm_tmup = Nothing
         }
+
+
 

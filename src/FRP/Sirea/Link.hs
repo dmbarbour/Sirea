@@ -19,12 +19,8 @@ import Data.IORef
 import Control.Monad (unless)
 
 -- | MkLnk - constructors and metadata for including a new behavior
--- primitive in Sirea. There are currently two metadata values:
+-- primitive in Sirea. 
 --
---   time sensitive (tsen) - if false, may shift delays before or 
---     after MkLnk behavior (affecting delay aggregation)
---   desc - a string descriptor of the link, for debugging.
--- 
 -- The primary operation is ln_build, which constructs a link in the
 -- IO monad, accepting the response capability and generating the
 -- demand capability. IO is for constructing intermediate caches and
@@ -36,17 +32,15 @@ import Control.Monad (unless)
 -- capability. This isn't necessary, though - an effectful behavior
 -- will accept a link even if it doesn't provide any meaningful
 -- output. 
+--
+-- Secondary data includes:
+--   tsen - time sensitive: if true, prevents delay aggregation and
+--     forces aggregated delay to apply prior to reaching link. 
 --   
 data MkLnk x y = MkLnk 
-    { ln_tsen  :: !Bool 
-    , ln_desc  :: !String
-    , ln_build :: !(Lnk y -> IO (Lnk x))
+    { ln_time_sensitive  :: !Bool 
+    , ln_build           :: !(Lnk y -> IO (Lnk x))
     }
-
--- MkLnk difficulties: I'm not sure that I can handle a flexible structure
--- for inputs to MkLnk, at least not without users providing dedicated
--- functions. Would it be possible to use typeclasses to select the function
--- for finding the right delay values?
 
 -- | A Lnk describes a complex product of LnkUp values, to 
 -- support all complex signal types - S, (:&:) and (:|:). 
@@ -55,9 +49,8 @@ type Lnk = LnkW LnkUp
 
 -- | LnkW is a GADT for a complex product of signals. Note that
 -- LnkNull is used to indicate dead code or unknown types. LnkW
--- ignores partitioning information about the original signal, 
--- which was used to constrain construction of the behavior.
---
+-- ignores partitioning information about the signals. If that
+-- is important info, catch it in the initial behavior. 
 data LnkW s a where
     LnkNull :: LnkW s a
     LnkSig  :: !(s a) -> LnkW s (S p a)
@@ -89,7 +82,7 @@ ln_zero = LnkUp
     , ln_update = const $ return ()
     }
 
--- | ln_lnkup extracts from LnkSig or returns ln_zero from LnkNull
+-- | ln_lnkup extracts LnkUp (from LnkSig or ln_zero from LnkNull)
 ln_lnkup  :: Lnk (S p a) -> (LnkUp a)
 ln_lnkup (LnkSig lu) = lu
 ln_lnkup _ = ln_zero
@@ -104,8 +97,12 @@ ln_lnkup _ = ln_zero
 --      The value Nothing here means stable forever.
 -- Stability always updates. State might not update, i.e. to avoid
 -- recomputing a signal when it is known it did not change.
+--
+-- State of the signal includes all future values, though they might
+-- not be computed yet. The idea is to keep updating the future of
+-- the signal slightly before it becomes the present.
 data SigUp a = SigUp 
-    { su_state :: !(Maybe (Sig a , T))
+    { su_state ::  !(Maybe (Sig a , T))
     , su_stable :: !(Maybe T)
     }
 su_signal :: SigUp a -> Maybe (Sig a)
@@ -176,11 +173,11 @@ ln_mkSigM' :: IORef (SigM x y) -> (Sig x -> Sig y -> Sig z)
 ln_mkSigM' rfSigM jf luz = (lux,luy)
     where pokeX = 
             readIORef rfSigM >>= \ sm ->
-            (writeIORef rfSigM $ sm_update_l st_poke sm) >>
+            writeIORef rfSigM (sm_update_l st_poke sm) >>
             unless (sm_waiting sm) (ln_touch ln)
           pokeY = 
             readIORef rfSigM >>= \ sm ->
-            (writeIORef rfSigM $ sm_update_r st_poke sm) >>
+            writeIORef rfSigM (sm_update_r st_poke sm) >>
             unless (sm_waiting sm) (ln_touch ln)
           emit  = 
             readIORef rfSigM >>= \ sm ->
