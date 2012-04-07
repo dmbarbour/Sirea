@@ -1,84 +1,65 @@
-{-# GADTs #-}
+-- {-# LANGUAGE  #-}
 
 -- This module is a dumping ground for types that aren't intended
 -- for export yet should be available to multiple modules within
 -- Sirea. I might organize it eventually. 
-module FRP.Sirea.Internal.Types where
+module FRP.Sirea.Internal.Types 
+    ( SigUp(..), su_signal, su_time, su_fmap, su_delay, su_apply
+    , SigSt(..), st_zero, st_poke, st_clear, st_sigup
+    , SigM(..), sm_zero, sm_update_l, sm_sigup_l, sm_update_r, sm_sigup_r
+    , sm_waiting, sm_stable, sm_emit, sm_cleanup
+    ) where
 
 import FRP.Sirea.Time
 import FRP.Sirea.Signal
-import FRP.Sirea.Link
+import Control.Exception (assert)
 
--------------------------------------------
--- The complete B type is available from here.
---  It is renamed to B by the Behavior module.
-data B' x y where
-  -- most signal operations (other than fmap)
-  B_mkLnk   :: !(MkLnk x y) -> B' x y
-
-  -- fmap (special case for optimization)
-  B_fmap    :: !(x -> y) -> B' (S p x) (S p y)
-
-  -- time modeling, logical delay
-  B_tshift  :: !(TS x) -> B' x x 
-
-  -- category
-  B_fwd     :: B' x x
-  B_pipe    :: !(B' x y) -> !(B' y z) -> B' x z
-
-  -- data plumbing (products)
-  B_fst     :: B' (x :&: y) x
-  B_on_fst  :: !(B' x x') -> B' (x :&: y) (x' :&: y)
-  B_swap    :: B' (x :&: y) (y :&: x)
-  B_dup     :: B' x (x :&: x)
-  B_asso_p  :: B' (x :&: (y :&: z)) ((x :&: y) :&: z)
-  
-  -- data plumbing (choices)
-  B_lft     :: B' x (x :|: y)
-  B_on_lft  :: !(B' x x') -> B' (x :|: y) (x' :|: y)
-  B_mirror  :: B' (x :|: y) (y :|: x)
-  B_merge   :: B' (x :|: x) x
-  B_asso_s  :: B' (x :|: (y :|: z)) ((x :|: y) :|: z) 
-
----------------------------------------------------------
--- A simple model for time-shifts. We have a current delay and a
--- goal delay. A time-shift can move either or both. Differences
--- in current delay can be turned into a final behavior. 
-type TS x = LnkD LDT x -> LnkD LDT x
-data LDT = LDT 
-    { ldt_curr :: !DT -- actual delay from start of behavior
-    , ldt_goal :: !DT -- aggregated but unapplied logical delay
+-- | Each signal update carries:
+--    state - the new state of the signal, starting at a given time
+--      which must be greater or equal to current stability. The
+--      value Nothing here means that the state did not change.
+--    stability - the new stability of the signal, after applying
+--      the state update. A promise that all future updates happen
+--      no earlier than the given instant in time, to support GC. 
+--      The value Nothing here means stable forever.
+-- Stability always updates. State might not update, i.e. to avoid
+-- recomputing a signal when it is known it did not change.
+--
+-- State of the signal includes all future values, though they might
+-- not be computed yet. The idea is to keep updating the future of
+-- the signal slightly before it becomes the present.
+data SigUp a = SigUp 
+    { su_state ::  !(Maybe (Sig a , T))
+    , su_stable :: !(Maybe T)
     }
 
-----------------------------------------------------------
--- LnkD is a more generic version of LnkW for metadata.
--- It allows a single value to represent a group. Usefully
--- it can be propagated even if the type is unknown.
-data LnkD d x where
-    LnkDUnit :: !d -> LnkD d x
-    LnkDProd :: !(LnkD d x) -> !(LnkD d y) -> LnkD d (x :&: y)
-    LnkDSum  :: !(LnkD d x) -> !(LnkD d y) -> LnkD d (x :|: y)
+-- | signal held by update.
+su_signal :: SigUp a -> Maybe (Sig a)
+su_signal = fmap fst . su_state
 
-lnd_fst :: LnkD d (x :&: y) -> LnkD d x
-lnd_snd :: LnkD d (x :&: y) -> LnkD d y
-lnd_left :: LnkD d (x :|: y) -> LnkD d x
-lnd_right :: LnkD d (x :|: y) -> LnkD d y
-lnd_sig  :: LnkD d (S p x) -> d
+-- | time of actual switch (not same as stability)
+su_time :: SigUp a -> Maybe T
+su_time = fmap snd . su_state
 
-lnd_fst (LnkDUnit d) = LnkDUnit d
-lnd_fst (LnkDProd x _) = x
-lnd_snd (LnkDUnit d) = LnkDUnit d
-lnd_snd (LnkDProd _ y) = y
-lnd_left (LnkDUnit d) = LnkDUnit d
-lnd_left (LnkDSum x _) = x
-lnd_right (LnkDUnit d) = LnkDUnit d
-lnd_right (LnkDSum _ y) = y 
-lnd_sig (LnkDUnit d) = d
+-- | modify the value of a signal update
+su_fmap :: (Sig a -> Sig b) -> SigUp a -> SigUp b
+su_fmap fn su =
+    let state' = fmap (\(s0,t) -> (fn s0, t)) (su_state su) in
+    SigUp { su_state = state', su_stable = su_stable su }
 
-lnd_fmap :: (a -> b) -> LnkD a x -> LnkD b x
-lnd_fmap fn (LnkDUnit d) = LnkDUnit (fn d)
-lnd_fmap fn (LnkDProd l r) = LnkDProd (lnd_fmap fn l) (lnd_fmap fn r)
-lnd_fmap fn (LnkDSum l r) = LnkDSum (lnd_fmap fn l) (lnd_fmap fn r)
+-- | apply a signal update to a signal.
+su_apply :: SigUp a -> Sig a -> Sig a
+su_apply su s0 = 
+    case su_state su of
+      Just (sf,tu) -> s_switch s0 tu sf 
+      Nothing -> s0
+
+-- | delay all aspects of a signal update
+su_delay :: DT -> SigUp a -> SigUp a
+su_delay dt = if (0 == dt) then id else \ su ->
+    let state' = fmap (\(s0,t) -> (s_delay dt s0, addTime t dt)) (su_state su) in
+    let stable' = fmap (flip addTime dt) (su_stable su) in
+    SigUp { su_state = state', su_stable = stable' }
 
 ---------------------------------------------------------
 -- SigSt represents the state of one signal.
@@ -89,28 +70,29 @@ data SigSt a = SigSt
     , st_expect :: !Bool       -- recent `touch`
     }
 
-st_sigup :: SigUp a -> SigSt a -> SigSt a
-st_sigup su s0 = 
-    assert (monotonicStability t0 tf) $
-    SigSt { st_signal = sf, st_stable = tf, st_expect = False }
-    where t0 = st_stable s0
-          tf = su_stable su
-          s0 = st_signal s0
-          sf = case su_state su of
-                Nothing -> s0
-                Just (su',tu') -> s_switch s0 tu' su'
+st_stabilize :: Maybe T -> SigSt a -> SigSt a
+st_stabilize tf st = 
+    assert (monotonicStability (st_stable st) tf) $
+    st { st_stable = tf, st_expect = False }
 
 -- st_zero is an initial SigSt value.
 st_zero :: SigSt a
-st_zero = SigSt { st_signal = empty, st_stable = Nothing, st_expect = False }
+st_zero = SigSt { st_signal = s_never, st_stable = Nothing, st_expect = False }
 
 st_poke :: SigSt a -> SigSt a
 st_poke st = st { st_expect = True }
 
 -- clear history up to T
 st_clear :: T -> SigSt a -> SigSt a 
-st_clear tt st = sf `seq` st { st_signal = sf }
+st_clear tt st = st { st_signal = sf }
     where (_,sf) = s_sample (st_signal st) tt
+
+st_sigup :: SigUp a -> SigSt a -> SigSt a
+st_sigup su st =
+    let tm = su_stable su in
+    let sf = su_apply su (st_signal st) in
+    assert (monotonicStability (st_stable st) tm) $
+      SigSt { st_signal = sf, st_stable = tm, st_expect = False } 
 
 -- for some extra validation and debugging, ensure that stability
 -- is non-decreasing (excepting Forever, which acts as a reset).
@@ -140,25 +122,36 @@ sm_zero = SigM
 sm_update_l :: (SigSt x -> SigSt x) -> (SigM x y -> SigM x y)
 sm_update_r :: (SigSt y -> SigSt y) -> (SigM x y -> SigM x y)
 sm_update_t :: T -> SigM x y -> SigM x y
-
-sm_sigup_t  :: SigUp xy -> SigM x y -> SigM x y  -- update time
-sm_sigup_l  :: SigUp x -> (SigM x y -> SigM x y) -- update time & left
-sm_sigup_r  :: SigUp y -> (SigM x y -> SigM x y) -- update time & right
-
-sm_sigup_e  :: Either (SigUp x) (SigUp y) -> (SigM x y -> SigM x y)
+sm_update_mt :: Maybe T -> SigM x y -> SigM x y
 
 sm_update_l fn sm = sm { sm_lsig = fn (sm_lsig sm) }
 sm_update_r fn sm = sm { sm_rsig = fn (sm_rsig sm) }
+sm_update_mt = maybe id sm_update_t
 sm_update_t tm sm = sm { sm_tmup = tm' }
     where tm' = case sm_tmup sm of
                     Nothing -> Just tm
                     Just tx -> Just $! min tm tx
 
-sm_sigup_t = maybe id sm_update_t . su_time
-sm_sigup_l su = sm_sigup_t su . sm_update_l (st_sigup su)
-sm_sigup_r su = sm_sigup_t su . sm_update_r (st_sigup su)
+sm_sigup_l  :: SigUp x -> (SigM x y -> SigM x y) -- update time & left
+sm_sigup_r  :: SigUp y -> (SigM x y -> SigM x y) -- update time & right
+sm_sigup_l su = (sm_update_mt . su_time) su . (sm_update_l . st_sigup) su
+sm_sigup_r su = (sm_update_mt . su_time) su . (sm_update_r . st_sigup) su
 
-sm_sigup_e = either sm_sigup_l sm_sigup_r
+-- generate a link update from a SigM.
+-- This will combine two signals to generate a new signal.
+-- The least stability value is used.
+sm_emit :: (Sig a -> Sig b -> Sig c) -> SigM a b -> SigUp c
+sm_emit fn sm = 
+    let tmStable = sm_stable sm in
+    case sm_tmup sm of
+        Nothing -> 
+            SigUp { su_state = Nothing, su_stable = tmStable }
+        Just tt -> 
+            let sa = st_signal $ sm_lsig sm in
+            let sb = st_signal $ sm_rsig sm in
+            let sc = s_trim (fn sa sb) tt in
+            sc `seq` 
+            SigUp { su_state = Just (sc,tt), su_stable = tmStable }
 
 -- sm_waiting is true if either left or right has been touched 
 -- (but not yet updated)
@@ -167,28 +160,13 @@ sm_waiting sm = st_expect (sm_lsig sm) || st_expect (sm_rsig sm)
 
 -- stability of SigM is lesser of two stability values.
 -- note: not really clear on whether I should 
-sm_stable :: SigM x y -> T
+sm_stable :: SigM x y -> Maybe T
 sm_stable sm = mb lt rt
     where lt = st_stable (sm_lsig sm)
           rt = st_stable (sm_rsig sm)
           mb Nothing r = r
           mb l Nothing = l
           mb (Just l) (Just r) = Just $! min l r
-
--- generate a link update from a SigM.
--- This will combine two signals to generate a new signal.
--- The least stability value is used.
-sm_emit :: (Sig a -> Sig b -> Sig c) -> SigM a b -> SigUp z
-sm_emit fn sm = 
-    case sm_tmup sm of
-        Nothing -> 
-            SigUp { su_state = Nothing, su_stable = sm_stable sm }
-        Just tt -> 
-            let sa = st_signal $ sm_lsig sm in
-            let sb = st_signal $ sm_rsig sm in
-            let sc = s_trim tt $ fn sa sb in
-            sc `seq` 
-            SigUp { su_state = Just (sc,tt), su_stable = sm_stable sm }
 
 -- cleanup SigM after sending a message, based on given stability.
 -- in general the stability will be the same as the signal for 
@@ -203,6 +181,5 @@ sm_cleanup (Just tt) sm =
         , sm_rsig = sy'
         , sm_tmup = Nothing
         }
-
 
 

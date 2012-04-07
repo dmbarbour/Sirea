@@ -1,20 +1,20 @@
 
-{-# LANGUAGE GADTs, TypeFamilies #-}
+{-# LANGUAGE GADTs, TypeOperators #-}
 
 -- where do I organize these types???
 module FRP.Sirea.Link 
     ( MkLnk(..)
-    , LnkUp(..), SigUp(..)
+    , LnkUp(..)
     , Lnk, LnkW(..)
-    , ln_zero
-    , ln_left, ln_right, ln_fst, ln_snd
-    , ln_null, ln_mbsig, ln_lnkup
+    , ln_zero, ln_lnkup
+    , ln_left, ln_right, ln_fst, ln_snd, ln_null
     , ln_sumap, ln_mksigzip
+    , SigUp(..), su_apply
     ) where
 
-import FRP.Sirea.Signal
-import FRP.Sirea.Behavior (S,(:&:),(:|:)) -- for Lnk
+import FRP.Sirea.Internal.STypes
 import FRP.Sirea.Internal.Types
+import FRP.Sirea.Signal
 import Data.IORef
 import Control.Monad (unless)
 
@@ -36,10 +36,10 @@ import Control.Monad (unless)
 -- Secondary data includes:
 --   tsen - time sensitive: if true, prevents delay aggregation and
 --     forces aggregated delay to apply prior to reaching link. 
---   
+--
 data MkLnk x y = MkLnk 
-    { ln_time_sensitive  :: !Bool 
-    , ln_build           :: !(Lnk y -> IO (Lnk x))
+    { ln_tsen  :: !Bool 
+    , ln_build :: !(Lnk y -> IO (Lnk x))
     }
 
 -- | A Lnk describes a complex product of LnkUp values, to 
@@ -87,30 +87,6 @@ ln_lnkup  :: Lnk (S p a) -> (LnkUp a)
 ln_lnkup (LnkSig lu) = lu
 ln_lnkup _ = ln_zero
 
--- | Each signal update carries:
---    state - the new state of the signal, starting at a given time
---      which must be greater or equal to current stability. The
---      value Nothing here means that the state did not change.
---    stability - the new stability of the signal, after applying
---      the state update. A promise that all future updates happen
---      no earlier than the given instant in time, to support GC. 
---      The value Nothing here means stable forever.
--- Stability always updates. State might not update, i.e. to avoid
--- recomputing a signal when it is known it did not change.
---
--- State of the signal includes all future values, though they might
--- not be computed yet. The idea is to keep updating the future of
--- the signal slightly before it becomes the present.
-data SigUp a = SigUp 
-    { su_state ::  !(Maybe (Sig a , T))
-    , su_stable :: !(Maybe T)
-    }
-su_signal :: SigUp a -> Maybe (Sig a)
-su_signal = fmap fst . su_state
-su_time :: SigUp a -> Maybe T
-su_time = fmap snd . su_state
-
-
 ---------------------------
 -- UTILITY
 -------------
@@ -120,7 +96,6 @@ ln_right  :: LnkW s (a :|: b) -> LnkW s b
 ln_fst    :: LnkW s (a :&: b) -> LnkW s a
 ln_snd    :: LnkW s (a :&: b) -> LnkW s b
 ln_null   :: LnkW s a -> Bool
-ln_mbsig  :: LnkW s (S p a) -> Maybe (s a)
 
 ln_left (LnkSum a _) = a
 ln_left _ = LnkNull
@@ -139,21 +114,13 @@ ln_null (LnkSig _) = False
 ln_null (LnkProd a b) = ln_null a && ln_null b
 ln_null (LnkSum a b) = ln_null a && ln_null b
 
-ln_mbsig (LnkSig sa) = Just sa
-ln_mbsig _ = Nothing
-
-
 -- | simple link update from a signal update transformer
 -- (Not all SigUp transforms are safe for RDP. Most aren't.)
-ln_sumap :: (SigUp x0 -> SigUp xf) -> LnkUp xf -> LnkUp x0
+ln_sumap :: (SigUp x -> SigUp y) -> LnkUp y -> LnkUp x
 ln_sumap fn ln = LnkUp 
   { ln_touch = ln_touch ln -- forward touches
   , ln_update = ln_update ln . fn -- forward updates after map
   }
-
--- possibility: a stateful version of the above, via recursive 
--- structure (to encapsulate state), could be useful to model some
--- mechanisms such as choke, adjeqf, etc.
 
 -- | for combining two signals; stores in an intermediate structure, 
 -- and constructs update from given zip function. Will release any
@@ -169,16 +136,16 @@ ln_mksigzip jf luz =
     return $! ln_mkSigM' rfSigM jf luz
 
 ln_mkSigM' :: IORef (SigM x y) -> (Sig x -> Sig y -> Sig z) 
-           -> LinkUp z -> (LnkUp x, LnkUp y)
+           -> LnkUp z -> (LnkUp x, LnkUp y)
 ln_mkSigM' rfSigM jf luz = (lux,luy)
     where pokeX = 
             readIORef rfSigM >>= \ sm ->
             writeIORef rfSigM (sm_update_l st_poke sm) >>
-            unless (sm_waiting sm) (ln_touch ln)
+            unless (sm_waiting sm) (ln_touch luz)
           pokeY = 
             readIORef rfSigM >>= \ sm ->
             writeIORef rfSigM (sm_update_r st_poke sm) >>
-            unless (sm_waiting sm) (ln_touch ln)
+            unless (sm_waiting sm) (ln_touch luz)
           emit  = 
             readIORef rfSigM >>= \ sm ->
             unless (sm_waiting sm) $

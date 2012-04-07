@@ -2,97 +2,41 @@
 {-# LANGUAGE TypeOperators, EmptyDataDecls, GADTs, TypeFamilies #-}
 
 module FRP.Sirea.Behavior  
-  ( (:&:), (:|:), B, S
-  , (>>>) -- from Control.Category
-  , bfwd, bdelay, bsynch
-  , bfirst, bsecond, (***), bswap, bdup, bfst, bsnd, bassoclp, bassocrp
-  , bleft, bright, (+++), bmirror, bmerge, binl, binr, bassocls, bassocrs
-  , bconjoinl, bconjoinr
-  , bvoid
-  , bfmap, bzip, bzipWith, bsplit
-  , bUnsafeLnk
-  , MkLnk(..), Lnk(..), SigUp(..)
-  , ln_fmap, su_fmap, su_delay
-  ) where
+    ( (:&:), (:|:), B, S -- from FRP.Sirea.Internal.BTypes
+    , (>>>) -- from Control.Category
+    , bfwd, bfmap, bconst, bvoid
+    , bfirst, bsecond, (***), bswap, bdup, bfst, bsnd, bassoclp, bassocrp
+    , bleft, bright, (+++), bmirror, bmerge, binl, binr, bassocls, bassocrs
+    , bzip, bzipWith, bsplit
+    , bdelay, bsynch
+    , bconjoinl, bconjoinr,
+    -- , bdisjoin0
+    , bUnsafeLnk
+    ) where
 
 import Prelude hiding (id,(.))
 import Control.Category
 
-import Data.IORef
 import FRP.Sirea.Signal
 import FRP.Sirea.Time
 import FRP.Sirea.Internal.Types
+import FRP.Sirea.Internal.BTypes
+import Data.IORef
+import Data.Function (on)
 
 
 infixr 3 ***
 infixr 2 +++
 
--- | (x :&: y). Product of asynchronous or partitioned signals, but
--- x and y will have equal and tightly coupled active periods. For
--- example, if x is active for 300ms, inactive 100ms, then active
--- 600ms, then y will have the same profile. However, asynchronous
--- delays enable a small divergence of exactly when these periods
--- occur. (They'll be synchronized before recombining signals.)
-data (:&:) x y
-
--- | (x :|: y). Union or Sum of asynchronous or partitioned signals.
--- Signals are active for different durations, i.e. if x is active
--- 100 ms, inactive 400 ms, then active 100 ms: then y is inactive
--- 100 ms, active up to 400 ms, then inactive 100 ms. (There may be
--- durations where both are inactive.) Due to asynchronous delays 
--- the active periods might overlap for statically known periods.
-data (:|:) x y
-
--- | (S p a) is a Sig in a blanket - Sig a in partition p. 
---
--- See FRP.Sirea.Signal for a description of signals. RDP developers
--- do not work directly with signals, but rather with behaviors that
--- transform signals. However, a Sirea developer might interact with
--- signals by the `bUnsafeLnk` behavior for FFI and legacy adapters.
---
--- Partitions represent the spatial distribution of signals, across
--- threads, processes, or heterogeneous systems. Developers can keep
--- certain functionality to certain partitions (or classes thereof).
--- Communication between partitions requires explicit behavior, such
--- as bcross.
---
--- Partitions must be Data.Typeable to support analysis of types
--- as values. Some types may have special meaning, indicating that
--- extra threads should be constructed when behavior is initiated.
-data S p a
-
--- | (B x y) describes an RDP behavior - a signal transformer with
--- potential for declarative `demand effects`. Signal x is called
--- the demand, and y the response. Behaviors may be composed, so the
--- response from one behavior easily becomes demand on another.
---
--- A common effect on demand is to acquire resources, e.g. to power
--- up a sensor only while there is code interested in observing it.
--- But demands can also influence state, and thereby interact with
--- many other behaviors via shared state or stateful services.
---
--- RDP demand effects are constrained: 
---   * spatial idempotence - in any given instant, the same demand
---     twice, or a thousand times, has no additional effect. 
---   * spatial commutativity - the origin of a demand signal does
---     not affect its meaning; demands at any given instant must be
---     processed as an unordered set.
---   * duration coupling - the active periods of response y are
---     tightly coupled to the active periods of demand x. If x is
---     active 100 ms, inactive 300 ms, active 200 ms then so will
---     be y (albeit, possibly delayed a little).
---   * continuous & eventless - no instantaneous states or values, 
---     and conceptually infinite instants between times. Rather than
---     a button-press event, for example, developers will see the
---     button down state a few milliseconds then back in up-state.
---
--- These constraints make RDP very declarative. But developers must
--- learn new patterns, idioms, and state models.
---
--- Behaviors compose much like arrows (from Control.Arrow), but are
--- more constrained due to partitioning, asynchrony, and duration
--- coupling. 
-type B = B' -- from FRP.Sirea.Internal.Types
+-- I really don't trust the RULES pragma, but I haven't gotten
+-- around to applying my own optimizations. Here are a few simple
+-- cases that are likely to happen often.
+{-# RULES
+"bfmap>>>bfmap" forall f g .
+                (bfmap f) . (bfmap g) = bfmap (f . g)
+"bconst>>>bfmap" forall f g . 
+                (bfmap f) . (bconst c) = bconst (f c)
+ #-}
 
 instance Category B where
   id  = B_fwd
@@ -158,8 +102,7 @@ instance Category B where
 --   bforce  - apply sequential strategy relative to stability
 --   bstrat  - apply parallel strategy relative to sampling 
 --   badjeqf - eliminate adjacent equal updates  
---   bUnsafeChoke - skip minor frames when updates are too fast
---      unsafe: violates commutativity and stateless rules.
+--   bUnsafeChoke - skip minor frames when updates too fast
 --
 bfwd     :: B x x
 
@@ -183,7 +126,7 @@ binr     :: B y (x :|: y)
 bassocls :: B (x :|: (y :|: z)) ((x :|: y) :|: z)
 bassocrs :: B ((x :|: y) :|: z) (x :|: (y :|: z))
 
-bfwd = B_fwd
+bfwd = id
 
 bfirst = B_on_fst
 bsecond f = bswap >>> bfirst f >>> bswap 
@@ -200,54 +143,86 @@ bright f = bmirror >>> bleft f >>> bmirror
 (+++) f g = bleft f >>> bright g
 bmirror = B_mirror
 bmerge = B_merge
-binl = B_lft
+binl = B_in_lft
 binr = binl >>> bmirror
 bassocls = B_asso_s
 bassocrs = bmirr3 >>> bassocls >>> bmirr3
 
--- utility
-
+-- bswap3 is utility for bassocrp
 bswap3 :: B ((x :&: y) :&: z) (z :&: (y :&: x))
 bswap3 = bfirst bswap >>> bswap
 
+-- bmirror3 is utility for bassocrs
 bmirr3 :: B ((x :|: y) :|: z) (z :|: (y :|: x))
 bmirr3 = bleft bmirror >>> bmirror
 
--- | bvoid executes a behavior for side-effects only,
--- and simply propagates its input. This is a common
--- pattern.
+-- | Map an arbitrary Haskell function across an input signal.
+bfmap :: (a -> b) -> B (S p a) (S p b)
+bfmap fn = B_mkLnk $ MkLnk { ln_tsen = False, ln_build = bdFmap }
+    where bdFmap = ln_sumap (su_fmap (s_fmap fn))
+
+-- | Map a constant to a signal. A constant signal can still vary 
+-- between active and inactive over time. Same as bfmap (const c),
+-- but potentially more efficient. 
+bconst :: c -> B (S p a) (S p c)
+bconst c = B_mkLnk $ MkLnk { ln_tsen = False, ln_build = bdConst }
+    where bdConst = ln_sumap (su_fmap (s_const c))
+
+-- | `bvoid b` will activate behavior b but ignore its result.
+-- The input is duplicated and passed onwards. 
 bvoid :: B x y -> B x x
 bvoid b = bdup >>> bfirst b >>> bsnd 
 
--- | Conjoin is a partial merge. It will implicitly synchronize the 
--- merged element.
+-- | conjoin is a partial merge. 
 bconjoinl :: B ((x :&: y) :|: (x :&: z)) (x :&: (y :|: z))
 bconjoinr :: B ((x :&: z) :|: (y :&: z)) ((x :|: y) :&: z)
 bconjoinl = bdup >>> (isolateX *** isolateYZ) 
    where isolateX = (bfst +++ bfst) >>> bmerge
          isolateYZ = (bsnd +++ bsnd)
 bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
+-- implemented as full merge with drops. This works out okay due to
+-- dead-code elimination.
 
 -- | Disjoin will distribute a decision. Alternatively understood as
 -- loading an environment into a choice. This pattern is valuable,
--- for modeling lexical environments and using choice. The essential
--- requirement is to deliver a minimal signal describing the choice 
--- to the desired signal (or vice versa); in this case signal masks
--- are used to perform the split. 
+-- for modeling lexical environments and using choice. To achieve
+-- disjoin requires combining a signal representing the split with a
+-- signal representing the external data, which unfortunatly makes
+-- disjoin non-generic and not-quite dual to conjoin.
 --
--- The operation will implicitly synchronize the split element.
---
--- This is not very generic and may be difficult to use. I hope that
--- typeful programming might lift this into a more generic disjoin.
--- For now it is `bdisjoin0` for the basic, painful form.
+-- I hope I might be able to figure out some typeclasses or template
+-- programs to make disjoin more generic. So bdisjoin0 is for this
+-- non-generic version of disjoin. 
 --
 bdisjoin0 :: B (S p a :&: ((S p () :&: x) :|: y))
                ((S p a :&: x) :|: (S p a :&: y))
-bdisjoin0 = undefined
+bdisjoin0 = B_tshift disjSynch >>> B_mkLnk disjMkLnk
+    where disjMkLnk = MkLnk { ln_tsen = False, ln_build = disjBuild }
+          disjSynch auxy =
+            -- Synchronize just the two signal elements.
+            let a   = lnd_first auxy in
+            let uxy = lnd_second auxy in
+            let ux  = lnd_left uxy in
+            let u   = lnd_first ux in
+            let x   = lnd_second ux in
+            let y   = lnd_right uxy in
+            let dta = lnd_sig a in
+            let dtu = lnd_sig u in
+            let dtSynch = (max `on` ldt_goal) dta dtu in
+            let dtCurr  = (max `on` ldt_curr) dta dtu in
+            let dt' = LDT { ldt_curr = dtCurr, ldt_goal = dtSynch } in
+            let a' = LnkDProd dt' in
+            let u' = LnkDProd dt' in
+            a' `LnkDProd` ((u' `LnkDProd` x) `LnkDSum` y)
+          disjBuild lxry = undefined 
     --    the x and y elements are trivial, unchanged.
-    --    but I might need some special support to handle the rather
-    --      unique synchronization characteristics.
+    --    the signal element is split by use of a mask and invert-mask.
+    --      maybe a dedicated masking operator would be appropriate?
+    --    dead code only if both outputs are dead code.
+    --    update both outputs on every update.
+    --    
 
+{- transformative behaviors 
 -- berrseq - composition with error options.
 -- todo: move to a arrow transformer...
 berrseq :: B x (err :|: y) -> B y (err :|: z) -> B x (err :|: z)
@@ -257,7 +232,7 @@ berrseq bx by = bx >>> bright by >>> bassocls >>> bleft bmerge
 -- todo: move to a arrow transfomer
 benvseq :: B (env :&: x) y -> B (env :&: y) z -> B (env :&: x) z
 benvseq bx by = bdup >>> (bfst *** bx) >>> by
-
+ -}
 
 -- | Represent latency of calculation or communication by delaying
 -- a signal a small, logical difftime. Appropriate use of delay can
@@ -280,25 +255,16 @@ bdelay = B_tshift . lnd_fmap . addDelay
 bsynch :: B x x
 bsynch = B_tshift doSynch
     where doSynch ldt =
-            let dtGoal = maxDelayGoal ldt in
+            let dtGoal = ldt_maxGoal ldt in
             lnd_fmap $ \ ldt -> ldt { ldt_goal = dtGoal }
             -- setting all elements to max delay goal among them
 
--- find max lt_goal.
-maxDelayGoal :: LnkD LDT x -> DT
-maxDelayGoal (LnkDProd l r) = max (maxDelayGoal l) (maxDelayGoal r)
-maxDelayGoal (LnkDSum l r) = max (maxDelayGoal l) (maxDelayGoal r)
-maxDelayGoal (LnkDUnit lt) = lt_goal lt
-
--- | Map an arbitrary Haskell function across an input signal.
-bfmap :: (a -> b) -> B (S p a) (S p b)
-bfmap = B_fmap -- specialized case so I can combine later. 
-
--- | Map a constant to a signal. A constant signal can still vary 
--- between active and inactive over time. This operation will also
--- eliminate redundant updates in a signal.  
-bconst :: c -> B (S p a) (S p c)
-bconst = 
+-- bcross:
+--   do I make it for a specific partition type?
+--   or do I make a typeclass for entering partitions with IO?
+--   I think I'll skip this for now and get back to it... in 
+--   another module.
+-- not a typeclass for bcross, but per-partition could be okay.
 
 
 -- | combine a product of signals into a signal of products
@@ -330,82 +296,71 @@ bsplit = bUnsafeSplit
 -- | as bsplit, but not constrained to partition class
 bUnsafeSplit :: B (S p (Either a b)) (S p a :|: S p b)
 bUnsafeSplit = bUnsafeLnk $ MkLnk
-    { ln_time_sensitive = False
-    , ln_effectful = False
+    { ln_tsen = False
     , ln_build = return . ln_split
     }
 
 -- | bUnsafeLnk extends Sirea with primitive behaviors, FFI, foreign
--- services, legacy adapters, access to state and IO. Some primitive
--- behaviors (bfmap, bzip, bsplit) are also implemented atop this. 
+-- services, legacy adapters, access to state and IO. Most primitive
+-- behaviors that touch signals are implemented atop the same MkLnk
+-- mechanism. bUnsafeLnk can be used safely, but it takes caution to
+-- avoid violating RDP's declarative properties:
 --
--- Each instance of this behavior results in construction of one 
--- link (the ln_build operation) when the Sirea behavior is started. 
--- This construction allows for intermediate state, for caches and 
--- other safe applications. The link will have access to Haskell IO 
--- on each update. The updates may specify future times for when 
--- they become active or expire.
+--   spatial commutativity - order of link creation or attach does
+--     not affect program behavior.
+--   spatial idempotence - if two links have equivalent demands at a
+--     given time, they have equivalent response. Duplicate demands
+--     do not cause any additional effect.
+--   duration coupling - the activity of response is tightly coupled
+--     to activity of demand. Signals cannot be created or destroyed
+--     by MkLnk, only transformed. MkLnk may also not add delay. The
+--     response is modeled as instantaneous with the demand. (Delay
+--     may be modeled by wrapping the bUnsafeLnk op with bdelay.) 
+--   locally stateless - caches are allowed, but there should be no
+--     `history` of a signal kept in the link itself; i.e. if the
+--     link is destroyed and created fresh, it will recover the same
+--     state it had before. State can be modeled as external to the
+--     link (e.g. in a filesystem or database)
+--   eventless - a signal with zero duration is never observed. If 
+--     the link is updated multiple times at a given instant, only
+--     the last update should have a lasting effect on system state.
+--   
+-- Further the developer must ensure that the created links properly
+-- detach when the signal is in a final state (s_fini) so that the
+-- behavior can be garbage collected. This is especially important
+-- when using dynamic behaviors!
 --
--- As indicated in the name, bUnsafeLnk is unsafe - it may easily
--- violate the RDP abstraction. It can be used safely, but caution
--- is warranted. Developers must avoid violating the tenets of RDP:
--- duration coupling, spatial commutativity, spatial idempotence, 
--- locally stateless (except for regenerable-from-scratch state like
--- caches or memoization), eventless (ignore zero-duration signals),
--- and so on. Further, developers must avoid structure that hinders 
--- GC of a behavior after shutdown, and sometimes explicitly remove 
--- dead links (by testing s_fini).
+-- Each instance of bUnsafeLnk results in construction of one link 
+-- (via ln_build operation) when the Sirea behavior is started. Dead 
+-- code from binl or binr would be an exception. The IO operation in
+-- MkLnk is for intermediate caches and other preparation, not for
+-- observable side-effects. The link only becomes active when the
+-- signal is updated.
 --
--- Safe uses of bUnsafeLnk should be hidden behind a library API.
--- Unsafe uses should still have the word 'Unsafe' in their name.
---
--- Note: Developers must not introduce delay by use of bUnsafeLnk.
--- Delay must be visible for analysis at bsynch, so use bdelay. Use
--- of bUnsafeLnk will force a synchronization for complex signals,
--- which should (with rare exceptions) all be in the same partition.
+-- Hopefully a few useful libraries of behaviors can be built atop 
+-- this to cover most common requirements safely.
 bUnsafeLnk :: MkLnk x y -> B x y
-bUnsafeLnk mkLnk = bsynch >>> B_mkLnk mkLnk
+bUnsafeLnk mklnk = bsynch >>> B_tshift xSynch >>> B_mkLnk mklnk
+    where xSynch ldt = 
+            let bNeedSynch = ldt_minCurr ldt /= ldt_maxCurr ldt in
+            let bFullSynch = ln_tsen mkLnk in
+            if bNeedSynch || bFullSynch 
+                then flip lnd_fmap ldt $ \ x -> x { ldt_curr = (ldt_goal x) }
+                else ldt -- no change; all or nothing for now
 
 
--- combine two parallel signals. 
--- This works by constructing the two input signals (from updates)
-mkln_zip :: (Sig a -> Sig b -> Sig c) -> Lnk (S p1 c) -> IO (Lnk (S p2 a :&: S p3 b))
-mkln_zip = 
-    newIORef emptyZipper >>= \ rz ->
-    undefined
-    -- create a signal accumulator for a
-    -- create a signal accumulator for b
-    -- touch forwards if both a,b are untouched
 
--- split a signal.
-ln_split :: Lnk ((S p3 a) :|: (S p2 b)) -> Lnk (S p1 (Either a b))
-ln_split = undefined
 
--- | modify the primary function of a signal update
---
--- Note that this function on signals should not delay the signal or
--- otherwise change its activity profile.
-su_fmap :: (Sig a -> Sig b) -> SigUp a -> SigUp b
-su_fmap fn su =
-    let state' = fmap (\(s0,t) -> (fn s0, t)) (su_state su) in
-    SigUp { su_state = state', su_stable = su_stable su }
-
--- | delay all aspects of a signal update
-su_delay :: DT -> SigUp a -> SigUp a
-su_delay dt = if (0 == dt) then id else \ su ->
-    let state' = fmap (\(s0,t) -> (s_delay dt s0, addTime t dt)) (su_state su) in
-    let stable' = fmap (flip addTime dt) (su_stable su) in
-    SigUp { su_state = state', su_stable = stable' }
 
 
 -- todo:
 --   bcross: change partitions. Specific to signal and partition types.
---     Likely a typeclass!
---   bdrop
+--     dedicated thread per partition, or at least for certain partitions
+--     maybe use a dedicated variation of bcross? Or alternatively, create
+--     a typeclass for obtaining the necessary data for entering each
+--     partition (and starting up any associated threads)
 --   bpeek (anticipate)
 
---   bspark (spark a calculation)
---   bforce
 --   
 -- weaker disjoin?
 -- initial stateful and pseudo-state ops

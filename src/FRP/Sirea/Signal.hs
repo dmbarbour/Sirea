@@ -203,7 +203,7 @@ s_merge sl sr =
 -- then the right signal is used starting at that instant.
 s_switch :: Sig a -> T -> Sig a -> Sig a
 s_switch s0 t sf =
-    mkSig (s_head s0) (ds_sigup' (s_tail s0) t (s_head sf) (s_tail sf))
+    mkSig (s_head s0) (ds_sigup (s_tail s0) t (s_head sf) (s_tail sf))
 
 
 -- | Split an Either signal into two separate signals active at
@@ -273,14 +273,21 @@ s_peek dt s0 =
     let masked  = s_mask merged stopped in
     masked
 
--- | Erase adjacent signal values that are equal in value. This will
--- eliminate redundant updates. It is intended for performance, but
--- must be used judiciously (the filter itself has a cost).
-s_adjeqf :: Eq a => Sig a -> Sig a
-s_adjeqf s0 = 
+-- | Erase adjacent signal values that are equal in value. You can
+-- provide the equality function that compares one value to another.
+-- This will eliminate redundant updates. It is intended for 
+-- performance, but must be used judiciously (the filter itself has 
+-- a cost).
+s_adjeqf :: (a -> a -> Bool) -> Sig a -> Sig a
+s_adjeqf eq s0 = 
     let x = s_head s0 in
     let xs = s_tail s0 in
-    mkSig x (ds_adjeqfx (==) x xs)
+    mkSig x (ds_adjeqfx meq x xs)
+    where meq Nothing Nothing = True
+          meq (Just x) (Just y) = eq x y
+          meq _ _ = False
+
+--
 
 -- Apply a strategy incrementally to a signal, such that you are
 -- evaluating always slightly ahead of the current element. 
@@ -295,14 +302,11 @@ s_adjeqf s0 =
 --  strat - apply a parallel strategy incrementally to the signal, 
 --    such that evaluation of sparks is always slightly ahead of 
 --    the current element. (Maybe a separate module?)
---
---  sample one signal based on another? (i.e. slave a signal)
---    illegal as pure behavior, but okay if we model it with
---    external state authority and a model of uniqueness in RDP. 
---
--- These might be useful for performance but I'm hesitant to supply
--- them. Developers would be better off sampling discretely to get
--- similar results of choke without the temporal aliasing issues.
+--  updating `profile` of a constant signal...
+--     similar to s_adjeqf, but limited to just the update?
+--     maybe s_adjeqf_switch? Might need a maximum T for the handoff,
+--     i.e. to avoid computing indefinitely. Seems complicated.
+--  
 
 
 -- | Select will essentially zip a collection of signals into a
