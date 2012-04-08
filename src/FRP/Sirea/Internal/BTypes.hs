@@ -6,7 +6,8 @@ module FRP.Sirea.Internal.BTypes
     ( B(..)
 
     -- support for time manipulations
-    , TS, LDT(..)
+    , TR, TS, LDT(..)
+    , tr_unit, tr_fwd
     , LnkD(..)
     , lnd_fst -- :: LnkD d (x :&: y) -> LnkD d x
     , lnd_snd -- :: LnkD d (x :&: y) -> LnkD d y
@@ -22,6 +23,8 @@ module FRP.Sirea.Internal.BTypes
 import FRP.Sirea.Internal.STypes
 import FRP.Sirea.Link (MkLnk)
 import FRP.Sirea.Time (DT)
+import Control.Exception (assert)
+import Data.Function (on)
 
 -- | (B x y) describes an RDP behavior - a signal transformer with
 -- potential for declarative `demand effects`. Signal x is called
@@ -56,7 +59,7 @@ import FRP.Sirea.Time (DT)
 -- coupling. 
 data B x y where
   -- most signal operations
-  B_mkLnk   :: !(MkLnk x y) -> B x y
+  B_mkLnk   :: !(TR x y) -> !(MkLnk x y) -> B x y
 
   -- time modeling, logical delay
   B_tshift  :: !(TS x) -> B x x
@@ -82,11 +85,16 @@ data B x y where
   B_merge   :: B (x :|: x) x
   B_asso_s  :: B (x :|: (y :|: z)) ((x :|: y) :|: z) 
 
+
 ---------------------------------------------------------
 -- A simple model for time-shifts. We have a current delay and a
 -- goal delay. A time-shift can move either or both. Differences
 -- in current delay can be turned into a final behavior. 
-type TS x = LnkD LDT x -> LnkD LDT x
+--
+-- TR does not cause time-shifts, but controls how timing info is
+-- preserved across MkLnk behaviors.
+type TR x y = LnkD LDT x -> LnkD LDT y
+type TS x = TR x x
 data LDT = LDT 
     { ldt_curr :: !DT -- actual delay from start of behavior
     , ldt_goal :: !DT -- aggregated but unapplied logical delay
@@ -97,6 +105,19 @@ ldt_maxGoal = lnd_aggr max . lnd_fmap ldt_goal
 ldt_minGoal = lnd_aggr min . lnd_fmap ldt_goal
 ldt_maxCurr = lnd_aggr max . lnd_fmap ldt_curr
 ldt_minCurr = lnd_aggr min . lnd_fmap ldt_curr
+
+-- tr_unit validates an assumption that all inputs have uniform
+-- timing properties. It is the normal timing translator for MkLnk.
+tr_unit :: TR x y
+tr_unit x =
+    assert (ldt_maxGoal x == ldt_minGoal x) $
+    assert (ldt_maxCurr x == ldt_minCurr x) $
+    LnkDUnit $ LDT 
+        { ldt_curr = ldt_maxCurr x
+        , ldt_goal = ldt_maxGoal x
+        }
+tr_fwd :: TR (S p1 x1) (S p2 x2)
+tr_fwd = LnkDUnit . lnd_sig
 
 ----------------------------------------------------------
 -- LnkD is a more generic version of LnkW for metadata.

@@ -8,7 +8,7 @@ module FRP.Sirea.Link
     , Lnk, LnkW(..)
     , ln_zero, ln_lnkup
     , ln_left, ln_right, ln_fst, ln_snd, ln_null
-    , ln_sumap, ln_mksigzip
+    , ln_sumap, ln_mksigzip, ln_lumap
     , SigUp(..), su_apply
     ) where
 
@@ -122,6 +122,11 @@ ln_sumap fn ln = LnkUp
   , ln_update = ln_update ln . fn -- forward updates after map
   }
 
+-- | simple transformer from LnkUp to Lnk
+ln_lumap :: (LnkUp x -> LnkUp y) -> Lnk (S p x) -> Lnk (S p y)
+ln_lumap _ LnkNull = LnkNull
+ln_lumap fn (LnkSig l) = LnkSig (fn l)
+
 -- | for combining two signals; stores in an intermediate structure, 
 -- and constructs update from given zip function. Will release any
 -- unnecessary state based on updates to stability. Will hold update
@@ -133,11 +138,11 @@ ln_sumap fn ln = LnkUp
 ln_mksigzip :: (Sig x -> Sig y -> Sig z) -> LnkUp z -> IO (LnkUp x, LnkUp y)
 ln_mksigzip jf luz =
     newIORef sm_zero >>= \ rfSigM ->
-    return $! ln_mkSigM' rfSigM jf luz
+    return $! ln_mksigzip' rfSigM jf luz
 
-ln_mkSigM' :: IORef (SigM x y) -> (Sig x -> Sig y -> Sig z) 
+ln_mksigzip' :: IORef (SigM x y) -> (Sig x -> Sig y -> Sig z) 
            -> LnkUp z -> (LnkUp x, LnkUp y)
-ln_mkSigM' rfSigM jf luz = (lux,luy)
+ln_mksigzip' rfSigM jf luz = (lux,luy)
     where pokeX = 
             readIORef rfSigM >>= \ sm ->
             writeIORef rfSigM (sm_update_l st_poke sm) >>
@@ -149,9 +154,9 @@ ln_mkSigM' rfSigM jf luz = (lux,luy)
           emit  = 
             readIORef rfSigM >>= \ sm ->
             unless (sm_waiting sm) $
-              let su = sm_emit jf sm in
-              (writeIORef rfSigM $! sm_cleanup (su_stable su) sm) >>
-              ln_update luz su 
+            let su = sm_emit jf sm in
+            (writeIORef rfSigM $! sm_cleanup (su_stable su) sm) >>
+            ln_update luz su 
           updX su = modifyIORef rfSigM (sm_sigup_l su) >> emit
           updY su = modifyIORef rfSigM (sm_sigup_r su) >> emit
           lux = LnkUp { ln_touch = pokeX, ln_update = updX }

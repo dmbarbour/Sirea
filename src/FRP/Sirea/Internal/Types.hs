@@ -85,14 +85,14 @@ st_poke st = st { st_expect = True }
 -- clear history up to T
 st_clear :: T -> SigSt a -> SigSt a 
 st_clear tt st = st { st_signal = sf }
-    where (_,sf) = s_sample (st_signal st) tt
+    where sf = s_trim (st_signal st) tt
 
 st_sigup :: SigUp a -> SigSt a -> SigSt a
 st_sigup su st =
     let tm = su_stable su in
     let sf = su_apply su (st_signal st) in
     assert (monotonicStability (st_stable st) tm) $
-      SigSt { st_signal = sf, st_stable = tm, st_expect = False } 
+    SigSt { st_signal = sf, st_stable = tm, st_expect = False } 
 
 -- for some extra validation and debugging, ensure that stability
 -- is non-decreasing (excepting Forever, which acts as a reset).
@@ -122,20 +122,24 @@ sm_zero = SigM
 sm_update_l :: (SigSt x -> SigSt x) -> (SigM x y -> SigM x y)
 sm_update_r :: (SigSt y -> SigSt y) -> (SigM x y -> SigM x y)
 sm_update_t :: T -> SigM x y -> SigM x y
-sm_update_mt :: Maybe T -> SigM x y -> SigM x y
 
 sm_update_l fn sm = sm { sm_lsig = fn (sm_lsig sm) }
 sm_update_r fn sm = sm { sm_rsig = fn (sm_rsig sm) }
-sm_update_mt = maybe id sm_update_t
 sm_update_t tm sm = sm { sm_tmup = tm' }
     where tm' = case sm_tmup sm of
                     Nothing -> Just tm
                     Just tx -> Just $! min tm tx
 
+sm_sigup_t :: SigUp z -> SigM x y -> SigM x y
+sm_sigup_t su =
+    case su_state su of
+        Nothing -> id
+        Just (_,tu) -> sm_update_t tu
+
 sm_sigup_l  :: SigUp x -> (SigM x y -> SigM x y) -- update time & left
 sm_sigup_r  :: SigUp y -> (SigM x y -> SigM x y) -- update time & right
-sm_sigup_l su = (sm_update_mt . su_time) su . (sm_update_l . st_sigup) su
-sm_sigup_r su = (sm_update_mt . su_time) su . (sm_update_r . st_sigup) su
+sm_sigup_l su = sm_sigup_t su . (sm_update_l . st_sigup) su
+sm_sigup_r su = sm_sigup_t su . (sm_update_r . st_sigup) su
 
 -- generate a link update from a SigM.
 -- This will combine two signals to generate a new signal.
