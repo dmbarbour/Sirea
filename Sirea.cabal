@@ -1,44 +1,44 @@
 Name: Sirea
 Version: 0.1
 Cabal-Version: >= 1.2
-Synopsis: Simply Reactive! Declarative orchestration. Not quite FRP.
+Synopsis: Simply Reactive! Declarative orchestration in Haskell with RDP.
 Category: Reactive, FRP
 Description:
   Reactive Demand Programming (RDP) is a paradigm for declarative
-  orchestration of systems - continuous observation and influence.
-  It is distinct from most reactive paradigms in how it represents
-  effects: RDP parameterizes the demand for a signal - a command or
-  query - as another signal. Demands react to observed conditions,
-  and observable conditions are influenced by demand. Demands on a
-  service are idempotent and commutative, resulting in a declarative
-  programming experience.
+  orchestration of systems by use of signals. Services, resources,
+  and functions are represented as behaviors that transform signals
+  (without creating or destroying them - output has equal duration 
+  as input). Signals to a resource often represent a simple query,
+  but in general can control or influence its behavior. Signal based
+  control is commutative, idempotent, continuous, and concurrent.
   .
-  RDP behaviors are eventless and stateless. However, events can be
-  represented by signals of short duration (e.g. button is down for
-  a few milliseconds, then back up) and RDP allows observation and
-  influence on external state resources (filesystems, databases, and
-  registers). 
+  Those properties allow developers to reason about and refactor RDP
+  code in a very declarative manner. Further, ability to encapsulate
+  effects and acquire resources dynamically make RDP suitable for
+  composition and orchestration of open systems. There is no need to
+  pipe a signal all the way through an RDP program just to raise a
+  window or control a widget.
   .
-  Sirea is an implementation of a simplified RDP model. Sirea makes
-  several simplifying assumptions:
-    * discrete-varying signals 
-    * one concrete signal kind
-    * one concrete time type
-    * one concrete behavior type 
-    * forever loop, comandeers calling thread
-    * crash-only behavior; kill the thread
-    * single-threaded behaviors (up to IO)
-    * self-discipline for safe legacy integration
+  First class RDP behaviors are supported, though eval is explicit
+  and they cannot be stored statefully. RDP is designed for staged
+  programming by use of these behaviors, using one RDP behavior to
+  construct another slightly less stable behavior. This can model
+  many things - staged meta-programming, live programming, runtime
+  compilation and linking, grants and revocations of authority.
   .
-  RDP is designed for all scales, from embedded real-time systems to 
-  parallel, open distributed systems. Further, RDP is designed for
-  live programming and orthogonal persistence. RDP is more robust,
-  resilient, and securable than most other paradigms. 
+  RDP approaches state differently than FRP. FRP programs accumulate
+  events or integrate signals. RDP behaviors are locally stateless.
+  Instead, developers manipulate external state services - databases
+  or filesystems. This has advantages for orthogonal persistence and
+  live programming. Sirea provides persistence by default for state
+  controlled by Sirea, and state names will be stable to allow minor
+  changes in code or behavior (up to compatible representations).
   .
-  Sirea offers only a subset of RDP's advantages, but should be
-  suitable at least for mid-scale soft real-time applications, such
-  as multi-media, servers, command and control, augmented reality, 
-  and video games. 
+  Sirea is an implementation of RDP for use in a Haskell process. It
+  allows the full gamut of Haskell types, and uses Haskell threads
+  to model spatial partitions. Sirea is designed to be suitable for 
+  long lived soft real time applications such as multimedia, games,
+  command and control software. 
 
 Author: David Barbour
 Maintainer: dmbarbour@gmail.com

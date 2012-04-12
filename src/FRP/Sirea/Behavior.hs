@@ -1,97 +1,12 @@
 
 {-# LANGUAGE TypeOperators, EmptyDataDecls, GADTs, TypeFamilies #-}
 
-module FRP.Sirea.Behavior  
-    ( (:&:), (:|:), B, S -- from FRP.Sirea.Internal.BTypes & STypes
-    , (>>>) -- from Control.Category
-    , bfwd, bfmap, bconst, bvoid
-    , bfirst, bsecond, (***), bswap, bdup, bfst, bsnd, bassoclp, bassocrp
-    , bleft, bright, (+++), bmirror, bmerge, binl, binr, bassocls, bassocrs
-    , bconjoinl, bconjoinr
-    , bdisjoin0
-    , bzip, bzipWith
-    , bsplit
-    , bdelay, bsynch, bdelbar
-    -- , bcross
-    , bUnsafeLnk
-    
-    ) where
-
-import Prelude hiding (id,(.))
-import Control.Category
-
-import FRP.Sirea.Internal.STypes
-import FRP.Sirea.Internal.BTypes
-import FRP.Sirea.Internal.Types
-
-import FRP.Sirea.Signal
-import FRP.Sirea.Time
-import FRP.Sirea.Link 
-
-import Data.IORef
-import Data.Function (on)
-import Control.Monad (unless)
-
-
-infixr 3 ***
-infixr 2 +++
-
--- I really don't trust the RULES pragma, but I haven't gotten
--- around to applying my own optimizations. Here are a few simple
--- cases that are likely to happen often.
-{-# RULES
-"bfmap.bfmap" forall f g .
-                (bfmap f) . (bfmap g) = bfmap (f . g)
-"bfmap.bconst" forall f c . 
-                (bfmap f) . (bconst c) = bconst (f c)
-"bconst.bfmap" forall c f .
-                (bconst c) . (bfmap f) = bconst c
-"bconst.bconst" forall c d .
-                (bconst c) . (bconst d) = bconst c
-
-"bswap.bswap"  bswap . bswap = id
-"bmirror.bmirror" bmirror . bmirror = id
-
-"bfirst.bfirst" forall f g .
-                (bfirst f) . (bfirst g) = bfirst (f . g)
-"bleft.bleft"   forall f g .
-                (bleft f) . (bleft g) = bleft (f . g)
-"bright.bleft"  forall f g .
-                (bright f) . (bleft g) = (bleft g) . (bright f)
-"bsecond.bfirst" forall f g .
-                (bsecond f) . (bfirst g) = (bfirst g) . (bsecond f)
- #-}
-
--- TUNING
--- dt_eqf_peek: 
---   (for bconst, badjeqf via beqshift)
---   The first update in a signal might not represent a real change.
---   Delivering it as a change, however, might cause redundant eval
---   later in the pipeline (e.g. when zipping values). Ideally find
---   the first real change in signal and deliver that as the time of 
---   signal state update. But discovering such a time potentially 
---   needs infinite search. As compromise, I search bounded distance
---   into future for change, relative to stability. Idea is that the
---   computation doesn't run very far ahead of stability anyway, so
---   pushing update ahead of stability is almost free. 
-dt_eqf_peek :: DT
-dt_eqf_peek = 3.0 -- seconds ahead of stability
-
-
-instance Category B where
-  id  = B_fwd
-  (.) = flip B_pipe
-
--- | RDP behaviors are arrows, but incompatible with Control.Arrow
--- due to `arr` being more powerful than RDP allows. A number of
--- behaviors support arrow composition, and several serve as basic
--- data plumbing that `arr` would perform in Control.Arrow. These
--- are also incompatible with Megacz's Generalized Arrows because no 
--- generic unit signal exists (cannot just create signals).
+-- | This module describes basic behaviors for RDP. 
 --
--- In Sirea, most data plumbing is essentially free at runtime. But
--- there are exceptions; bzip, bmerge, bconjoin, bsplit have runtime 
--- overheads, for example.
+--   See http://github.com/dmbarbour/Sirea
+--   (the README)
+--
+-- 
 --
 -- Listed here are several `generic` behaviors, excluding resource
 -- specific behaviors (e.g. state, clock, mouse, display, network,
@@ -146,7 +61,116 @@ instance Category B where
 --   badjeqf - eliminate adjacent equal updates
 --   bUnsafeChoke - skip minor frames when updates too fast
 --
-bfwd     :: B x x
+module FRP.Sirea.Behavior  
+    ( (:&:), (:|:), B, S -- from FRP.Sirea.Internal.BTypes & STypes
+    , (>>>) -- from Control.Category
+    , bfwd, bfmap, bconst, bvoid
+    , bfirst, bsecond, (***), bswap, bdup, bfst, bsnd, bassoclp, bassocrp, (&&&)
+    , bleft, bright, (+++), bmirror, bmerge, binl, binr, bassocls, bassocrs, (|||)
+    , bconjoinl, bconjoinr
+    , bdisjoin0
+    , bzip, bzipWith
+    , bsplit
+    , bdelay, bsynch, bdelbar
+    -- , bcross
+    , bUnsafeLnk
+    
+    ) where
+
+import Prelude hiding (id,(.))
+import Control.Category
+
+import FRP.Sirea.Internal.STypes
+import FRP.Sirea.Internal.BTypes
+import FRP.Sirea.Internal.Types
+
+import FRP.Sirea.Signal
+import FRP.Sirea.Time
+import FRP.Sirea.Link 
+
+import Data.IORef
+import Data.Function (on)
+import Control.Monad (unless)
+
+
+infixr 3 ***
+infixr 2 +++
+
+-- I really don't trust the RULES pragma, but I haven't gotten
+-- around to applying my own optimizations. Here are a few simple
+-- cases that are likely to happen often.
+{-# RULES
+"bfmap.bfmap" forall f g .
+                (bfmap f) . (bfmap g) = bfmap (f . g)
+"bfmap.bconst" forall f c . 
+                (bfmap f) . (bconst c) = bconst (f c)
+"bconst.bfmap" forall c f .
+                (bconst c) . (bfmap f) = bconst c
+"bconst.bconst" forall c d .
+                (bconst c) . (bconst d) = bconst c
+
+"bswap.bswap"  bswap . bswap = id
+
+"bmirror.bmirror" bmirror . bmirror = id
+
+"bfirst.bfirst" forall f g .
+                (bfirst f) . (bfirst g) = bfirst (f . g)
+"bleft.bleft"   forall f g .
+                (bleft f) . (bleft g) = bleft (f . g)
+"bright.bleft"  forall f g .
+                (bright f) . (bleft g) = (bleft g) . (bright f)
+"bsecond.bfirst" forall f g .
+                (bsecond f) . (bfirst g) = (bfirst g) . (bsecond f)
+ #-}
+
+-- TUNING
+-- dt_eqf_peek: 
+--   (for bconst, badjeqf via beqshift)
+--
+--   The first update in a signal might not represent a real change.
+--   Delivering it as a change, however, might cause redundant eval
+--   later in the pipeline (e.g. when zipping values). Ideally find
+--   the first real change in signal and deliver that as the time of 
+--   signal state update. But discovering such a time potentially 
+--   needs infinite search. As compromise, I search bounded distance
+--   into future for change, relative to stability. Idea is that the
+--   computation doesn't run very far ahead of stability anyway, so
+--   pushing update ahead of stability is almost free. 
+dt_eqf_peek :: DT
+dt_eqf_peek = 3.0 -- seconds ahead of stability
+
+instance Category B where
+  id  = B_fwd
+  (.) = flip B_pipe
+
+-- | bfwd is just another name for Control.Category.id.
+bfwd :: (Category b) => b x x
+bfwd = id
+
+
+class (Category b) => BFmap b where
+    bfmap :: (a -> b) -> b (S p a) (S p b)
+    bconst :: c -> b (S p a) (S p c)
+
+
+
+
+-- | DYNAMIC BEHAVIORS
+--
+-- RDP behaviors may be first-class, which enables Object Oriented
+-- styles of programming, and object capability model approaches to
+-- security. This is represented by having signals carry behaviors
+-- (which looks in Haskell's type system like 'S p (B x y)'). Small
+-- behaviors can be composed into complex applications then invoked
+-- with beval or bexec.
+--
+-- Unlike OO styles, or even FRP switches, first-class behaviors in
+-- RDP cannot be stored. They are volatile, implicitly revoked after
+-- you stop sharing them. This is a valuable property for security,
+-- safety, resource management (including GC), and live programming.
+-- 
+
+
 
 bfirst   :: B x x' -> B (x :&: y) (x' :&: y)
 bsecond  :: B y y' -> B (x :&: y) (x :&: y')
@@ -239,13 +263,12 @@ bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
 -- It may be feasible to achieve a more generic disjoin by use of
 -- templates or type-based meta programming. 
 --
-bdisjoin0 :: B (S p a :&: ((S p () :&: x) :|: y) )
+bdisjoin :: B (S p a :&: ((S p () :&: x) :|: y) )
                ( (S p a :&: x) :|: (S p a :&: y) )
-bdisjoin0 = B_tshift disjSynch >>> B_mkLnk disjTime disjMkLnk
+bdisjoin = B_tshift disjSynch >>> B_mkLnk disjTime disjMkLnk
     where disjMkLnk = MkLnk { ln_tsen = False, ln_build = disjBuild }
 
-
--- This is a specialized `synch` that targets just the two elements
+-- This is a specialized `synch` that targets just the two elements.
 -- will perform minimal synch based on actual delays.
 disjSynch :: TS (S p a :&: ((S p () :&: x) :|: y))
 disjSynch auxy =
@@ -273,7 +296,7 @@ disjTime auxy = axay
           y = (lnd_right . lnd_snd) auxy 
           axay = (a `LnkDProd` x) `LnkDSum` (a `LnkDProd` y)
 
--- disjBuild decides whether this is dead code (LnkNull) and otherwise
+-- disjBuild decides whether this is dead code (LnkDead) and otherwise
 -- builds the necessary state and passes the buck.
 disjBuild :: Lnk ( (S p a :&: x) :|: (S p a :&: y) )
       -> IO (Lnk (S p a :&: ((S p () :&: x) :|: y) ) )
@@ -283,40 +306,18 @@ disjBuild lxry =
     let x   = (ln_snd . ln_left) lxry in
     let y   = (ln_snd . ln_right) lxry in
     let bNull = ln_null lnl && ln_null lnr in
-    let lnkNull = LnkNull `LnkProd` ((LnkNull `LnkProd` x) `LnkSum` y) in
-    if bNull then return lnkNull else 
-    newIORef sm_zero >>= \ rfSigM ->
+    let LnkDead = LnkDead `LnkProd` ((LnkDead `LnkProd` x) `LnkSum` y) in
+    if bNull then return LnkDead else 
     let l   = ln_lnkup lnl in
     let r   = ln_lnkup lnr in
-    let (a,u) = disjBuild' rfSigM l r in
+    let onTouch = ln_touch l >> ln_touch r in
+    let onEmit sm = 
+            let sul = sm_emit disjMaskLeft sm in
+            let sur = sm_emit disjMaskRight sm in
+            ln_update l sul >> ln_update r sur
+    in
+    ln_withSigM onTouch onEmit >>= \ (a,u) ->
     return (LnkSig a `LnkProd` ((LnkSig u `LnkProd` x) `LnkSum` y))
-    
--- poke on a or u will pokeLR
--- emit will always emit to both left and right
--- mask is used to split the data (SigUp a on input) signal. 
-disjBuild' :: IORef (SigM a ()) -> LnkUp a -> LnkUp a -> (LnkUp a, LnkUp u)
-disjBuild' rfSigM l r = (a,u) 
-    where pokeA = 
-            readIORef rfSigM >>= \ sm ->
-            writeIORef rfSigM (sm_update_l st_poke sm) >>
-            unless (sm_waiting sm) pokeLR
-          pokeU =
-            readIORef rfSigM >>= \ sm ->
-            writeIORef rfSigM (sm_update_r st_poke sm) >>
-            unless (sm_waiting sm) pokeLR
-          pokeLR = ln_touch l >> ln_touch r
-          emit = 
-            readIORef rfSigM >>= \ sm ->
-            unless (sm_waiting sm) $
-            let su_left = sm_emit disjMaskLeft sm in
-            let su_right = sm_emit disjMaskRight sm in
-            (writeIORef rfSigM $! sm_cleanup (su_stable su_left) sm) >>
-            ln_update l su_left >>
-            ln_update r su_right
-          updA su = modifyIORef rfSigM (sm_sigup_l su) >> emit
-          updU su = modifyIORef rfSigM (sm_sigup_r su) >> emit
-          a = LnkUp { ln_touch = pokeA, ln_update = updA }
-          u = LnkUp { ln_touch = pokeU, ln_update = updU }
 
 -- maskLeft and maskRight must take the two original signals and
 -- generate the split signals for the disjoin function. Assume 
@@ -328,39 +329,9 @@ disjMaskRight sa su = s_mask sa su'
           inv Nothing = Just ()
           inv _       = Nothing
 
-{-    --     
-ln_mksigzip' :: IORef (SigM x y) -> (Sig x -> Sig y -> Sig z) 
-           -> LnkUp z -> (LnkUp x, LnkUp y)
-ln_mksigzip' rfSigM jf luz = (lux,luy)
-    where pokeX = 
-            readIORef rfSigM >>= \ sm ->
-            writeIORef rfSigM (sm_update_l st_poke sm) >>
-            unless (sm_waiting sm) (ln_touch luz)
-          pokeY = 
-            readIORef rfSigM >>= \ sm ->
-            writeIORef rfSigM (sm_update_r st_poke sm) >>
-            unless (sm_waiting sm) (ln_touch luz)
-          emit  = 
-            readIORef rfSigM >>= \ sm ->
-            unless (sm_waiting sm) $
-              let su = sm_emit jf sm in
-              (writeIORef rfSigM $! sm_cleanup (su_stable su) sm) >>
-              ln_update luz su 
-          updX su = modifyIORef rfSigM (sm_sigup_l su) >> emit
-          updY su = modifyIORef rfSigM (sm_sigup_r su) >> emit
-          lux = LnkUp { ln_touch = pokeX, ln_update = updX }
-          luy = LnkUp { ln_touch = pokeY, ln_update = updY }
--}
 
-
-    --    the x and y elements are trivial, unchanged.
-    --    the signal element is split by use of a mask and invert-mask.
-    --      maybe a dedicated masking operator would be appropriate?
-    --    dead code only if both outputs are dead code.
-    --    update both outputs on every update.
-    --    
-
-{- transformative behaviors 
+{- transformative behaviors. Need a dedicated `Trans` model, which 
+   in turn needs a 'class' for behaviors.
 -- berrseq - composition with error options.
 -- todo: move to a arrow transformer...
 berrseq :: B x (err :|: y) -> B y (err :|: z) -> B x (err :|: z)
@@ -378,8 +349,8 @@ benvseq bx by = bdup >>> (bfst *** bx) >>> by
 -- complex signal, every signal receives the same delay.
 --
 -- Note that delay does not cause any actual delay in computation.
--- Instead, it applies a delay to signals (i.e. s_delay) logically,
--- though it can still affect actual timing of real-world behavior.
+-- It applies a delay to signals (i.e. s_delay) logically, which can
+-- affect the timing of real-world effects controlled by the signal.
 bdelay :: DT -> B x x
 bdelay = B_tshift . lnd_fmap . addDelay
     where addDelay dt ldt = 
@@ -403,15 +374,12 @@ bsynch = B_tshift doSynch
 
 -- | Normally bdelay and bsynch do not cause immediate processing of
 -- the signal. Instead, multiple small delays are accumulated then 
--- applied once when necessary (i.e. before an effectful operation),
--- called the delay aggregation optimization. bdelbar serves as a
--- barrier against this optimization for cases where a developer
--- needs tight control over performance properties.
+-- applied once when necessary (i.e. before an effectful operation).
+-- This will force immediate application of delays, which can be for
+-- performance in some rare cases.
 bDelayBarrier :: B x x
 bDelayBarrier = B_tshift doBar
     where doBar = lnd_fmap $ \ ldt -> ldt { ldt_curr = (ldt_goal ldt) }
-
-
 
 -- bcross:
 --   do I make it for a specific partition type?
@@ -444,7 +412,7 @@ bUnsafeSigZip fn = bUnsafeLnk $ MkLnk
 
 mkln_zip :: (Sig a -> Sig b -> Sig c) -> Lnk (S p c) -> IO (Lnk (S p a :&: S p b))
 mkln_zip fn lnc = 
-    if (ln_null lnc) then return LnkNull else
+    if (ln_null lnc) then return LnkDead else
      
 --ln_mksigzip :: (Sig x -> Sig y -> Sig z) -> LnkUp z -> IO (LnkUp x, LnkUp y)
 
@@ -506,19 +474,44 @@ bUnsafeLnk :: MkLnk x y -> B x y
 bUnsafeLnk mklnk = bsynch >>> B_tshift xBarrier >>> B_mkLnk tr_unit mklnk
     where xBarrier dts = 
             let bNeedBarrier = ldt_minCurr dts /= ldt_maxCurr dts in
-            if bNeedSynch || ln_tsen mkLnk 
+            if ln_tsen mkLnk || bNeedBarrier
                 then flip lnd_fmap dts $ \ x -> x { ldt_curr = (ldt_goal x) }
                 else dts -- no change; all or nothing (for now)
 
 
-
-
-
-
 -- todo:
+--   Sirea Context - might not be worth it (painful for user)
+--     tuning: max outstanding ops between threads
+--     initial partitions (if any) can be added
+--     can be used for multiple initial behaviors.
+--
+--   Should I attempt to support `periodic` actions?
+--      could simplify inclusion of OpenGL and similar within Sirea.
+--      But I could instead get OpenGL support via a dedicated thread,
+--        without compromising computation of Sirea behaviors.
+--      Alternatively, this could be provided by the 
+--
+--   Observable variables: (OVar y)
+--     some sort of externally managed observable variable
+--
+--     not very useful for RDP, but could be useful at the boundary
+--       between RDP and an IO model. 
+--     maybe set `in future` as with DT -> a -> IO (), to avoid any
+--       unnecessary recomputations and avoid feedback cycles.
+--     something to think about, I suppose.
+--
+--     should not be set from inside a Sirea thread.
+--     can set the variable to a Signal? (in which case we need to
+--       distinguish a response of set vs. unset).
+--     or can set variable to a series of [(T,a)] values.
+--     or can set one future at a time. set :: DT -> a -> IO ().
+--       (which would allow setting the value for the future).
+--
+--   Behavior transformer for static context? e.g. env. vars
+--
 --   bcross: change partitions. 
 --     partitions are named by types (Data.Typeable)
---     each partition is `created` once per Sirea behavior
+--     each partition is `created` once per Sirea Context
 --        might pre-exist; that's okay, too.
 --     once created, stored in a map for the Sirea behavior.
 --        map lost only on shutdown. no thread GC during operation.
@@ -606,7 +599,7 @@ bUnsafeLnk mklnk = bsynch >>> B_tshift xBarrier >>> B_mkLnk tr_unit mklnk
 beqshift :: (a -> a -> Bool) -> B (S p a) (S p a)
 beqshift eq = B_mkLnk tr_fwd shiftLnk
     where shiftLnk = MkLnk { ln_tsen = False, ln_build = bdshift }
-          bdshift LnkNull = LnkNull
+          bdshift LnkDead = LnkDead
           bdshift (LnkSig x) = 
                 newIORef st_zero >>= \ rfSt ->
                 return $! LnkSig $! ln_eqshift rfSt eq x
@@ -633,11 +626,45 @@ ln_eqshift rfSt eq ln = LnkUp { ln_touch = pokefwd, ln_update = upd }
                     tu' `seq` sf' `seq` 
                     ln_update ln su'
 
-eqshift :: (a -> a -> Bool) -> Sig a -> Sig a -> T -> T -> (Sig a, T)
-eqshift eq s0 sf tLower tUpper =
+
+-- eqshift initiates a pairwise comparison
+eqshift :: (a -> b -> Bool) -> Sig a -> Sig b -> T -> T -> (Sig b, T)
+eqshift eq as bs tLower tUpper =
     assert (tLower < tUpper) $
-    let s0' = s_trim 
+    let (a0,as') = s_sample as tLower in
+    let (b0,bs') = s_sample bs tLower in
+    let eqStart = maybeEq eq a0 b0 in
+    if eqStart 
+        then eqshift_i eq tLower tUpper a0 as' b0 bs' 
+        else (sf', tLower)
+
+-- find first difference between signals?
+-- at this point we know both s0 and sf are equal to 
+-- sample at their heads. There might be more to
+-- see, of course. 
+eqshift_i :: (a -> b -> Bool) -> T -> T 
+          -> Maybe a -> Sig a -> Maybe b -> Sig b 
+          -> (Sig b, T)
+eqshift_i eq tL tU a0 as b0 bs =
+    let (ma,as') = s_sample_d as tL tU in
+    let (mb,bs') = s_sample_d bs tL tU in
+    case (ma0,maf) of
+        (Nothing, Nothing) -> (sf', tU) -- all done!
+        (Nothing, Just (tf,af)) ->
+            let eqSamp = maybeEq eq sample af in
+            if eqSamp 
+                then eqshift_i eq sample s0' sf' tL tU
+                else (sf',tf)
+        (Just (t0,a0), Nothing) -> 
+            let eqSamp = maybeEq eq sample a0 in
+            if eqSamp 
+                then eqshift_i eq 
+
             
+maybeEq :: (a -> b -> Bool) -> (Maybe a -> Maybe b -> Bool)
+maybeEq _ Nothing Nothing = True
+maybeEq eq (Just x) (Just y) = eq x y
+maybeEq _ _ _ = False
 
 
 
