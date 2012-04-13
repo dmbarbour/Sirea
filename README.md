@@ -37,7 +37,7 @@ To understand Reactive Demand Programming, you must understand behaviors. To und
 
 If you know arrowized functional reactive programming, much of this will be familiar. RDP and FRP vary considerably in how they model state and 
 
-Basic Signals
+Signal Values
 -------------
 
 A **Signal** is a time-varying value that represents state. For example, I were to model the `w` key on my keyboard, it would be in an `up` state most of the time, and in a `down` state for the brief times I press the button, as when writing "down", "when", or "writing". A keystate signal is _not_ a keypress _event_. A keystate will have a positive, non-transcendal duration such as 5 milliseconds.
@@ -89,21 +89,23 @@ For a network or a distributed system, we might limit updates to a few seconds m
 
 ### Where are the Signals?
 
-RDP users never touch signals directly. RDP prevents direct access to ensure properties about how signals are used. But "RDP user" is not the only role of a Sirea user. If a Sirea developer is adapting new resources or services via `bUnsafeLnk`, the basic signals will be directly accessible. 
+RDP users never touch signals directly. RDP prevents direct access to ensure properties about how signals are used. But "RDP user" is not the only role of a Sirea user. If a Sirea developer is adapting new resources or services via `bUnsafeLnk`, the signal values will be directly accessible. 
 
 
-Structured Signals
-------------------
+Signals in Space and Time
+-------------------------
 
-Basic signals are the _values_ of RDP. We update signals. We transform signals. 
+Simple signals are effective in-the-small, but they don't scale well. More structure is needed for efficiency, flexibility, and scalability. Sirea uses three structural notations for signals.
 
+1. `(S p x)` - this is the same as `Sig x` but it has a spatial annotation `p` to identify a _partition_. The primary purpose of this annotation is to prevent accidental or illegal communication of signals between partitions. In Sirea, different partitions generally correspond to different threads.
 
-Signals in time and spce.
+2. `(x :&: y)` - describes an asynchronous product of signals. The `x` and `y` signals must have equal duration. When synchronized, `(S p a :&: S p b)` is similar to `(S p (a,b))`, but the former is often more efficient and flexible because the two values can update and be processed independently. OTOH, if you need to map a function that takes both `a` and `b`, you'll need the zipped version.
 
-But high performance applications need more structure than just one big value. 
+3. `(x :|: y)` - describes an asynchronous sum of signals. The active duration is partitioned between the `x` and `y` signals. When synchronized, `(S p a :|: S p b)` is similar to `(S p (Either a b))`, but the former allows independent updates and processing. Often, you'll get the Either type by mapping a function, then split it to the asynchronous sum. 
 
-If we try to put everything in one concrete signal, we 
+The _asynchronous_ property for products and sums of signals means that the elements may be offset in latency, such that they don't line up perfectly or transition neatly. This happens due to _independent processing_ of the left and right signals. It is natural that processing adds latency, and independent processing adds independent latency.
 
+It is possible to _logically synchronize_ these signals by applying a delay function (pure, no actual delay) to the low-latency signal values. You can even logically synchronize signals that are in different partitions. But you would need to know how much logical delay to add. RDP statically tracks how much delay has been introduced in each branch.
 
 
 Introducing Behaviors
@@ -111,7 +113,7 @@ Introducing Behaviors
 
 A **Behavior** in RDP is a _signal transformer_ with potential for _declarative effects_.
 
-A _signal transformer_ is an abstract process that takes a signal as input and generates a signal as output by modifying the first. Signal transformers cannot create or destroy signals - a property formalized as **duration coupling**: active periods of the output signal must correspond to active periods of the input signal. There may be a constant delay between input and output. 
+A _signal transformer_ is an abstract process that takes a signal as input and generates a signal as output by modifying the first. Signal transformers cannot create or destroy signals - a property formalized as **duration coupling**: active periods of the output signal must correspond to active periods of the input signal. There may be a small delay between input and output. 
 
 Sirea provides one concrete behavior type, simply named `B`.
 

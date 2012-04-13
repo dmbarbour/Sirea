@@ -1,13 +1,11 @@
 
 {-# LANGUAGE TypeOperators, EmptyDataDecls, GADTs, TypeFamilies #-}
 
--- | This module describes basic behaviors for RDP. 
---
---   See http://github.com/dmbarbour/Sirea
---   (the README)
+-- | This module describes abstract behaviors for RDP, and one type
+-- of concrete behaviors, B, for Sirea. Not all relevant behaviors 
+-- are defined in this file, just the generic ones. 
 --
 -- 
---
 -- Listed here are several `generic` behaviors, excluding resource
 -- specific behaviors (e.g. state, clock, mouse, display, network,
 -- filesystem, etc.) which are provided by dedicated modules.
@@ -49,8 +47,8 @@
 --   bdelay - delay a signal by a fixed amount
 --   bsynch - synch an asynchronous signal (to slowest)
 --   bDelayBarrier - force application of aggregated delay
---   bcross - communicate a signal between partitions
---            see FRP.Sirea.Partition
+--   blocal - logical, thread-local sub-partitions.
+--   bcross - communicate a signal between threaded partitions
 --
 --  EXTENSIONS AND ADAPTERS
 --   bUnsafeLnk - hook FFI, legacy services, external resources
@@ -62,7 +60,7 @@
 --   bUnsafeChoke - skip minor frames when updates too fast
 --
 module FRP.Sirea.Behavior  
-    ( (:&:), (:|:), B, S -- from FRP.Sirea.Internal.BTypes & STypes
+    ( (:&:), (:|:), S, B -- from FRP.Sirea.Internal.STypes
     , (>>>) -- from Control.Category
     , bfwd, bfmap, bconst, bvoid
     , bfirst, bsecond, (***), bswap, bdup, bfst, bsnd, bassoclp, bassocrp, (&&&)
@@ -81,8 +79,8 @@ import Prelude hiding (id,(.))
 import Control.Category
 
 import FRP.Sirea.Internal.STypes
-import FRP.Sirea.Internal.BTypes
-import FRP.Sirea.Internal.Types
+-- import FRP.Sirea.Internal.BTypes
+-- import FRP.Sirea.Internal.Types
 
 import FRP.Sirea.Signal
 import FRP.Sirea.Time
@@ -151,6 +149,7 @@ bfwd = id
 class (Category b) => BFmap b where
     bfmap :: (a -> b) -> b (S p a) (S p b)
     bconst :: c -> b (S p a) (S p c)
+    bconst = bfmap . const
 
 
 
@@ -374,9 +373,10 @@ bsynch = B_tshift doSynch
 
 -- | Normally bdelay and bsynch do not cause immediate processing of
 -- the signal. Instead, multiple small delays are accumulated then 
--- applied once when necessary (i.e. before an effectful operation).
--- This will force immediate application of delays, which can be for
--- performance in some rare cases.
+-- applied once when necessary (e.g. for time-sensitive operations).
+-- This will force immediate application of delays. In rare cases, 
+-- forcing the delay might avoid a lot of minor delays down the line,
+-- but the benefit is likely marginal even then. 
 bDelayBarrier :: B x x
 bDelayBarrier = B_tshift doBar
     where doBar = lnd_fmap $ \ ldt -> ldt { ldt_curr = (ldt_goal ldt) }
@@ -427,56 +427,6 @@ bUnsafeSplit = bUnsafeLnk $ MkLnk
     , ln_build = return . ln_split
     }
 
--- | bUnsafeLnk extends Sirea with primitive behaviors, FFI, foreign
--- services, legacy adapters, access to state and IO. Most primitive
--- behaviors that touch signals are implemented atop the same MkLnk
--- mechanism. bUnsafeLnk can be used safely, but it takes caution to
--- avoid violating RDP's declarative properties:
---
---   spatial commutativity - order of link creation or attach does
---     not affect program behavior.
---   spatial idempotence - if two links have equivalent demands at a
---     given time, they have equivalent response. Duplicate demands
---     do not cause any additional effect.
---   duration coupling - the activity of response is tightly coupled
---     to activity of demand. Signals cannot be created or destroyed
---     by the link, only transformed.
---   locally stateless - caches are allowed, but there should be no
---     `history` of a signal kept in the link itself; i.e. if the
---     link is destroyed and created fresh, it will recover the same
---     state it had before. State can be modeled as external to the
---     link (e.g. in a filesystem or database)
---   eventless - a signal with zero duration is never observed. If 
---     the link is updated multiple times at a given instant, only
---     the last update should have a lasting effect on system state.
---   
--- Further the developer must ensure that the created links properly
--- detach when the signal is in a final state (s_fini) so that the
--- behavior can be garbage collected. This is especially important
--- when using dynamic behaviors!
---
--- While delay is a normal part of RDP behavior, it is also critical
--- that it be accessible at compile time, so bUnsafeLnk must add no
--- delay to signals. Use bdelay instead. 
---
--- Complex signals entering bUnsafeLnk are implicitly synchronized.
---
--- Each instance of bUnsafeLnk results in construction of one link 
--- (via ln_build operation) when the Sirea behavior is started. Dead 
--- code from binl or binr would be an exception. The IO operation in
--- MkLnk is for intermediate caches and other preparation, not for
--- observable side-effects. The link only becomes active when the
--- signal is updated.
---
--- Hopefully a few useful libraries of behaviors can be built atop 
--- this to cover most common requirements safely.
-bUnsafeLnk :: MkLnk x y -> B x y
-bUnsafeLnk mklnk = bsynch >>> B_tshift xBarrier >>> B_mkLnk tr_unit mklnk
-    where xBarrier dts = 
-            let bNeedBarrier = ldt_minCurr dts /= ldt_maxCurr dts in
-            if ln_tsen mkLnk || bNeedBarrier
-                then flip lnd_fmap dts $ \ x -> x { ldt_curr = (ldt_goal x) }
-                else dts -- no change; all or nothing (for now)
 
 
 -- todo:

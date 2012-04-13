@@ -1,7 +1,6 @@
 {-# LANGUAGE GADTs, TypeOperators, EmptyDataDecls #-}
 
--- Behavior types. Trying to resolve complex dependencies between
--- modules here. 
+-- Behavior types. 
 module FRP.Sirea.Internal.BTypes
     ( B(..)
 
@@ -21,7 +20,7 @@ module FRP.Sirea.Internal.BTypes
     ) where
 
 import FRP.Sirea.Internal.STypes
-import FRP.Sirea.Link (MkLnk)
+import FRP.Sirea.Internal.LTypes (MkLnk)
 import FRP.Sirea.Time (DT)
 import Control.Exception (assert)
 import Data.Function (on)
@@ -157,5 +156,7 @@ lnd_aggr :: (b -> b -> b) -> LnkD b x -> b
 lnd_aggr _ (LnkDUnit b) = b
 lnd_aggr fn (LnkDProd l r) = fn (lnd_aggr fn l) (lnd_aggr fn r)
 lnd_aggr fn (LnkDSum l r) = fn (lnd_aggr fn l) (lnd_aggr fn r)
+
+
 
 
