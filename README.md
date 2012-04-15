@@ -17,25 +17,27 @@ Here are some features I look forward to:
 
 * _Declarative effects._ Effects expressed by RDP are commutative, idempotent, continuous, and concurrent. These properties offer many of the reasoning and refactoring benefits associated with _pure_ programming styles (i.e. ability to move code around, abstract it, eliminate duplicates), while also supporting open composition, encapsulation, and dynamic acquisition of resources similar to an OOP model. There is no need to pipe data all the way through the application just to raise a window or manage a widget.
 
+* _Declarative linking._ Easily attach your RDP behavior to the real world with a simple dependency-injection framework. Control.Make minimizes boiler-plate in the default case while enabling safe, non-invasive configuration when you need it. 
+
 * _Predictable, composable performance._ Sirea is designed for soft real time applications. It will control the amount of in-flight or lazy computations at any given instant to keep memory footprint and incremental CPU costs under control. Sirea won't forbid expensive functions growing state, but an attentive developers should have very little difficulty managing performance and memory footprint. 
 
 * Practical parallelism through two orthogonal, declarative mechanisms.
     1. Data Parallel Haskell (DPH) sparks are available by use of `bstrat`, which allows firing sparks a few milliseconds before you need the result. The tight bond between sparks and time of sampling helps control memory overhead and prevents sparks from "fizzling." 
-    2. Sirea models partitioning and spatial distribution by use of `bcross`. Conveniently, Sirea will also create a thread for each partition according to a typeclass. Communication between threads is performed in coarse-grained batches for efficiency and _snapshot consistency_ (enough to prevent most malign glitches). Sirea may block on send to control performance but can be wait free if threads don't fall behind.
+    2. Sirea models partitioning and spatial distribution by use of `bcross`. Sirea will automatically create a thread for each partition reached by `bcross`. RDP communication between threads is performed in coarse-grained batches. The batches provide efficiency and snapshot consistency between partitions. Sirea may block on send to control performance, but should often be wait-free if every thread is keeping up with its computation burdens.
 
 * _Persistence by default._ RDP requires modeling state as external to the RDP behavior. While a valid option is external _volatile_ state (doesn't survive the Haskell process), I see this as an opportunity. The state models provided with Sirea are persistent by default. Further, state has stable identity in source code (via types) so it can survive minor edits to code between runs of Sirea. 
 
 * _Anticipation._ RDP does not make predictions, but it does _propagate_ them. Decent predictions at just a few locations can have a widespread effect in an RDP system, supporting optimistic computation and timely preparation of resources, e.g. loading a texture, or opening a window slightly ahead of requirement so they are available right when we need them. Anticipation is valuable even if it were only an implementation detail, but developers have access to anticipation by use of `bpeek`.
 
-* _Embeddable._ Sirea leaves developers in charge of their own main loop by providing a step function rather than taking control of the thread. Sirea supports simple patterns for communication between the thread and the RDP behavior. Sirea users can create new extensions and adapters with `bUnsafeLnk`, though it does take some care. Developers also have some generic control over the threads Sirea creates - e.g. create a thread that manages an OpenGL context and displays at 60 fps some data supplied by RDP. 
+* _Embeddable._ Sirea doesn't take over the main loop. Instead, Sirea supplies a step function for starting and maintaining the behavior. These properties also apply partition threads created by Sirea. They can do useful work, such as managing state, network, or display in addition to processing RDP communication. Sirea supplies some simple mechanisms for communicating between threads and RDP, providing a frozen snapshot view of other threads (only updated between steps). Developers also have power to create new behavior primitives to attach new resources with `bUnsafeLnk`.
 
 
 Reactive Demand Programming (in Sirea)
 ======================================
 
-To understand Reactive Demand Programming, you must understand behaviors. To understand behaviors, you must understand signals. Reactive demand programming is about composing behaviors to orchestrate signals, which may control effects declaratively.
+To understand Reactive Demand Programming, you must understand behaviors. To understand behaviors, you must understand signals.
 
-If you know arrowized functional reactive programming, much of this will be familiar. RDP and FRP vary considerably in how they model state and 
+If you know arrowized functional reactive programming, much of this will be familiar. However, RDP and FRP differ in how they model state and integrate effects.
 
 Signal Values
 -------------
@@ -77,9 +79,12 @@ Many reactive models update only one value at a time, then propagate changes.
 RDP updates whole signals. Not a _current value_, but an _entire future_ for one signal. In the most trivial case, this may reduce to updating one value. But even then the signal update carries important information about _when_ the update applies.
 
 Each update comes with two time values and one signal:
+
 1. **Update time**. This is the time to switch to the future signal. Ideally this time is slightly ahead of the wall-clock, such that it doesn't cause any rework and values can be calculated just in time for the future to become the present. Updates in the past are called _straggling updates_ and are the cause of inconsistency.
-1. **Stability time**. A promise that all future Update times (excluding this update) will be no less than Stability time. Stability tells us how much history we can garbage-collect without risking loss of information. In some cases, stability might be the only property that updates.
-1. **Future signal**. The future of the signal we are updating. This might represent one constant value or an infinite, complex fixpoint describing future state according to anticipated forces. Ideally, it's a good estimate for at least a little while so it won't need to be corrected immediately.
+
+2. **Stability time**. A promise that all future Update times (excluding this update) will be no less than Stability time. Stability tells us how much history we can garbage-collect without risking loss of information. In some cases, stability might be the only property that updates.
+
+3. **Future signal**. The future of the signal we are updating. This might represent one constant value or an infinite, complex fixpoint describing future state according to anticipated forces. Ideally, it's a good estimate for at least a little while so it won't need to be corrected immediately.
 
 The application of an update is a trivial matter. Dig into the code if you're interested (type `SigUp`). 
 
@@ -95,18 +100,17 @@ RDP users never touch signals directly. RDP prevents direct access to ensure pro
 Signals in Space and Time
 -------------------------
 
-Simple signals are effective in-the-small, but they don't scale well. More structure is needed for efficiency, flexibility, and scalability. Sirea uses three structural notations for signals.
+Simple signals are effective in-the-small, for tightly coupled data that changes all at once. But they don't scale well. More structure is needed for efficiency, flexibility, and scalability. Sirea uses three structural notations for signals.
 
-1. `(S p x)` - this is the same as `Sig x` but it has a spatial annotation `p` to identify a _partition_. The primary purpose of this annotation is to prevent accidental or illegal communication of signals between partitions. In Sirea, different partitions generally correspond to different threads.
+1. `(S p x)` - represents a concrete signal (`Sig a`) located spatially at partition `p`. The purpose of this annotation is to prevent accidental (or illegal) communication of signals between partitions. In general, one could also restrict what functions are available in different partitions, but Sirea assumes that all partitions are Haskell partitions.
 
 2. `(x :&: y)` - describes an asynchronous product of signals. The `x` and `y` signals must have equal duration. When synchronized, `(S p a :&: S p b)` is similar to `(S p (a,b))`, but the former is often more efficient and flexible because the two values can update and be processed independently. OTOH, if you need to map a function that takes both `a` and `b`, you'll need the zipped version.
 
 3. `(x :|: y)` - describes an asynchronous sum of signals. The active duration is partitioned between the `x` and `y` signals. When synchronized, `(S p a :|: S p b)` is similar to `(S p (Either a b))`, but the former allows independent updates and processing. Often, you'll get the Either type by mapping a function, then split it to the asynchronous sum. 
 
-The _asynchronous_ property for products and sums of signals means that the elements may be offset in latency, such that they don't line up perfectly or transition neatly. This happens due to _independent processing_ of the left and right signals. It is natural that processing adds latency, and independent processing adds independent latency.
+The _asynchronous_ property for products and sums of signals means that the elements may be offset in latency, such that they don't line up perfectly or transition neatly. This happens due to _independent processing_ of the left and right signals. It is natural that processing adds latency, and independent processing adds independent latency. 
 
-It is possible to _logically synchronize_ these signals by applying a delay function (pure, no actual delay) to the low-latency signal values. You can even logically synchronize signals that are in different partitions. But you would need to know how much logical delay to add. RDP statically tracks how much delay has been introduced in each branch.
-
+It is possible to _logically synchronize_ the asynchronous signals by applying a pure delay function to match latencies. Logical synchronization is more efficient and scalable than shared state synchronization, but you need to know the latencies. RDP supports logical synchronization by tracking latency statically. (Ideally, latency would be part of the concrete signal's type signature, but Haskell does not support this.)
 
 Introducing Behaviors
 ---------------------
@@ -115,53 +119,189 @@ A **Behavior** in RDP is a _signal transformer_ with potential for _declarative 
 
 A _signal transformer_ is an abstract process that takes a signal as input and generates a signal as output by modifying the first. Signal transformers cannot create or destroy signals - a property formalized as **duration coupling**: active periods of the output signal must correspond to active periods of the input signal. There may be a small delay between input and output. 
 
-Sirea provides one concrete behavior type, simply named `B`.
+### Basic Behaviors
+
+All behaviors operate on _signals in space and time_. Many behaviors are data plumbing or pure operations on signals. A few examples of simple behaviors:
+
+    bfmap  :: (a -> b) -> B (S p a) (S p b)
+    bfirst :: B x x' -> B (x :&: y) (x' :&: y) 
+    (>>>)  :: B x y -> B y z -> B x z
+    bzip   :: B (S p a :&: S p b) (S p (a,b))
+    bsplit :: B (S p (Either a b)) (S p a :|: S p b)
+    bdup   :: B x (x :&: x)
+    bmerge :: B (x :|: x) x
+    bswap  :: B (x :&: y) (y :&: x)
+    bmirror:: B (x :|: y) (y :|: x)
+    bfst   :: B (x :&: y) x
+    binl   :: B x (x :|: y)
+
+There are around thirty or forty of these that must be learned to use RDP effectively. Fortunately, many of those are simple symmetries, dualities, or combinations that make them easier to remember. A few useful behaviors serve as performance annotations, to force lazy thunks or parallelize future computations.
+
+The most common behavior I use is simple sequencing:
+    
+    bxy >>> byz
+
+Since behaviors operate on continuous signals, the above actually represents a pipeline with potential for parallelism: fresh `x` values can be continuously computed in parallel with older `y` values. A vertical slice through the pipeline is effectively the signal type at that point, in this case `y`.
+
+RDP models concurrency in terms of task-parallel pipelines, i.e. using `bdup` to create a parallel pipeline, then `bfirst` and `bswap` to add different tasks to different pipelines. A couple useful composite behavior is `(***)`:
+
+    (f *** g) = bfirst f >>> bswap >>> bfirst g >>> bswap
+
+The use of `bswap` does obscure the idea a bit, but RDP allows us to simplify a lot. Consider the behavior:
+
+    bdup >>> (f *** g) >>> bzip
+
+
+Graphically, the above expression is (with `X` representing swap):
+
+             __f__   __g__   ___
+            /     \ /     \ /   \
+        bdup       X       X     bzip
+            \_____/ \_____/ \___/
+
+But Sirea guarantees that swap is free at runtime; it only is necessary in the textual representation (since it is one-dimensional). It can be eliminated in the graphical representation.
+
+             ___f___    
+            /       \   
+        bdup         bzip
+            \___g___/   
+
+
+Similarly for: `bdup >>> (f *** g) >>> (h *** k)`:
+
+             ___f___     ___h__
+            /       \   /      
+        bdup         >>>        
+            \___g___/   \___k__
+
+Sirea ensures this data plumbing is free. And RDP, like other arrow models, guarantees it is semantically equivalent to:
+
+             ___f >>> h__
+            /            
+        bdup              
+            \___g >>> k__
+
+Thus, simple behaviors such as `bdup`, `bfirst`, and `bswap` ultimately allow us to construct and extend concurrent pipelines. And this concurrency becomes another opportunity for parallelism.
+
+
+### Effectful Behaviors
+
+RDP behaviors may be effectful. Consider the following:
+
+    bmousepos :: B (S p ()) (S p MousePos)
+    bgetfile  :: B (S p FileName) (S p FileState)
+    bcamctl   :: B (S p PanTiltZoom) (S p ())
+
+Using effectful behaviors, we can observe the mouse position, obtain file states, and control a camera - just to name a few. There can be effectful behaviors for each resource, and for collections and views of resources. A consequence is a simple type such as: 
+   
+    bmain     :: B (S p ()) (S p ())
+
+is a potential signature for RDP application, much like `void main()` is a potential signature for procedural applications. Behind that trivial signature, an RDP application is a complex symphony of signals and declarative effects orchestrated in space and time.
+
+Effects are valuable for programming open and extensible systems, but can make code unclear or more difficult to reuse. RDP avoids or mitigates many problems of effectful and concurrent programming. See discussion below on _Declarative Effects and Concurrency_.
+
+### Spatial Behavior
+
+Effectful behaviors are often bound to specific partitions. For example, the mouse position shouldn't be available from just any arbitrary partition. You must ask a UI thread. We can classify partitions the same way we classify any other Haskell type: use a typeclass.
+
+    bmousepos :: (HasUI p) => B (S p ()) (S p MousePos)
+
+In this case Haskell would require some extra information to infer _which_ HasUI partition to access. Anyhow, assuming we start elsewhere, we'll need to send a signal over to the UI thread in order to apply the bmousepos behavior. The `bcross` behavior allows developers to move signals between process-local partitions:
+
+    bcross :: (Partition p, Partition p') => B (S p x) (S p' x)
+
+This would allow us to send a signal to the UI thread, request the mouse position. After we have the mouse position, we could cross again to process it elsewhere. Or we could process it in place - for example, using `bfmap` to translate MousePos into something that can immediately control the UI. 
+
+Developers should treat `bcross` with some care. Even between Haskell's lightweight threads, `bcross` can introduce non-trivial latencies due to scheduling. Sirea can introduce implicit logical delay at each crossing based on configuration.
+
+### Temporal Behavior
+
+TODO
+    bsynch :: B x x 
+    bdelay :: DT -> B x x
+Why would you model delay? (consistency; state anomalies in a pipeline)
+How much delay?
 
 
 
---
--- > bxy :: B (S p x) (S p y)
+### Dynamic Behavior
 
-needs a home
--------------
+Behaviors may be defined at runtime then evaluated in context. This is useful for a wide variety of programming patterns, such as modeling plug-ins, service brokering, staged programming, progressive disclosure, mutable views, and capability security patterns. The typical behavior to evaluate dynamic behaviors is `beval`:
 
-* Multi-layer defense against inconsistency. It is difficult to eliminate inconsistency without sacrificing performance, scalability, or security. So RDP is designed to control, tolerate, and recover from it. 
-    1. Within each partition, signals propagate deterministically. 
-    2. Modeling logical delay prevents straggling updates, which are the cause of inconsistency. This is especially important when multiple stages of the same pipeline interact with a shared state resource. 
-    3. Snapshot consistency between relatively coarse-grained _partitions_ is achieved by a simple batching mechanism. This resists most malign glitches. 
-    4. Anticipation. The future is continuously improved until it becomes the past. Even if the future is inconsistent, it can be a reasonable estimate to cover for a communication hiccup. 
-    5. Eventual consistency. A safety net - difficult to traverse, but nice to have below. State can be retroactively corrected a small amount.
+    beval :: DT -> B (S p x :&: S p (B (S p x) (S p y))) (S p y :|: S p ())
 
+This is a complicated signature. I'll break it down a bit:
 
-* _Easy consistency model._ Updates are commutative, idempotent, and eventually consistent. Snapshot consistency between partitions eliminates most risk for malign glitches. If delay is modeled adequately, with `bdelay`, it can eliminate inconsistencies by shifting them to the future and limiting feedback cycles for interaction with shared state.
+    type DynBeh p x y = B (S p x) (S p y)
+    type ResErr p y = (S p y :|: S p ())
+    beval :: DT -> B (S p x :&: S p (DynBeh p x y)) (ResErr p y)
 
+The `DT` argument is the delay value for `beval`. Ideally, it could be inferred from the _type_ for `DynBeh`. Alas, Haskell doesn't support dependent types. Any result from the dynamic behavior will be padded out to `DT`. The error option for output is necessary if the dynamic behavior would have too much latency, or fails for any other reason. 
 
-* A function-like entity. (A variation of Arrow.)
-* The 
-* That takes 
+All arguments are logically synchronized by `beval`. However, they are still represented in an asynchronous product because this allows the signals for `x` and for `DynBeh` to change independently. This can model compilation, for example, if we have a slow-changing dynamic behavior and a fast-changing parameter. (_Note:_ `beval`'s limit of one argument and one response is _not_ essential. Sirea will provide a few more options for performance and flexibility.)
 
- an abstract process that takes a signal as input, produces a signal as output, with potential for _declarative effects_ in between. 
+Note that everything happens in just one partition. This is a necessary restriction to avoid implicit communication between partitions. This is also the reason I say "dynamic" instead of "first class" - first class connotes that all types are supported. The dynamic behavior itself may cross into other partitions to actually do things.
 
 
+### Implementation and Extension of Behaviors
 
-Behaviors compose. They compose in parallel `(b1 *** b2)`. They compose in pipelines `(bxy >>> byz)`. They compose as alternatives `(b1 +++ b2)`. They compose by staged computing and dynamic towers `(beval bx)`. They compose indirectly, via shared services and state. 
+Sirea provides one concrete behavior type, a GADT simply named `B`. The GADT symbolically represents implementation for many of the basic data-plumbing behaviors, such that they have no runtime costs. But most interesting behaviors - even `bfmap` - are defined with a `MkLnk` primitive. The essential operations and data are:
+
+    data MkLnk x y = MkLnk {
+      ln_build :: Lnk y -> IO (Lnk x)
+    }
+
+    data Lnk x where
+      LnkSig  :: LnkUp a -> Lnk (S p a)
+      LnkProd :: Lnk s a -> Lnk s b -> Lnk (a :&: b)
+      LnkSum  :: Lnk s a -> Lnk s b -> Lnk (a :|: b)
+
+    data LnkUp a = LnkUp {
+      ln_update :: SigUp a -> IO ()
+    }
+
+    data SigUp a = SigUp {
+      su_stable :: T
+      su_update :: Maybe (T, Sig a)
+    }
+    
+    bUnsafeLnk :: MkLnk x y -> B x y
+
+The `ln_build` operation is executed when the behavior is first built. The behavior is built backwards - given the output target, you return the input target. Once built, `ln_update` will be called after each update, allowing the concrete signal values to be processed. _(Optimization is left out of the above representation; see the code for details.)_
+
+Sirea clients can add new primitive behaviors via `bUnsafeLnk`, but must be cautious to avoid breaking RDP abstractions. Clients should be able to adapt most new resources using simple combinations of existing behaviors.
+
+Declarative Effects and Concurrency
+-----------------------------------
+
+TODO
 
 
-In Sirea, type `Sig` is the concrete signal model. But another signal type is used for behaviors, which is named 
+JUNK
+================================
 
-Partitions...
+
+Input signals are observable by external resources. They can represent queries or commands. But signals have a continuous, time-varying nature.
+
+A resource can be represented as a small collection of first-class behaviors, just like an object can be represented as a small collection of first-class procedures.
+
+I shouldn't need to tell Haskell programmers that effects must be wielded cautiously. Effects do support RDP in modeling extensible applications (via shared state) and composing open systems. But effects also hide meaning and thus developers must rely more heavily on documentation, knowledge of implementation details, and trust.
+
+Fortunately, RDP is designed to avoid many issues associated with effectful programming. 
+To minimize issues with effectful programming, RDP provides a few useful properties:
+
+http://en.wikipedia.org/wiki/SOLID
+
+ so developers require either documentation or knowledge of how the behavior was constructed. To minimize problems, RDP is designed for Object Capability Model
+
+ RDP to effwork with open systems, and to model extensible systems through shared state communications. 
+
+ On the other, you cannot fully reason about behaviors without knowing how they were built.
+
+To mitigate [SOLID](http://en.wikipedia.org/wiki/SOLID) and [object capability](http://en.wikipedia.org/wiki/Object-capability_model) disciplines do not go amiss in RDP. 
 
 
--- | Behaviors for Reactive Demand Programming (RDP)
---
--- Simple RDP behaviors are signal transformers. But they compose.
--- An RDP application is a complex symphony of signals orchestrated
--- in space and time. Dozens of independent, declarative pipelines
--- can can interact indirectly but deterministically through shared 
--- services or state. Delay and synchronization are logical, free of
--- waits and inefficient shared state. Computation can be recombined
--- only where necessary. Redundant calculations are easy to avoid.
---
+
 -- SIMPLE BEHAVIORS INTRODUCTION
 --
 -- The RDP behavior type for Sirea is named 'B'. Each behavior is
@@ -171,13 +311,6 @@ Partitions...
 --
 -- > bxy :: B (S p x) (S p y)
 --
--- This describes a behavior that takes a signal of type `x` and
--- generates a signal of type `y`. Further, the `p` value represents
--- partition - an abstract location for the signal. Type S is not
--- an actual Haskell data type (it is an empty data decl). Instead
--- it represents that this is a concrete signal. At runtime, type
--- (S p x) will be represented by (Sig x) from FRP.Sirea.Signal.
--- Type x is an actual Haskell data type.
 --
 -- The response signal, (S p y) is analogous to a return value from
 -- a procedure call. However, the general idiom is to pipeline the
@@ -185,12 +318,6 @@ Partitions...
 --
 -- > bxy >>> byz
 --
--- These pipelines represent continuous computations, which may be 
--- active for long durations (often hours or days). RDP enforces a
--- duration coupling property that means z values are output for the
--- same duration as x values are input, regardless of composition.
--- There is potential for much pipeline parallelism here, with newer
--- y values being computed in parallel with older z values.
 --
 -- The simplest Sirea behaviors apply functions to their values:
 --
@@ -491,54 +618,5 @@ Sirea leaves safety to developer discipline.
 -- Listed here are several `generic` behaviors, excluding resource
 -- specific behaviors (e.g. state, clock, mouse, display, network,
 -- filesystem, etc.) which are provided by dedicated modules.
---
---  CATEGORY
---   bfwd - identity behavior
---   (>>>) - forward composition (from Control.Category)
---
---  PRODUCTS
---   bfirst b - apply b on first element in product
---   bsecond b - apply b on second element in product
---   (b1 *** b2) = bfirst b1 >>> bsecond b2
---   bswap - flip first and second signals
---   bdup - duplicate signal
---   bfst - keep first signal, drop second
---   bsnd - keep second signal, drop first
---   bassoc(l|r)p - associate left or right on product
---   bzipWith, bzip - combine two concrete signals
--- 
---  SUM (CHOICE)
---   bleft b - apply b on left option in sum
---   bright b - apply b on right option in sum
---   (bl +++ br) - bleft bl >>> bright br
---   bmirror - flip left and right signals
---   bmerge - combine two choices into one signal (implicit synch)
---   binl - static choice of left option (~ if true) 
---   binr - static choice or right option (~ if false)
---   bassoc(l|r)s - associate left or right on sum
---   bsplit - lift a decision in a signal to asynchronous layer
---
---  ARROW MISC
---   bfmap - apply function to a concrete signal (when active)
---   bconst - map a constant value to a concrete signal (when active) 
---   bvoid - execute one behavior but drop the result
---   bconjoin - partial merge on a product of sums
---   bdisjoin - distribute a sum into a product
---
---  SPATIAL-TEMPORAL
---   bdelay - delay a signal by a fixed amount
---   bsynch - synch an asynchronous signal (to slowest)
---   bDelayBarrier - force application of aggregated delay
---   bcross - communicate a signal between partitions
---            see FRP.Sirea.Partition
---
---  EXTENSIONS AND ADAPTERS
---   bUnsafeLnk - hook FFI, legacy services, external resources
---
---  PERFORMANCE (maybe another module)
---   bforce  - apply sequential strategy relative to stability
---   bstrat  - apply parallel strategy relative to sampling
---   badjeqf - eliminate adjacent equal updates
---   bUnsafeChoke - skip minor frames when updates too fast
 --
 

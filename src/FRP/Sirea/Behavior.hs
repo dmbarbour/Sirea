@@ -152,8 +152,6 @@ class (Category b) => BFmap b where
     bconst = bfmap . const
 
 
-
-
 -- | DYNAMIC BEHAVIORS
 --
 -- RDP behaviors may be first-class, which enables Object Oriented
@@ -168,8 +166,6 @@ class (Category b) => BFmap b where
 -- you stop sharing them. This is a valuable property for security,
 -- safety, resource management (including GC), and live programming.
 -- 
-
-
 
 bfirst   :: B x x' -> B (x :&: y) (x' :&: y)
 bsecond  :: B y y' -> B (x :&: y) (x :&: y')
