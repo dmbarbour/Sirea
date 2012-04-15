@@ -594,18 +594,21 @@ eqshift_i :: (a -> b -> Bool) -> T -> T
 eqshift_i eq tL tU a0 as b0 bs =
     let (ma,as') = s_sample_d as tL tU in
     let (mb,bs') = s_sample_d bs tL tU in
-    case (ma0,maf) of
-        (Nothing, Nothing) -> (sf', tU) -- all done!
-        (Nothing, Just (tf,af)) ->
-            let eqSamp = maybeEq eq sample af in
+    case (ma,mb) of
+        (Nothing, Nothing) -> (bs', tU) -- all done!
+        (Nothing, Just (tb,bf)) ->
+            let eqSamp = maybeEq eq a0 bf in
             if eqSamp 
-                then eqshift_i eq sample s0' sf' tL tU
-                else (sf',tf)
-        (Just (t0,a0), Nothing) -> 
-            let eqSamp = maybeEq eq sample a0 in
+                then eqshift_i eq tL tU a0 as' bf bs'
+                else (bs',tb)
+        (Just (ta,af), Nothing) -> 
+            let eqSamp = maybeEq eq af b0 in
             if eqSamp 
-                then eqshift_i eq 
-
+                then eqshift_i eq tL tU af as' b0 bs'
+                else (bs',ta)
+        (Just (ta,af), Just (tb,bf)) ->
+            case compare ta tb of
+                
             
 maybeEq :: (a -> b -> Bool) -> (Maybe a -> Maybe b -> Bool)
 maybeEq _ Nothing Nothing = True
