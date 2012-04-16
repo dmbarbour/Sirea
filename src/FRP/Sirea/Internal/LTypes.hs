@@ -295,21 +295,6 @@ sm_cleanup (Just tt) sm =
         , sm_tmup = Nothing
         }
 
-{-
--- | for combining two signals; stores in an intermediate structure, 
--- and constructs update from given zip function. Will release any
--- unnecessary state based on updates to stability. Will hold update
--- if one input is touched but not yet updated.
---
--- This implementation assumes updates and touches for both inputs
--- are single-threaded, which should be enforced using partitions 
--- on behavior types.
-ln_mksigzip :: (Sig x -> Sig y -> Sig z) -> LnkUp z -> IO (LnkUp x, LnkUp y)
-ln_mksigzip jf luz = ln_withSigM onTouch onEmit
-    where onTouch = ln_touch luz 
-          onEmit sm = ln_update luz (sm_emit jf sm)
--}
-
 -- | SigM is a utility type for combining two input signals. This
 -- function sets up a SigM based composition and automatically 
 -- handles all the propagation and cleanup requirements.
@@ -319,7 +304,7 @@ ln_mksigzip jf luz = ln_withSigM onTouch onEmit
 ln_withSigM :: IO () -> (SigM x y -> IO ()) -> IO (LnkUp x, LnkUp y)
 ln_withSigM onTouch onEmit = 
     newIORef sm_zero >>= \ rfSigM ->
-    return $! ln_withSigM' rfSigM onTouch onEmit
+    return $ ln_withSigM' rfSigM onTouch onEmit
 
 ln_withSigM' :: IORef (SigM x y) -> IO () -> (SigM x y -> IO ()) 
              -> (LnkUp x, LnkUp y)

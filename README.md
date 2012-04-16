@@ -35,9 +35,7 @@ Here are some features I look forward to:
 Reactive Demand Programming (in Sirea)
 ======================================
 
-To understand Reactive Demand Programming, you must understand behaviors. To understand behaviors, you must understand signals.
-
-If you know arrowized functional reactive programming, much of this will be familiar. However, RDP and FRP differ in how they model state and integrate effects.
+To understand Reactive Demand Programming, you must understand behaviors. To understand behaviors, you must understand signals. If you know arrowized functional reactive programming, much of this will be familiar. Though, RDP and FRP differ significantly in how they model state and integrate effects.
 
 Signal Values
 -------------
@@ -135,7 +133,7 @@ All behaviors operate on _signals in space and time_. Many behaviors are data pl
     bfst   :: B (x :&: y) x
     binl   :: B x (x :|: y)
 
-There are around thirty or forty of these that must be learned to use RDP effectively. Fortunately, many of those are simple symmetries, dualities, or combinations that make them easier to remember. A few useful behaviors serve as performance annotations, to force lazy thunks or parallelize future computations.
+There are around thirty or forty of these that must be learned to use RDP effectively. Fortunately, many of those are simple symmetries, dualities, or combinations that make them easier to remember. A few useful behaviors serve as performance annotations, to force lazy thunks, parallelize future computations, eliminate redundant updates, or simplistic memoization.
 
 The most common behavior I use is simple sequencing:
     

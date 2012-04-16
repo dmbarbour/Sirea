@@ -1,154 +1,7 @@
 
-{-# LANGUAGE TypeOperators, EmptyDataDecls, GADTs, TypeFamilies #-}
-
--- | This module describes abstract behaviors for RDP, and one type
--- of concrete behaviors, B, for Sirea. Not all relevant behaviors 
--- are defined in this file, just the generic ones. 
---
--- Listed here are several `generic` behaviors, excluding resource
--- specific behaviors (e.g. state, clock, mouse, display, network,
--- filesystem, etc.) which are provided by dedicated modules.
---
---  CATEGORY
---   bfwd - identity behavior
---   (>>>) - forward composition (from Control.Category)
---
---  PRODUCTS
---   bfirst b - apply b on first element in product
---   bsecond b - apply b on second element in product
---   (b1 *** b2) = bfirst b1 >>> bsecond b2
---   bswap - flip first and second signals
---   bdup - duplicate signal
---   bfst - keep first signal, drop second
---   bsnd - keep second signal, drop first
---   bassoc(l|r)p - associate left or right on product
---   bzipWith, bzip - combine two concrete signals
--- 
---  SUM (CHOICE)
---   bleft b - apply b on left option in sum
---   bright b - apply b on right option in sum
---   (bl +++ br) - bleft bl >>> bright br
---   bmirror - flip left and right signals
---   bmerge - combine two choices into one signal (implicit synch)
---   binl - static choice of left option (~ if true) 
---   binr - static choice or right option (~ if false)
---   bassoc(l|r)s - associate left or right on sum
---   bsplit - lift a decision in a signal to asynchronous layer
---
---  ARROW MISC
---   bfmap - apply function to a concrete signal (when active)
---   bconst - map a constant value to a concrete signal (when active) 
---   bvoid - execute one behavior but drop the result
---   bconjoin - partial merge on a product of sums
---   bdisjoin - distribute a sum into a product
---
---  SPATIAL-TEMPORAL
---   bdelay - delay a signal by a fixed amount
---   bsynch - synch an asynchronous signal (to slowest)
---   bDelayBarrier - force application of aggregated delay
---   blocal - logical, thread-local sub-partitions.
---   bcross - communicate a signal between threaded partitions
---
---  EXTENSIONS AND ADAPTERS
---   bUnsafeLnk - hook FFI, legacy services, external resources
---
---  PERFORMANCE (maybe another module)
---   bforce  - apply sequential strategy relative to stability
---   bstrat  - apply parallel strategy relative to sampling
---   badjeqf - eliminate adjacent equal updates
---   bUnsafeChoke - skip minor frames when updates too fast
---
-module FRP.Sirea.Behavior  
-    ( (:&:), (:|:), S, B -- from FRP.Sirea.Internal.STypes
-    , (>>>) -- from Control.Category
-    , bfwd, bfmap, bconst, bvoid
-    , bfirst, bsecond, (***), bswap, bdup, bfst, bsnd, bassoclp, bassocrp, (&&&)
-    , bleft, bright, (+++), bmirror, bmerge, binl, binr, bassocls, bassocrs, (|||)
-    , bconjoinl, bconjoinr
-    , bdisjoin0
-    , bzip, bzipWith
-    , bsplit
-    , bdelay, bsynch, bdelbar
-    -- , bcross
-    , bUnsafeLnk
-    
-    ) where
-
-import Prelude hiding (id,(.))
-import Control.Category
-
-import FRP.Sirea.Internal.STypes
--- import FRP.Sirea.Internal.BTypes
--- import FRP.Sirea.Internal.Types
-
-import FRP.Sirea.Signal
-import FRP.Sirea.Time
-import FRP.Sirea.Link 
-
-import Data.IORef
-import Data.Function (on)
-import Control.Monad (unless)
 
 
-infixr 3 ***
-infixr 2 +++
 
--- I really don't trust the RULES pragma, but I haven't gotten
--- around to applying my own optimizations. Here are a few simple
--- cases that are likely to happen often.
-{-# RULES
-"bfmap.bfmap" forall f g .
-                (bfmap f) . (bfmap g) = bfmap (f . g)
-"bfmap.bconst" forall f c . 
-                (bfmap f) . (bconst c) = bconst (f c)
-"bconst.bfmap" forall c f .
-                (bconst c) . (bfmap f) = bconst c
-"bconst.bconst" forall c d .
-                (bconst c) . (bconst d) = bconst c
-
-"bswap.bswap"  bswap . bswap = id
-
-"bmirror.bmirror" bmirror . bmirror = id
-
-"bfirst.bfirst" forall f g .
-                (bfirst f) . (bfirst g) = bfirst (f . g)
-"bleft.bleft"   forall f g .
-                (bleft f) . (bleft g) = bleft (f . g)
-"bright.bleft"  forall f g .
-                (bright f) . (bleft g) = (bleft g) . (bright f)
-"bsecond.bfirst" forall f g .
-                (bsecond f) . (bfirst g) = (bfirst g) . (bsecond f)
- #-}
-
--- TUNING
--- dt_eqf_peek: 
---   (for bconst, badjeqf via beqshift)
---
---   The first update in a signal might not represent a real change.
---   Delivering it as a change, however, might cause redundant eval
---   later in the pipeline (e.g. when zipping values). Ideally find
---   the first real change in signal and deliver that as the time of 
---   signal state update. But discovering such a time potentially 
---   needs infinite search. As compromise, I search bounded distance
---   into future for change, relative to stability. Idea is that the
---   computation doesn't run very far ahead of stability anyway, so
---   pushing update ahead of stability is almost free. 
-dt_eqf_peek :: DT
-dt_eqf_peek = 3.0 -- seconds ahead of stability
-
-instance Category B where
-  id  = B_fwd
-  (.) = flip B_pipe
-
--- | bfwd is just another name for Control.Category.id.
-bfwd :: (Category b) => b x x
-bfwd = id
-
-
-class (Category b) => BFmap b where
-    bfmap :: (a -> b) -> b (S p a) (S p b)
-    bconst :: c -> b (S p a) (S p c)
-    bconst = bfmap . const
 
 
 -- | DYNAMIC BEHAVIORS
@@ -165,6 +18,8 @@ class (Category b) => BFmap b where
 -- you stop sharing them. This is a valuable property for security,
 -- safety, resource management (including GC), and live programming.
 -- 
+
+
 
 bfirst   :: B x x' -> B (x :&: y) (x' :&: y)
 bsecond  :: B y y' -> B (x :&: y) (x :&: y')
@@ -422,6 +277,56 @@ bUnsafeSplit = bUnsafeLnk $ MkLnk
     , ln_build = return . ln_split
     }
 
+-- | bUnsafeLnk extends Sirea with primitive behaviors, FFI, foreign
+-- services, legacy adapters, access to state and IO. Most primitive
+-- behaviors that touch signals are implemented atop the same MkLnk
+-- mechanism. bUnsafeLnk can be used safely, but it takes caution to
+-- avoid violating RDP's declarative properties:
+--
+--   spatial commutativity - order of link creation or attach does
+--     not affect program behavior.
+--   spatial idempotence - if two links have equivalent demands at a
+--     given time, they have equivalent response. Duplicate demands
+--     do not cause any additional effect.
+--   duration coupling - the activity of response is tightly coupled
+--     to activity of demand. Signals cannot be created or destroyed
+--     by the link, only transformed.
+--   locally stateless - caches are allowed, but there should be no
+--     `history` of a signal kept in the link itself; i.e. if the
+--     link is destroyed and created fresh, it will recover the same
+--     state it had before. State can be modeled as external to the
+--     link (e.g. in a filesystem or database)
+--   eventless - a signal with zero duration is never observed. If 
+--     the link is updated multiple times at a given instant, only
+--     the last update should have a lasting effect on system state.
+--   
+-- Further the developer must ensure that the created links properly
+-- detach when the signal is in a final state (s_fini) so that the
+-- behavior can be garbage collected. This is especially important
+-- when using dynamic behaviors!
+--
+-- While delay is a normal part of RDP behavior, it is also critical
+-- that it be accessible at compile time, so bUnsafeLnk must add no
+-- delay to signals. Use bdelay instead. 
+--
+-- Complex signals entering bUnsafeLnk are implicitly synchronized.
+--
+-- Each instance of bUnsafeLnk results in construction of one link 
+-- (via ln_build operation) when the Sirea behavior is started. Dead 
+-- code from binl or binr would be an exception. The IO operation in
+-- MkLnk is for intermediate caches and other preparation, not for
+-- observable side-effects. The link only becomes active when the
+-- signal is updated.
+--
+-- Hopefully a few useful libraries of behaviors can be built atop 
+-- this to cover most common requirements safely.
+bUnsafeLnk :: MkLnk x y -> B x y
+bUnsafeLnk mklnk = bsynch >>> B_tshift xBarrier >>> B_mkLnk tr_unit mklnk
+    where xBarrier dts = 
+            let bNeedBarrier = ldt_minCurr dts /= ldt_maxCurr dts in
+            if ln_tsen mkLnk || bNeedBarrier
+                then flip lnd_fmap dts $ \ x -> x { ldt_curr = (ldt_goal x) }
+                else dts -- no change; all or nothing (for now)
 
 
 -- todo:
@@ -593,26 +498,22 @@ eqshift_i :: (a -> b -> Bool) -> T -> T
 eqshift_i eq tL tU a0 as b0 bs =
     let (ma,as') = s_sample_d as tL tU in
     let (mb,bs') = s_sample_d bs tL tU in
-    case (ma,mb) of
-        (Nothing, Nothing) -> (bs', tU) -- all done!
-        (Nothing, Just (tb,bf)) ->
-            let eqSamp = maybeEq eq a0 bf in
+    case (ma0,maf) of
+        (Nothing, Nothing) -> (sf', tU) -- all done!
+        (Nothing, Just (tf,af)) ->
+            let eqSamp = maybeEq eq sample af in
             if eqSamp 
-                then eqshift_i eq tL tU a0 as' bf bs'
-                else (bs',tb)
-        (Just (ta,af), Nothing) -> 
-            let eqSamp = maybeEq eq af b0 in
+                then eqshift_i eq sample s0' sf' tL tU
+                else (sf',tf)
+        (Just (t0,a0), Nothing) -> 
+            let eqSamp = maybeEq eq sample a0 in
             if eqSamp 
-                then eqshift_i eq tL tU af as' b0 bs'
-                else (bs',ta)
-        (Just (ta,af), Just (tb,bf)) ->
-            case compare ta tb of
-                
+                then eqshift_i eq 
+
             
 maybeEq :: (a -> b -> Bool) -> (Maybe a -> Maybe b -> Bool)
 maybeEq _ Nothing Nothing = True
 maybeEq eq (Just x) (Just y) = eq x y
 maybeEq _ _ _ = False
-
 
 

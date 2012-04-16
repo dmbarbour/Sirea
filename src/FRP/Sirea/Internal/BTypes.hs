@@ -60,11 +60,8 @@ data B x y where
   -- most signal operations
   B_mkLnk   :: !(TR x y) -> !(MkLnk x y) -> B x y
 
-  -- time modeling, logical delay
+  -- time modeling, logical delay, concrete delay
   B_tshift  :: !(TS x) -> B x x
-
-  -- possibilities to support optimizations:
-  --  B_fmap, B_const
 
   -- category
   B_fwd     :: B x x
@@ -88,10 +85,12 @@ data B x y where
 ---------------------------------------------------------
 -- A simple model for time-shifts. We have a current delay and a
 -- goal delay. A time-shift can move either or both. Differences
--- in current delay can be turned into a final behavior. 
+-- in current delay can be turned into a final behavior - i.e. 
+-- we compare ldt_curr before and after, and delay accordingly. 
 --
 -- TR does not cause time-shifts, but controls how timing info is
--- preserved across MkLnk behaviors.
+-- preserved across MkLnk behaviors. Only a few special behaviors,
+-- such as bdisjoin, need other than tr_unit, id, or tr_fwd.
 type TR x y = LnkD LDT x -> LnkD LDT y
 type TS x = TR x x
 data LDT = LDT 
@@ -150,8 +149,8 @@ lnd_fmap fn (LnkDProd l r) = LnkDProd (lnd_fmap fn l) (lnd_fmap fn r)
 lnd_fmap fn (LnkDSum l r) = LnkDSum (lnd_fmap fn l) (lnd_fmap fn r)
 
 -- aggregate a value. Note that the aggregation function should be
--- idempotent, and probably commutative, such as min or max, because
--- each LnkDUnit can represent any number of elements.
+-- idempotent and commutative. There aren't many applicable 
+-- functions that are meaningful, except min and max.
 lnd_aggr :: (b -> b -> b) -> LnkD b x -> b
 lnd_aggr _ (LnkDUnit b) = b
 lnd_aggr fn (LnkDProd l r) = fn (lnd_aggr fn l) (lnd_aggr fn r)
