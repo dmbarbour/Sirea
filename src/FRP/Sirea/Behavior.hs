@@ -1,7 +1,41 @@
 
-{-# LANGUAGE TypeOperators, EmptyDataDecls, GADTs, TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 
--- | This module describes abstract behaviors for RDP, and one type
+-- | This module describes the basic RDP behaviors in Sirea. It also
+-- exports the concrete behavior type `B` for clients.
+--
+-- Several behaviors are provided in dedicated modules:
+--   see FRP.Sirea.Link for bUnsafeLnk
+--   see FRP.Sirea.Partition for bcross, bscope
+module FRP.Sirea.Behavior  
+    ( (:&:), (:|:), S, B -- from FRP.Sirea.Internal.STypes
+    , (>>>) -- from Control.Category
+    , bfwd, bfmap, bconst, bvoid
+    , bfirst, bsecond, (***), bswap, bdup, bfst, bsnd, bassoclp, bassocrp, (&&&)
+    , bleft, bright, (+++), bmirror, bmerge, binl, binr, bassocls, bassocrs, (|||)
+    , bconjoinl, bconjoinr
+    , bdisjoin0
+    , bzip, bzipWith
+    , bsplit
+    , bdelay, bsynch, bdelbar
+    -- , bcross is in 
+    -- , bUnsafeLnk
+    
+    ) where
+
+import Prelude hiding (id,(.))
+import Control.Category
+
+import FRP.Sirea.Internal.STypes
+import FRP.Sirea.Internal.BTypes (B)
+import FRP.Sirea.Time (DT)
+
+infixr 3 ***
+infixr 2 +++
+
+
+
+This module describes abstract behaviors for RDP, and one type
 -- of concrete behaviors, B, for Sirea. Not all relevant behaviors 
 -- are defined in this file, just the generic ones. 
 --
@@ -58,40 +92,7 @@
 --   badjeqf - eliminate adjacent equal updates
 --   bUnsafeChoke - skip minor frames when updates too fast
 --
-module FRP.Sirea.Behavior  
-    ( (:&:), (:|:), S, B -- from FRP.Sirea.Internal.STypes
-    , (>>>) -- from Control.Category
-    , bfwd, bfmap, bconst, bvoid
-    , bfirst, bsecond, (***), bswap, bdup, bfst, bsnd, bassoclp, bassocrp, (&&&)
-    , bleft, bright, (+++), bmirror, bmerge, binl, binr, bassocls, bassocrs, (|||)
-    , bconjoinl, bconjoinr
-    , bdisjoin0
-    , bzip, bzipWith
-    , bsplit
-    , bdelay, bsynch, bdelbar
-    -- , bcross
-    , bUnsafeLnk
-    
-    ) where
 
-import Prelude hiding (id,(.))
-import Control.Category
-
-import FRP.Sirea.Internal.STypes
--- import FRP.Sirea.Internal.BTypes
--- import FRP.Sirea.Internal.Types
-
-import FRP.Sirea.Signal
-import FRP.Sirea.Time
-import FRP.Sirea.Link 
-
-import Data.IORef
-import Data.Function (on)
-import Control.Monad (unless)
-
-
-infixr 3 ***
-infixr 2 +++
 
 -- I really don't trust the RULES pragma, but I haven't gotten
 -- around to applying my own optimizations. Here are a few simple

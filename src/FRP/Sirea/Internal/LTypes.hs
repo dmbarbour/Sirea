@@ -1,4 +1,4 @@
-{-# LANGUAGE GADTs #-}
+{-# LANGUAGE GADTs, TypeOperators #-}
 
 -- Types for FRP.Sirea.Link (here to avoid cyclic dependencies)
 -- plus related utilities
