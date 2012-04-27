@@ -35,6 +35,8 @@ import Data.IORef
 -- will accept a link even if it doesn't provide any meaningful
 -- output.
 --
+-- A little extra metadata is supported for optimizations:
+--
 --   tsen - time sensitive: if true, prevents delay aggregation and
 --     forces aggregated delay to apply prior to reaching link. 
 --

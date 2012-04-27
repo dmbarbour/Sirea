@@ -32,9 +32,8 @@ import FRP.Sirea.Behavior
 --       signal must have same periods of active duration as input.
 --   * locally stateless - caches allowed, but nothing that couldn't
 --        be regenerated if we stopped the link and created it new.
---        A link may represent access to external state. I encourage
---        default persistence for all external state, so it survives
---        not only links but the whole Haskell process.
+--        A link may represent access to external state. For Sirea,
+--        I suggest external state resources be persistent.
 --   * eventless - a link might experience multiple updates for the
 --        same logical times. Only the last one counts. Brief views
 --        should not affect the behavior of a system. Though, if the
