@@ -1,5 +1,6 @@
 
 -- | BdeepGen is a utility program to generate Bdeep.hs
+-- I don't try to be efficient here... just productive.
 module Main where
 
 import Control.Exception (assert)
@@ -51,7 +52,12 @@ deepThoughts =
     "coupling constraints. These are also defined up to 6 depth, for " +\
     "total 126 functions.       " +\
     "                           " +\
-    "Since I'm not about to write 5586 functions by hand, Bdeep is " +\
+    "The dual to bx* is also provided, just for completeness. This is " +\
+    "another 124 functions for injection - `binlr` is `binl >>> binr`." +\
+    "These might be useful if a behavior is a big switch, but that is " +\
+    "not a recommended pattern (better to use a lot of small behaviors)." +\
+    "                           " +\
+    "Since I'm not about to write 5710 functions by hand, Bdeep is " +\
     "generated programmatically. I should probably learn Template" +\
     "Haskell eventually, but for now it's just a plain old program." +\
     "                           " +\
@@ -70,20 +76,15 @@ allCombosOfSize n xs =
           across [] _ = []
           across (x:xs) combos = map (x:) combos ++ xs `across` combos
 
-allCombosUpToSize :: Int -> [x] -> [[x]]
-allCombosUpToSize n xs = 
-    assert (n > 0) $
-    if (n < 1) then []
-    else allCombosUpToSize (n-1) xs ++
-         allCombosOfSize n xs
-
 chunksOf :: Int -> [x] -> [[x]]
 chunksOf _ [] = []
 chunksOf n xs = assert (n > 0) $ (take n xs):(chunksOf n $ drop n xs)
 
-deepAppFunctions, deepExtractFunctions :: [String]
-deepAppFunctions = map ("bon"++) (allCombosUpToSize 6 "fslr")
-deepExtractFunctions = map ("bx"++) (allCombosUpToSize 6 "fs")
+deepAppFunctions, deepExtractFunctions, deepInjectFunctions, allFunctions :: [String]
+deepAppFunctions = map ("bon"++) $ concatMap (flip allCombosOfSize "fslr")  [1..6]
+deepExtractFunctions = map ("bx"++) $ concatMap (flip allCombosOfSize "fs") [1..6]
+deepInjectFunctions = map ("bin"++) $ concatMap (flip allCombosOfSize "lr") [2..6]
+allFunctions = deepExtractFunctions ++ deepInjectFunctions ++ deepAppFunctions
 
 deepHeader = 
     "module FRP.Sirea.Bdeep \n" ++
@@ -92,15 +93,18 @@ deepHeader =
     where separated sep xs = foldl (\ln s -> ln ++ sep ++ s) (head xs) (tail xs) 
           listFunctions = 
             let namesPerLine = chunksOf 8 (deepExtractFunctions ++ deepAppFunctions) in 
-            let namesAsLines = map (separated ", ") namesPerLine in
-            map (separated "\n    , ") namesAsLines
+            let linesOfNames = map (separated ", ") namesPerLine in
+            separated "\n    , " linesOfNames
+
+buildFn :: String -> String
+buildFn = id
 
 main :: IO ()
 main = 
     putStrLn deepThoughts >>
     putStrLn deepHeader >>
     putStrLn (unlines $ map ("import " ++) deepImports) >>
-    
+    putStrLn (unlines $ map buildFn allFunctions)
     return ()
     
     
