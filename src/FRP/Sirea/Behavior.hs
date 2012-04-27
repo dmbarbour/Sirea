@@ -12,24 +12,11 @@ module FRP.Sirea.Behavior
     , (>>>) -- from Control.Category
     , bfwd
     , BFmap(..)
-    , BProd(..), bsecond, bsnd, bassorcrp, (***), (&&&)
-    , bvoid
-    , BSum(..), bright, binr, bassocrs, (+++), (|||)
+    , BProd(..), bsecond, bsnd, bassorcrp, (***), (&&&), bvoid
+    , BSum(..), bright, binr, bassocrs, (+++), (|||), bskip
     , bconjoinl, bconjoinr
     , BDisjoin(..), bdisjoin'
-    
-
-
-bfmap, bconst, bvoid
-
-    , bfirst, bsecond, bswap, bdup, bfst, bsnd, bassoclp, bassocrp, (***), (&&&)
-    , bleft, bright, bmirror, bmerge, binl, binr, bassocls, bassocrs, (+++), (|||)
-
-    -- some utility behaviors for `deep` access
-    , bconjoinl, bconjoinr
-
-    , bdisjoin0
-    , bzip, bzipWith
+    , BZip(..), BSplit(..)
     , bsplit
     , bdelay, bsynch, bdelbar
     -- , bcross, bscope - see FRP.Sirea.Partition
@@ -50,16 +37,13 @@ infixr 2 +++
 infixr 2 |||
 
 
--- | Behavior is a grouping of all the basic behavior classes.
+-- | Behavior is a grouping of all basic behavior classes.
 class ( Category b
       , BFmap b
-      , BProd b
-      , BSum b
-      , BSplit b
-      , BZip b
+      , BProd b, BZip b
+      , BSum b, BSplit b
       , BDisjoin b
-      , BTemporal b
-      , BPeek b
+      , BTemporal b, BPeek b
       ) => Behavior b
 
 -- | bfwd is just another name for Control.Category.id.
@@ -197,6 +181,7 @@ bvoid f = bdup >>> bfirst f >>> bsnd
 --     bassocrs - sums are associative (shift parens right)
 --     (+++) - apply operations to both paths 
 --     (|||) - apply operations to both paths then merge them
+--     bskip - behavior never performed, for symmetry with bvoid.
 -- 
 class (Category b) => BSum b where
     bleft    :: b x x' -> b (x :|: y) (x' :|: y)
@@ -211,6 +196,7 @@ bassocrs :: (BSum b) => b ((x :|: y) :|: z) (x :|: (y :|: z))
 (+++)    :: (BSum b) => b x x' -> b y y' -> b (x :|: y) (x' :|: y')
 (|||)    :: (BSum b) => b x z  -> b y z  -> b (x :|: y) z
 bmirror3 :: (BSum b) => b ((x :|: y) :|: z) (z :|: (y :|: x))
+bskip    :: (BSum b) => b y x -> b x x
 
 bright f = bmirror >>> bleft f >>> bmirror
 binr = binl >>> bmirror
@@ -218,8 +204,7 @@ bassocrs = bmirror3 >>> bassocls >>> bmirror3
 (f +++ g) = bleft f >>> bright g
 (f ||| g) = (f +++ g) >>> bmerge
 bmirror3 = bleft bmirror >>> bmirror
-
-
+bskip f = binr >>> bleft f >>> bmerge
 
 
 -- | bconjoin is a partial merge, extracting from a sum. 
@@ -278,16 +263,24 @@ bdisjoin' = dupChoiceSig >>> bdisjoin >>> rotChoiceSig
 -- product. The main purpose is to combine them to apply a Haskell
 -- function. The arguments must already be in the same partition to
 -- zip them. The signals are implicitly synchronized.
-class (BFmap b, BProd b) => BZip b where
-    bzipWith :: (x -> y -> z) -> b (S p x :&: S p y) (S p z)
+-- 
+-- Only one of bzip or bzipWith need to be defined.
+class (BProd b) => BZip b where
     bzip :: b (S p x :&: S p y) (S p (x,y))
-    bzip = bzipWith (,)
+
+-- | A common pattern is to zip with a function.
+bzipWith :: (BZip b, BFmap b) => (x -> y -> z) -> b (S p x :&: S p y) (S p z)
+bzipWith = bzip >>> bfmap (uncurry f)
 
 -- | BSplit is how we lift decisions from data to control. It is the
 -- RDP equivalent to `if then else` expressions, except bdisjoin is
 -- necessary to apply the split to any parameters. 
-class (BFmap b, BSum b) => BSplit b where
+class (BSum b) => BSplit b where
     bsplit :: b (S p (Either x y)) (S p x :|: S p y)
+
+-- | Most splits are performed based on an immediate prior function.
+bsplitWith :: (BSum b, BFmap b) => (x -> Either y z) -> b (S p x) (S p y :|: S p z)
+bsplitWith f = bfmap f >>> bsplit 
 
 -- | BTemporal - operations for orchestrating signals in time.
 -- (For spatial orchestration, see FRP.Sirea.Partition.)
