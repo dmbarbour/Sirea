@@ -7,6 +7,7 @@ module FRP.Sirea.Internal.STypes
     , S
     ) where 
 
+
 -- | (x :&: y). Product of asynchronous or partitioned signals, but
 -- x and y will have equal and tightly coupled active periods. For
 -- example, if x is active for 300ms, inactive 100ms, then active
@@ -14,6 +15,7 @@ module FRP.Sirea.Internal.STypes
 -- delays enable a small divergence of exactly when these periods
 -- occur. (They'll be synchronized before recombining signals.)
 data (:&:) x y
+infixr 3 :&:
 
 -- | (x :|: y). Union or Sum of asynchronous or partitioned signals.
 -- Signals are active for different durations, i.e. if x is active
@@ -22,6 +24,7 @@ data (:&:) x y
 -- durations where both are inactive.) Due to asynchronous delays 
 -- the active periods might overlap for statically known periods.
 data (:|:) x y
+infixr 2 :|:
 
 -- | (S p a) is a Sig in a blanket - Sig a in partition p. 
 --

@@ -1,5 +1,5 @@
 
-{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeOperators, MultiParamTypeClasses #-}
 
 -- | This module describes the basic RDP behaviors in Sirea. It also
 -- exports the concrete behavior type `B` for clients.
@@ -8,95 +8,400 @@
 --   see FRP.Sirea.Link for bUnsafeLnk
 --   see FRP.Sirea.Partition for bcross, bscope
 module FRP.Sirea.Behavior  
-    ( (:&:), (:|:), S, B -- from FRP.Sirea.Internal.STypes
+    ( (:&:), (:|:), S, B 
     , (>>>) -- from Control.Category
-    , bfwd, bfmap, bconst, bvoid
-    , bfirst, bsecond, (***), bswap, bdup, bfst, bsnd, bassoclp, bassocrp, (&&&)
-    , bleft, bright, (+++), bmirror, bmerge, binl, binr, bassocls, bassocrs, (|||)
+    , bfwd
+    , BFmap(..)
+    , BProd(..), bsecond, bsnd, bassorcrp, (***), (&&&)
+    , bvoid
+    , BSum(..), bright, binr, bassocrs, (+++), (|||)
     , bconjoinl, bconjoinr
+    , BDisjoin(..), bdisjoin'
+    
+
+
+bfmap, bconst, bvoid
+
+    , bfirst, bsecond, bswap, bdup, bfst, bsnd, bassoclp, bassocrp, (***), (&&&)
+    , bleft, bright, bmirror, bmerge, binl, binr, bassocls, bassocrs, (+++), (|||)
+
+    -- some utility behaviors for `deep` access
+    , bconjoinl, bconjoinr
+
     , bdisjoin0
     , bzip, bzipWith
     , bsplit
     , bdelay, bsynch, bdelbar
-    -- , bcross is in 
-    -- , bUnsafeLnk
-    
+    -- , bcross, bscope - see FRP.Sirea.Partition
+    -- , bUnsafeLnk - see FRP.Sirea.Link
     ) where
 
 import Prelude hiding (id,(.))
 import Control.Category
+import Control.Parallel.Strategies (Strategy, withStrategy)
 
-import FRP.Sirea.Internal.STypes
+import FRP.Sirea.Internal.STypes ((:&:),(:|:),S)
 import FRP.Sirea.Internal.BTypes (B)
 import FRP.Sirea.Time (DT)
 
 infixr 3 ***
+infixr 3 &&&
 infixr 2 +++
+infixr 2 |||
 
 
+-- | Behavior is a grouping of all the basic behavior classes.
+class ( Category b
+      , BFmap b
+      , BProd b
+      , BSum b
+      , BSplit b
+      , BZip b
+      , BDisjoin b
+      , BTemporal b
+      , BPeek b
+      ) => Behavior b
 
-This module describes abstract behaviors for RDP, and one type
--- of concrete behaviors, B, for Sirea. Not all relevant behaviors 
--- are defined in this file, just the generic ones. 
+-- | bfwd is just another name for Control.Category.id.
+bfwd :: (Category b) => b x x
+bfwd = id
+
+-- | BFmap - pure operations on concrete signals.
 --
--- Listed here are several `generic` behaviors, excluding resource
--- specific behaviors (e.g. state, clock, mouse, display, network,
--- filesystem, etc.) which are provided by dedicated modules.
+-- Sirea assumes all partitions are Haskell partitions. Distributed
+-- RDP would require more precision regarding which function types 
+-- can be applied in which partition types.
 --
---  CATEGORY
---   bfwd - identity behavior
---   (>>>) - forward composition (from Control.Category)
+-- Also some useful performance annotations to control for laziness.
+class (Category b) => BFmap b where
+    -- | bfmap applies a function to a concrete signal. This allows
+    -- arbitrary Haskell functions to integrate with RDP. Lazy.
+    bfmap :: (x -> y) -> b (S p x) (S p y)
+
+    -- | bconst applies a constant to a signal.
+    --     bconst = bfmap . const
+    -- The specialization allows for optimizations, in particular a
+    -- cheaper variation of badjeqf.
+    bconst :: y -> b (S p x) (S p y)
+    bconst = bfmap . const
+
+    -- | bforce can force computation of accummulated thunks from
+    -- fmap and other operations. This can control space costs and
+    -- improve parallelism (by forcing in multiple partitions). This
+    -- is applied per update, based on stability and perhaps a bit
+    -- beyond the stable value (based on type b, configurable or
+    -- adaptive). Since updates tend to monotonically increase
+    -- stability, this results in incrementally forcing evaluations.
+    --
+    -- How much is forced is configurable via a sequential strategy,
+    -- (x -> ()), which allows arbitrarily deep sequencing. See
+    -- Control.Seq for more information.
+    bforce :: (x -> ()) -> b (S p x) (S p x)
+    bforce _ = bfwd -- semantically
+
+    -- | bstrat applies a parallel strategy to a signal based on
+    -- sampling. The essential idea is to initialize evaluation of
+    -- the next couple samples before the current one is processed.
+    -- This simple technique can achieve a respectable level of data
+    -- parallelism, control space overhead, avoid wasted sparks, and
+    -- minimize latency for the next observations.
+    --
+    -- Ignoring performance concerns, bstrat is a simple variation
+    -- of bfmap. A parallel strategy is typically (x -> Eval x), but
+    -- this is generalized to (x -> Eval y) to enforce semantics.
+    --
+    -- See Control.Parallel.Strategies for more information. 
+    bstrat :: (x -> Eval y) -> b (S p x) (S p y)
+    bstrat = bfmap . (runEval .)
+
+    -- | Types that can be tested for equality can be filtered to
+    -- eliminate redundant updates. Redundant updates are common if
+    -- mapping lossy functions (like `x->Bool`)to signals. badjeqf,
+    -- for adjacent equality filter, performs this operation.
+    --
+    -- The reason to eliminate redundant updates is to eliminate
+    -- redundant computations further down the line, eg. at `bzip`.
+    -- This is a valuable performance optimization.
+    badjeqf :: (Eq x) => b (S p x) (S p x)
+    badjeqf = bfwd -- semantically
+
+
+-- | BProd - data plumbing for asynchronous products. Asynchronous
+-- product (x :&: y) means that both signals are active for the same
+-- durations and approximately for the same times (modulo variations
+-- in delay). This can be understood as modeling parallel pipelines. 
 --
---  PRODUCTS
---   bfirst b - apply b on first element in product
---   bsecond b - apply b on second element in product
---   (b1 *** b2) = bfirst b1 >>> bsecond b2
---   bswap - flip first and second signals
---   bdup - duplicate signal
---   bfst - keep first signal, drop second
---   bsnd - keep second signal, drop first
---   bassoc(l|r)p - associate left or right on product
---   bzipWith, bzip - combine two concrete signals
+--     bfirst - operate on just one signal (the first one)
+--     bdup - duplicate any signal and process both pipelines.
+--     bfst - keep the first signal, drop the second.
+--     bswap - products are commutative
+--     bassoclp - products are associative (move parens left)
+--
+-- The above operations should be free at runtime. A few operations 
+-- are defined based on the above, leveraging bswap liberally, which
+-- should also be free at runtime. 
+--
+--     bsecond - operate on second signal
+--     bsnd - keep second signal, drop first
+--     bassocrp - products are associative (move parens right)
+--     (***) - operate on first and second in parallel
+--     (&&&) - create and define multiple pipelines at once
+--     bvoid - branch behavior just for side-effects, drop result
+--
+-- Delays diverge due to performing operations and adding latency to
+-- only one of two signals. Use `bsynch` to synchronize the signals
+-- when synchronous behavior is required.
+--
+class (Category b) => BProd b where
+    bfirst   :: b x x' -> b (x :&: y) (x' :&: y)
+    bdup     :: b x (x :&: x)
+    bfst     :: b (x :&: y) x
+    bswap    :: b (x :&: y) (y :&: x)
+    bassoclp :: b (x :&: (y :&: z)) ((x :&: y) :&: z)
+
+bsecond  :: (BProd b) => b y y' -> b (x :&: y) (x :&: y')
+bsnd     :: (BProd b) => b (x :&: y) y
+bassocrp :: (BProd b) => b ((x :&: y) :&: z) (x :&: (y :&: z))
+(***)    :: (BProd b) => b x x' -> b y y' -> b (x :&: y) (x' :&: y')
+(&&&)    :: (BProd b) => b x y  -> b x z  -> b x (y :&: z)
+bvoid    :: (BProd b) => b x y  -> b x x
+bswap3   :: (BProd b) => b ((x :&: y) :&: z) (z :&: (y :&: x))
+
+bsecond f = bswap >>> bfirst f >>> bswap
+bsnd = bswap >>> bfst
+bassocrp = bswap3 >>> bassoclp >>> bswap3
+bswap3 = bfirst bswap >>> bswap
+(f *** g) = bfirst f >>> bsecond g
+(f &&& g) = bdup >>> (f *** g)
+bvoid f = bdup >>> bfirst f >>> bsnd
+
+-- | BSum - data plumbing for asynchronous sums. Asynchronous sums
+-- (x :|: y) means that x and y are active for different durations
+-- and different times (modulo overlap due to variations in delay). 
+-- Sums model conditional expressions in RDP, and can work well at
+-- smaller scales. If there are a large number of choices, BDynamic
+-- may offer better performance.
+--
+--     bleft - apply behavior only to left path.
+--     bmerge - combine elements of a sum (implicit synch)
+--     binl - constant choose left; i.e. if true
+--     bmirror - sums are commutative; flip left and right
+--     bassocls - sums are associative (shift parens left)
+--
+-- Excepting bmerge, the above operations should be free at runtime.
+-- bmerge does have some overhead, but is rarely a useful operation.
+-- A few more operations are defined using bmirror.
+--
+--     bright - apply behavior only to the right path
+--     binr - constant choose right; i.e. if false
+--     bassocrs - sums are associative (shift parens right)
+--     (+++) - apply operations to both paths 
+--     (|||) - apply operations to both paths then merge them
 -- 
---  SUM (CHOICE)
---   bleft b - apply b on left option in sum
---   bright b - apply b on right option in sum
---   (bl +++ br) - bleft bl >>> bright br
---   bmirror - flip left and right signals
---   bmerge - combine two choices into one signal (implicit synch)
---   binl - static choice of left option (~ if true) 
---   binr - static choice or right option (~ if false)
---   bassoc(l|r)s - associate left or right on sum
---   bsplit - lift a decision in a signal to asynchronous layer
---
---  ARROW MISC
---   bfmap - apply function to a concrete signal (when active)
---   bconst - map a constant value to a concrete signal (when active) 
---   bvoid - execute one behavior but drop the result
---   bconjoin - partial merge on a product of sums
---   bdisjoin - distribute a sum into a product
---
---  SPATIAL-TEMPORAL
---   bdelay - delay a signal by a fixed amount
---   bsynch - synch an asynchronous signal (to slowest)
---   bDelayBarrier - force application of aggregated delay
---   blocal - logical, thread-local sub-partitions.
---   bcross - communicate a signal between threaded partitions
---
---  EXTENSIONS AND ADAPTERS
---   bUnsafeLnk - hook FFI, legacy services, external resources
---
---  PERFORMANCE (maybe another module)
---   bforce  - apply sequential strategy relative to stability
---   bstrat  - apply parallel strategy relative to sampling
---   badjeqf - eliminate adjacent equal updates
---   bUnsafeChoke - skip minor frames when updates too fast
---
+class (Category b) => BSum b where
+    bleft    :: b x x' -> b (x :|: y) (x' :|: y)
+    bmirror  :: b (x :|: y) (y :|: x)
+    bmerge   :: b (x :|: x) x
+    binl     :: b x (x :|: y)
+    bassocls :: b (x :|: (y :|: z)) ((x :|: y) :|: z)
+
+bright   :: (BSum b) => b y y' -> b (x :|: y) (x :|: y')
+binr     :: (BSum b) => b y (x :|: y)
+bassocrs :: (BSum b) => b ((x :|: y) :|: z) (x :|: (y :|: z))
+(+++)    :: (BSum b) => b x x' -> b y y' -> b (x :|: y) (x' :|: y')
+(|||)    :: (BSum b) => b x z  -> b y z  -> b (x :|: y) z
+bmirror3 :: (BSum b) => b ((x :|: y) :|: z) (z :|: (y :|: x))
+
+bright f = bmirror >>> bleft f >>> bmirror
+binr = binl >>> bmirror
+bassocrs = bmirror3 >>> bassocls >>> bmirror3
+(f +++ g) = bleft f >>> bright g
+(f ||| g) = (f +++ g) >>> bmerge
+bmirror3 = bleft bmirror >>> bmirror
 
 
--- I really don't trust the RULES pragma, but I haven't gotten
--- around to applying my own optimizations. Here are a few simple
--- cases that are likely to happen often.
+
+
+-- | bconjoin is a partial merge, extracting from a sum. 
+bconjoinl :: (BSum b, BProd b) => b ((x :&: y) :|: (x :&: z)) (x :&: (y :|: z)) 
+bconjoinr :: (BSum b, BProd b) => b ((x :&: z) :|: (y :&: z)) ((x :|: y) :&: z)
+bconjoinl = bdup >>> (isolateX *** isolateYZ)
+    where isolateX = (bfst +++ bfst) >>> bmerge
+          isolateYZ = (bsnd +++ bsnd)
+bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
+
+-- | Disjoin will distribute a decision. To achieve disjoin involves 
+-- combining a signal representing a split with an external signal.
+-- Disjoin is necessary for effective use of `choice` in RDP, i.e.
+-- most design patterns using bsplit will use bdisjoin.
+--
+-- Unfortunately, disjoin is neither generic nor dual to conjoin.
+-- This seems unavoidable due to potential for partitioning and the
+-- need to communicate between partitions. A more generic variation
+-- might be built atop bdisjoin with type or template programming.
+--
+-- In some cases it may be more convenient to use intermediate state
+-- rather than disjoin. Disjoin is necessary to model lexical scope
+-- without shared state.
+--
+class (BSum b, BProd b) => BDisjoin b where
+    -- | bdisjoin0 combines a signal representing the current choice
+    -- (S p ()) and a signal representing available data (S p x) in
+    -- the same partition `p`. This splits the external data.
+    bdisjoin  :: b (S p x :&: ((S p () :&: y) :|: z) )
+                   ( (S p x :&: y) :|: (S p x :&: z) )
+
+-- | bdisjoin' preserves the choice signal to support further disjoin.
+bdisjoin' :: b (S p x :&: ((S p () :&: y) :|: z))
+               ((S p () :&: S p x :&: y) :|: (S p x :&: z))
+bdisjoin' = dupChoiceSig >>> bdisjoin >>> rotChoiceSig
+    where on_y = bsecond . bleft
+          dupChoiceSig = (bsecond . bleft) $ bfirst bdup >>> bassocrp
+          rotChoiceSig = (bleft) $ bassoclp >>> bfirst bswap >>> bassocrp
+
+-- A more generic version of bdisjoin might look like:
+--   bdisjoin b (x :&: ((Blank x :&: y) :|: z) ((x :&: y) :|: (x :&: z))
+-- Where Blank (S p x) = (S p ())
+--       Blank (x :&: y) = (Blank x :&: Blank y)
+--       Blank (x :|: y) = (Blank x :|: Blank y)
+--   And I have some generic way to:
+--       mask x with Blank x
+--       invert Blank x
+-- But to actually make it useful would require similar mechanisms
+-- for building `bcross` behaviors.
+--
+-- Alternatively, I could create a series of bdisjoin ops based on
+-- a stack-structure for elements. ((x :|: y) :&: (k1 :&: (k2 :&: (k3 ...
+
+
+-- | BZip is a behavior for combining elements of an asynchronous 
+-- product. The main purpose is to combine them to apply a Haskell
+-- function. The arguments must already be in the same partition to
+-- zip them. The signals are implicitly synchronized.
+class (BFmap b, BProd b) => BZip b where
+    bzipWith :: (x -> y -> z) -> b (S p x :&: S p y) (S p z)
+    bzip :: b (S p x :&: S p y) (S p (x,y))
+    bzip = bzipWith (,)
+
+-- | BSplit is how we lift decisions from data to control. It is the
+-- RDP equivalent to `if then else` expressions, except bdisjoin is
+-- necessary to apply the split to any parameters. 
+class (BFmap b, BSum b) => BSplit b where
+    bsplit :: b (S p (Either x y)) (S p x :|: S p y)
+
+-- | BTemporal - operations for orchestrating signals in time.
+-- (For spatial orchestration, see FRP.Sirea.Partition.)
+class (Category b) => BTemporal b where
+    -- | Delay a signal. For products or sums, every branch delays
+    -- equally. Delay models communication or calculation time. It
+    -- is important for consistency; without delay, updates straggle
+    -- and cause glitches at larger scales. Delay can also dampen
+    -- some feedback patterns with shared state resources.
+    --
+    -- Delays for elements of asynchronous products and sums diverge
+    -- due to bfirst, bleft.
+    bdelay :: DT -> b x x
+    
+    -- | Synchronize signals. Affects asynchronous products or sums.
+    -- Ensures that delay on every branch is equal, suitable for zip
+    -- or merge. Note that the signal components may be in different
+    -- partitions, which makes bsynch useful for synchronous action
+    -- at a distance.
+    --
+    -- Synch is achieved by adding delay to the faster branches. It
+    -- has no effect if applied to an already synchronous signal or
+    -- a lone concrete signal.
+    --
+    -- Synchronization is implicit for many operations like zip or
+    -- merge. RDP forbids combining signals of different latencies
+    -- (except indirectly, e.g. via shared state resources).
+    bsynch :: b x x
+
+
+-- | BPeek - anticipate a signal by studying its projected future.
+-- RDP does not provide any support for prediction, but does ensure
+-- that predictions are propagated through behavior and potentially
+-- even through stateful resources.
+--
+-- Use of BPeek isn't suitable for long-term predictions. For that,
+-- you need a proper predictions model. But it can help compose many 
+-- prediction models. It can support detecting changes or `events`
+-- (i.e. gesture detection, redraw dirty windows). It can simplify 
+-- computing derivatives for smooth interpolation or animation. It 
+-- can enable advance preparation or loading of resources. It also
+-- separates the concerns of making a prediction and consuming it.
+--
+-- Anticipation reduces need for many traditionally stateful idioms.
+--
+-- Using bpeek can damage stability of the behavior, i.e. if we look
+-- four seconds into the future, then an update within four seconds 
+-- can upset our predictions. Retroactive correction has limits, so
+-- instability can ultimately cause glitches and indeterminism. This
+-- can be countered by use of bdelay so we're actually looking at a
+-- buffered future (an idiom for short-term memory). Developers must
+-- balance the benefits of bpeek against the stability costs. Domain
+-- can affect the tradeoff. Low latency can be more important than
+-- accuracy (e.g. for dodging in combat), or naturally stable models
+-- could allow us to look further without glitches.
+--
+class (BTemporal b) => BPeek b where
+    -- | bpeek - anticipate a signal. The Left side is the future
+    -- signal value, while the Right side indicates the signal is
+    -- inactive in the given future. The activity of the signal 
+    -- does not change; bpeek does not cause delay.
+    --
+    -- Use of Either here (instead of Maybe) enables use of bsplit.
+    bpeek :: DT -> b (S p a) (S p (Either a ()))
+
+-- | Dynamic behaviors are behaviors constructed or discovered at
+-- runtime. They are useful for modeling resources, extensions,
+-- service brokering, and staged computation (compilation, linking).
+-- They can also represent runtime authorities (object capability
+-- patterns), with implicit revocation when you stop sharing the
+-- behavior.
+--
+-- Unfortunately, such behaviors are not first class, for reasons
+-- similar to bdisjoin. Every dynamic behavior must start and end
+-- in a single partition. 
+--
+-- Dynamic behaviors may perform better than use of sum types (:|:)
+-- in some cases, especially when there are a lot of rarely selected
+-- choices. However, they aren't as composable, may hinder bpeek for
+-- anticipation, and certainly hinder dead code elimination. 
+-- 
+-- All arguments for dynamic behaviors are implicitly synchronized.
+class (BEmbed b b', Behavior b, Behavior b') => BDynamic b b' where
+    -- | evaluate a dynamic behavior and obtain the response.
+    -- If the dynamic behavior would take more than DT time, or has
+    -- other static problems, failure is returned immediately via
+    -- the left output signal (failure :|: result).
+    beval :: DT -> b (S p (b' (S p x) (S p y)) :&: S p x)
+                     (S p () :|: S p y)
+
+-- Note: I probably need several more variations of beval:
+--  more than one input and output
+--  access to `choice` for some of those inputs and outputs.
+
+-- | BEmbed - embed (or lift) behaviors. 
+class BEmbed b b' where
+    bembed :: b' x y -> b x y
+
+
+-- convenience operators?
+--  operations on (x :&: (y :&: (z :& ...
+--  maybe a dedicated module, `BStack`. 
+--  could be useful, but somewhat limited
+-- Some Forth-inspired operators might be neat, treating this as a
+-- stack for rotations and operations. 
+--    take3 : takes 3 items off stack
+--    put2 : put 2 items on the stack
+--
+-- support for bcar, bcdr, bcadr, bcddr, bcdar, bcaar, etc. from Lisp
+--    plus variations for first, second (application to elements)
+-- rotations, deep copies of elements, etc.
+--  
+
+
 {-# RULES
 "bfmap.bfmap" forall f g .
                 (bfmap f) . (bfmap g) = bfmap (f . g)
@@ -121,499 +426,7 @@ This module describes abstract behaviors for RDP, and one type
                 (bsecond f) . (bfirst g) = (bfirst g) . (bsecond f)
  #-}
 
--- TUNING
--- dt_eqf_peek: 
---   (for bconst, badjeqf via beqshift)
---
---   The first update in a signal might not represent a real change.
---   Delivering it as a change, however, might cause redundant eval
---   later in the pipeline (e.g. when zipping values). Ideally find
---   the first real change in signal and deliver that as the time of 
---   signal state update. But discovering such a time potentially 
---   needs infinite search. As compromise, I search bounded distance
---   into future for change, relative to stability. Idea is that the
---   computation doesn't run very far ahead of stability anyway, so
---   pushing update ahead of stability is almost free. 
-dt_eqf_peek :: DT
-dt_eqf_peek = 3.0 -- seconds ahead of stability
 
-instance Category B where
-  id  = B_fwd
-  (.) = flip B_pipe
-
--- | bfwd is just another name for Control.Category.id.
-bfwd :: (Category b) => b x x
-bfwd = id
-
-
-class (Category b) => BFmap b where
-    bfmap :: (a -> b) -> b (S p a) (S p b)
-    bconst :: c -> b (S p a) (S p c)
-    bconst = bfmap . const
-
-
--- | DYNAMIC BEHAVIORS
---
--- RDP behaviors may be first-class, which enables Object Oriented
--- styles of programming, and object capability model approaches to
--- security. This is represented by having signals carry behaviors
--- (which looks in Haskell's type system like 'S p (B x y)'). Small
--- behaviors can be composed into complex applications then invoked
--- with beval or bexec.
---
--- Unlike OO styles, or even FRP switches, first-class behaviors in
--- RDP cannot be stored. They are volatile, implicitly revoked after
--- you stop sharing them. This is a valuable property for security,
--- safety, resource management (including GC), and live programming.
--- 
-
-bfirst   :: B x x' -> B (x :&: y) (x' :&: y)
-bsecond  :: B y y' -> B (x :&: y) (x :&: y')
-(***)    :: B x x' -> B y y' -> B (x :&: y) (x' :&: y')
-bswap    :: B (x :&: y) (y :&: x)
-bdup     :: B x (x :&: x)
-bfst     :: B (x :&: y) x
-bsnd     :: B (x :&: y) y
-bassoclp :: B (x :&: (y :&: z)) ((x :&: y) :&: z)
-bassocrp :: B ((x :&: y) :&: z) (x :&: (y :&: z))
-
-bleft    :: B x x' -> B (x :|: y) (x' :|: y)
-bright   :: B y y' -> B (x :|: y) (x :|: y')
-(+++)    :: B x x' -> B y y' -> B (x :|: y) (x' :|: y')
-bmirror  :: B (x :|: y) (y :|: x)
-bmerge   :: B (x :|: x) x
-binl     :: B x (x :|: y)
-binr     :: B y (x :|: y)
-bassocls :: B (x :|: (y :|: z)) ((x :|: y) :|: z)
-bassocrs :: B ((x :|: y) :|: z) (x :|: (y :|: z))
-
-bfwd = id
-
-bfirst = B_on_fst
-bsecond f = bswap >>> bfirst f >>> bswap 
-(***) f g = bfirst f >>> bsecond g
-bswap = B_swap
-bdup = B_dup
-bfst = B_fst
-bsnd = bswap >>> bfst
-bassoclp = B_asso_p
-bassocrp = bswap3 >>> bassoclp >>> bswap3
-
-bleft = B_on_lft
-bright f = bmirror >>> bleft f >>> bmirror
-(+++) f g = bleft f >>> bright g
-bmirror = B_mirror
-bmerge = B_merge
-binl = B_in_lft
-binr = binl >>> bmirror
-bassocls = B_asso_s
-bassocrs = bmirr3 >>> bassocls >>> bmirr3
-
--- bswap3 is utility for bassocrp
-bswap3 :: B ((x :&: y) :&: z) (z :&: (y :&: x))
-bswap3 = bfirst bswap >>> bswap
-
--- bmirror3 is utility for bassocrs
-bmirr3 :: B ((x :|: y) :|: z) (z :|: (y :|: x))
-bmirr3 = bleft bmirror >>> bmirror
-
--- | Map an arbitrary Haskell function across an input signal.
-bfmap :: (a -> b) -> B (S p a) (S p b)
-bfmap fn = B_mkLnk tr_fwd fmapLnk
-    where fmapLnk = MkLnk { ln_tsen = False, ln_build = bdfmap }
-          bdfmap = return . (ln_lumap . ln_sumap . su_fmap . s_fmap) fn
-
--- | Map a constant to a signal. A constant signal can still vary 
--- between active and inactive over time. Same as bfmap (const c),
--- but potentially much more efficient and able to move or shift
--- most redundant updates.  
-bconst :: c -> B (S p a) (S p c)
-bconst c = B_mkLnk tr_fwd constLnk >>> beqshift alwaysEq
-    where fmapLnk = MkLnk { ln_tsen = False, ln_build = bdconst }
-          bdconst = return . (ln_lumap . ln_sumap . su_fmap . s_const) c
-          alwaysEq = (const . const) True
-
--- | `bvoid b` will activate behavior b but ignore its result.
--- The input is duplicated and passed onwards. 
-bvoid :: B x y -> B x x
-bvoid b = bdup >>> bfirst b >>> bsnd 
-
--- | conjoin is a partial merge. 
-bconjoinl :: B ((x :&: y) :|: (x :&: z)) (x :&: (y :|: z))
-bconjoinr :: B ((x :&: z) :|: (y :&: z)) ((x :|: y) :&: z)
-bconjoinl = bdup >>> (isolateX *** isolateYZ) 
-   where isolateX = (bfst +++ bfst) >>> bmerge
-         isolateYZ = (bsnd +++ bsnd)
-bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
-
--- | Disjoin will distribute a decision. To achieve disjoin involves 
--- combining a signal representing a split with an external signal.
--- Disjoin is necessary for effective use of `choice` in RDP, i.e.
--- most design patterns using bsplit will use bdisjoin.
---
--- Unfortunately, disjoin is neither generic nor dual to conjoin.
--- This seems unavoidable due to potential for partitioning and the
--- need to communicate between partitions.
---
--- It may be feasible to achieve a more generic disjoin by use of
--- templates or type-based meta programming. 
---
-bdisjoin :: B (S p a :&: ((S p () :&: x) :|: y) )
-               ( (S p a :&: x) :|: (S p a :&: y) )
-bdisjoin = B_tshift disjSynch >>> B_mkLnk disjTime disjMkLnk
-    where disjMkLnk = MkLnk { ln_tsen = False, ln_build = disjBuild }
-
--- This is a specialized `synch` that targets just the two elements.
--- will perform minimal synch based on actual delays.
-disjSynch :: TS (S p a :&: ((S p () :&: x) :|: y))
-disjSynch auxy =
-    let a   = lnd_fst auxy in
-    let u   = (lnd_fst . lnd_left . lnd_snd) auxy in
-    let x   = (lnd_snd . lnd_left . lnd_snd) auxy in
-    let y   = (lnd_right . lnd_snd) auxy in
-    let dta = lnd_sig a in
-    let dtu = lnd_sig u in
-    let dtSynch = (max `on` ldt_goal) dta dtu in
-    let dtCurr = (max `on` ldt_curr) dta dtu in
-    let dt' = LDT { ldt_curr = dtCurr, ldt_goal = dtSynch } in
-    let a' = LnkDProd dt' in
-    let u' = LnkDProd dt' in
-    a' `LnkDProd` ((u' `LnkDProd` x) `LnkDSum` y)
-
--- translate time from before and after disjoin
--- unlike most MkLnk time translations, disjoin preserves timing
--- of the x and y elements.
-disjTime :: TR (S p a :&: ((S p () :&: x) :|: y) )
-               ( (S p a :&: x) :|: (S p a :&: y) )
-disjTime auxy = axay 
-    where a = lnd_fst auxy
-          x = (lnd_snd . lnd_left . lnd_snd) auxy
-          y = (lnd_right . lnd_snd) auxy 
-          axay = (a `LnkDProd` x) `LnkDSum` (a `LnkDProd` y)
-
--- disjBuild decides whether this is dead code (LnkDead) and otherwise
--- builds the necessary state and passes the buck.
-disjBuild :: Lnk ( (S p a :&: x) :|: (S p a :&: y) )
-      -> IO (Lnk (S p a :&: ((S p () :&: x) :|: y) ) )
-disjBuild lxry = 
-    let lnl = (ln_fst . ln_left) lxry in
-    let lnr = (ln_fst . ln_right) lxry in
-    let x   = (ln_snd . ln_left) lxry in
-    let y   = (ln_snd . ln_right) lxry in
-    let bNull = ln_null lnl && ln_null lnr in
-    let LnkDead = LnkDead `LnkProd` ((LnkDead `LnkProd` x) `LnkSum` y) in
-    if bNull then return LnkDead else 
-    let l   = ln_lnkup lnl in
-    let r   = ln_lnkup lnr in
-    let onTouch = ln_touch l >> ln_touch r in
-    let onEmit sm = 
-            let sul = sm_emit disjMaskLeft sm in
-            let sur = sm_emit disjMaskRight sm in
-            ln_update l sul >> ln_update r sur
-    in
-    ln_withSigM onTouch onEmit >>= \ (a,u) ->
-    return (LnkSig a `LnkProd` ((LnkSig u `LnkProd` x) `LnkSum` y))
-
--- maskLeft and maskRight must take the two original signals and
--- generate the split signals for the disjoin function. Assume 
--- that the signal has already been synchronized...
-disjMaskLeft, disjMaskRight :: Sig a -> Sig () -> Sig a
-disjMaskLeft = s_mask
-disjMaskRight sa su = s_mask sa su'
-    where su' = s_full_zip inv su
-          inv Nothing = Just ()
-          inv _       = Nothing
-
-
-{- transformative behaviors. Need a dedicated `Trans` model, which 
-   in turn needs a 'class' for behaviors.
--- berrseq - composition with error options.
--- todo: move to a arrow transformer...
-berrseq :: B x (err :|: y) -> B y (err :|: z) -> B x (err :|: z)
-berrseq bx by = bx >>> bright by >>> bassocls >>> bleft bmerge
-
--- benvseq - composition with environment (~reader)
--- todo: move to a arrow transfomer
-benvseq :: B (env :&: x) y -> B (env :&: y) z -> B (env :&: x) z
-benvseq bx by = bdup >>> (bfst *** bx) >>> by
- -}
-
--- | Represent latency of calculation or communication by delaying
--- a signal a small, logical difftime. Appropriate use of delay can
--- greatly improve system consistency and efficiency. In case of a
--- complex signal, every signal receives the same delay.
---
--- Note that delay does not cause any actual delay in computation.
--- It applies a delay to signals (i.e. s_delay) logically, which can
--- affect the timing of real-world effects controlled by the signal.
-bdelay :: DT -> B x x
-bdelay = B_tshift . lnd_fmap . addDelay
-    where addDelay dt ldt = 
-            let dtGoal = dt + (ldt_goal lt) in
-            ldt { ldt_goal = dtGoal }
-
--- | Synch automatically delays all signals to match the slowest in
--- a composite. Immediately after synchronization, you can be sure 
--- (x :&: y) products precisely overlap, and (x :|: y) sums handoff
--- smoothly without gap or overlap. For non-composte signals, bsynch
--- has no effect. bsynch twice has no extra effect. Synchronization
--- is logical in RDP, and the implementation is wait-free.
---
--- Signals even in different partitions may be synchronized. 
-bsynch :: B x x
-bsynch = B_tshift doSynch
-    where doSynch x =
-            let dtGoal = ldt_maxGoal x in
-            lnd_fmap $ \ ldt -> ldt { ldt_goal = dtGoal }
-            -- setting all elements to max delay goal among them
-
--- | Normally bdelay and bsynch do not cause immediate processing of
--- the signal. Instead, multiple small delays are accumulated then 
--- applied once when necessary (e.g. for time-sensitive operations).
--- This will force immediate application of delays. In rare cases, 
--- forcing the delay might avoid a lot of minor delays down the line,
--- but the benefit is likely marginal even then. 
-bDelayBarrier :: B x x
-bDelayBarrier = B_tshift doBar
-    where doBar = lnd_fmap $ \ ldt -> ldt { ldt_curr = (ldt_goal ldt) }
-
--- bcross:
---   do I make it for a specific partition type?
---   or do I make a typeclass for entering partitions with IO?
---   I think I'll skip this for now and get back to it... in 
---   another module.
--- not a typeclass for bcross, but per-partition could be okay.
-
-
--- | combine a product of signals into a signal of products
-bzip :: B (S p a :&: S p b) (S p (a,b))
-bzip = bzipWith (,)
-
--- | combine signals with a given function
-bzipWith :: (a -> b -> c) -> B (S p a :&: S p b) (S p c)
-bzipWith = bUnsafeZipWith
-
--- | as bzipWith, but not constrained to valid partition class
-bUnsafeZipWith :: (a -> b -> c) -> B (S p a :&: S p b) (S p c)
-bUnsafeZipWith = bUnsafeSigZip . s_zip
-
--- | generic combiner for two signals. This requires some intermediate
--- state to build the signals and recombine them. That state is GC'd as
--- it updates.
-bUnsafeSigZip :: (Sig a -> Sig b -> Sig c) -> B (S p a :&: S p b) (S p c)
-bUnsafeSigZip fn = bUnsafeLnk $ MkLnk 
-    { ln_tsen = False
-    , ln_build = mkln_zip fn
-    }
-
-mkln_zip :: (Sig a -> Sig b -> Sig c) -> Lnk (S p c) -> IO (Lnk (S p a :&: S p b))
-mkln_zip fn lnc = 
-    if (ln_null lnc) then return LnkDead else
-     
---ln_mksigzip :: (Sig x -> Sig y -> Sig z) -> LnkUp z -> IO (LnkUp x, LnkUp y)
-
--- | lift choice of data to choice of behaviors
-bsplit :: B (S p (Either a b)) (S p a :|: S p b)
-bsplit = bUnsafeSplit
-
--- | as bsplit, but not constrained to partition class
-bUnsafeSplit :: B (S p (Either a b)) (S p a :|: S p b)
-bUnsafeSplit = bUnsafeLnk $ MkLnk
-    { ln_tsen = False
-    , ln_build = return . ln_split
-    }
-
-
-
--- todo:
---   Sirea Context - might not be worth it (painful for user)
---     tuning: max outstanding ops between threads
---     initial partitions (if any) can be added
---     can be used for multiple initial behaviors.
---
---   Should I attempt to support `periodic` actions?
---      could simplify inclusion of OpenGL and similar within Sirea.
---      But I could instead get OpenGL support via a dedicated thread,
---        without compromising computation of Sirea behaviors.
---      Alternatively, this could be provided by the 
---
---   Observable variables: (OVar y)
---     some sort of externally managed observable variable
---
---     not very useful for RDP, but could be useful at the boundary
---       between RDP and an IO model. 
---     maybe set `in future` as with DT -> a -> IO (), to avoid any
---       unnecessary recomputations and avoid feedback cycles.
---     something to think about, I suppose.
---
---     should not be set from inside a Sirea thread.
---     can set the variable to a Signal? (in which case we need to
---       distinguish a response of set vs. unset).
---     or can set variable to a series of [(T,a)] values.
---     or can set one future at a time. set :: DT -> a -> IO ().
---       (which would allow setting the value for the future).
---
---   Behavior transformer for static context? e.g. env. vars
---
---   bcross: change partitions. 
---     partitions are named by types (Data.Typeable)
---     each partition is `created` once per Sirea Context
---        might pre-exist; that's okay, too.
---     once created, stored in a map for the Sirea behavior.
---        map lost only on shutdown. no thread GC during operation.
---
---     within the destination thread:
---       reduce multiple updates to one update
---       touch the destination & schedule send
---       allows huge batch updates to be processed efficiently
---     within source thread:
---       updates to a remote partition are batched by thread ID
---       batches delivered all at once at end of round
---       multiple rounds might occur.
---     controlling progress of each partition? 
---       flow-based programming, finite number of buffers between
---       each partition; will wait-on-send whenever a thread is too
---       far ahead of its partners.
---
---     thoughts:
---       * Use a typeclass to obtain.
---       * Provide an argument to the typeclass:
---            the mapping mechanism?
---         Or...
---         Assert that the typeclass IO operation will be called once
---           per unique identifier (String) for partitions
---           (this seems viable; Sirea keeps its own map, no global)
---
---     if I use MkLnk, I probably cannot pass a useful argument for
---     the partitioning map. So I probably need to handle this as a
---     dedicated B operation
---        - accumulation for batch updates
---        - can I benefit from batching touches?
---             maybe if I reify the batches to avoid double-batching
---             from a single partition. Basically I'd need to mark 
---             each batch with its source, take up to one batch per
---             source, touch them, then apply updates. Doable? Maybe.
---        - take one frame from each input source. apply all touch.
---             apply all updates in batch. Repeat until no input.
---             Generate all output? hmmm...
---        - I need to somehow combine redundant updates, otherwise I
---             will never reduce computation. A good place to do so
---             is upon bcross. bcross behavior itself can store the
---             duplicate updates, perform `touch` locally, then do a
---             big `emit` phase. (*** seems very promising. ***)
---
---   bcross with dynamic behaviors...
---      this is a bit more difficult; does a dynamic behavior get new
---      threads or use the existing threads?
---          * For OpenGL and such, using existing threads is better.
---          * 
---
---   Will I need a dedicated B operation for bcross?
---      doing so would avoid need for `global` state
---      it is also `simple` in that only need one type?
---          (S p a) to (S p' a)
---      unless I need some special features (like dedicated types)
---
---   I think a dedicated `Partition context` would be appropriate.
---
---     but would passing as argument to bcross also work?
---     or even as argument to running a behavior? (i.e. so developer
---        can prepare some threads in advance)?
---       
--- Specific to signal and partition types.
---     dedicated thread per partition, or at least for certain partitions
---     maybe use a dedicated variation of bcross? Or alternatively, create
---     a typeclass for obtaining the necessary data for entering each
---     partition (and starting up any associated threads)
---   bpeek (anticipate)
-
---   
--- weaker disjoin?
--- initial stateful and pseudo-state ops
---- reactive term rewriting, reactive state transition, 
---- reactive constraint-logic
-
-
--------------------------------------------
------------------- UTILITY ----------------
--------------------------------------------
-
--- beqshift is a helper behavior. It seeks the first visible change
--- in a signal, relative to its prior value and stability, and will
--- shift the signal update to occur at that time. Note that beqshift
--- only changes the `su_time` value of a signal.
-beqshift :: (a -> a -> Bool) -> B (S p a) (S p a)
-beqshift eq = B_mkLnk tr_fwd shiftLnk
-    where shiftLnk = MkLnk { ln_tsen = False, ln_build = bdshift }
-          bdshift LnkDead = LnkDead
-          bdshift (LnkSig x) = 
-                newIORef st_zero >>= \ rfSt ->
-                return $! LnkSig $! ln_eqshift rfSt eq x
-
-ln_eqshift :: IORef (SigSt a) -> (a -> a -> Bool) -> LnkUp a -> LnkUp a
-ln_eqshift rfSt eq ln = LnkUp { ln_touch = pokefwd, ln_update = upd }
-    where pokefwd = ln_touch ln
-          upd su = 
-            readIORef rfSt >>= \ st ->
-            let s0  = st_state st in
-            let st' = st_sigup su st in
-            let stClr = maybe (flip st_clear st') 
-                          st_zero (st_stable st') in
-            stClr `seq` 
-            writeIORef rfSt stClr >> -- updated!
-            case su_state su of
-                Nothing -> ln_update ln su
-                Just (sf,tLower) ->
-                    let tUpper = maybe (flip addTime dt_eqf_peek) 
-                                    tLower (su_stable st) in
-                    if (tLower >= tUpper) then ln_update ln su else
-                    let (sf',tu') = eqshift eq s0 sf tLower tUpper in
-                    let su' = su { su_state = Just (sf',tu') } in
-                    tu' `seq` sf' `seq` 
-                    ln_update ln su'
-
-
--- eqshift initiates a pairwise comparison
-eqshift :: (a -> b -> Bool) -> Sig a -> Sig b -> T -> T -> (Sig b, T)
-eqshift eq as bs tLower tUpper =
-    assert (tLower < tUpper) $
-    let (a0,as') = s_sample as tLower in
-    let (b0,bs') = s_sample bs tLower in
-    let eqStart = maybeEq eq a0 b0 in
-    if eqStart 
-        then eqshift_i eq tLower tUpper a0 as' b0 bs' 
-        else (sf', tLower)
-
--- find first difference between signals?
--- at this point we know both s0 and sf are equal to 
--- sample at their heads. There might be more to
--- see, of course. 
-eqshift_i :: (a -> b -> Bool) -> T -> T 
-          -> Maybe a -> Sig a -> Maybe b -> Sig b 
-          -> (Sig b, T)
-eqshift_i eq tL tU a0 as b0 bs =
-    let (ma,as') = s_sample_d as tL tU in
-    let (mb,bs') = s_sample_d bs tL tU in
-    case (ma,mb) of
-        (Nothing, Nothing) -> (bs', tU) -- all done!
-        (Nothing, Just (tb,bf)) ->
-            let eqSamp = maybeEq eq a0 bf in
-            if eqSamp 
-                then eqshift_i eq tL tU a0 as' bf bs'
-                else (bs',tb)
-        (Just (ta,af), Nothing) -> 
-            let eqSamp = maybeEq eq af b0 in
-            if eqSamp 
-                then eqshift_i eq tL tU af as' b0 bs'
-                else (bs',ta)
-        (Just (ta,af), Just (tb,bf)) ->
-            case compare ta tb of
-                
-            
-maybeEq :: (a -> b -> Bool) -> (Maybe a -> Maybe b -> Bool)
-maybeEq _ Nothing Nothing = True
-maybeEq eq (Just x) (Just y) = eq x y
-maybeEq _ _ _ = False
 
 
 

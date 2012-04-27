@@ -53,6 +53,7 @@ Library
   hs-Source-Dirs: src
   Extensions:
   Build-Depends: base>4
+    ,parallel>3
     ,time
 
   Exposed-Modules:

@@ -1,5 +1,31 @@
 
 
+-- | BImpl has the implementation details for most of Sirea's
+-- concrete behaviors, mostly because I did not want them cluttering
+-- FRP.Sirea.Behavior (which is about documenting typeclasses).
+module FRP.Sirea.Internal.BImpl where
+
+
+-- TUNING (Could I make this configurable?)
+-- dt_eqf_peek: 
+--   (for bconst, badjeqf via beqshift)
+--
+--   The first update in a signal might not represent a real change.
+--   Delivering it as a change, however, might cause redundant eval
+--   later in the pipeline (e.g. when zipping values). Ideally find
+--   the first real change in signal and deliver that as the time of 
+--   signal state update. But discovering such a time potentially 
+--   needs infinite search. As compromise, I search bounded distance
+--   into future for change, relative to stability. Idea is that the
+--   computation doesn't run very far ahead of stability anyway, so
+--   pushing update ahead of stability is almost free. 
+dt_eqf_peek :: DT
+dt_eqf_peek = 3.0 -- seconds ahead of stability
+
+instance Category B where
+  id  = B_fwd
+  (.) = flip B_pipe
+
 
 
 
@@ -21,55 +47,6 @@
 
 
 
-bfirst   :: B x x' -> B (x :&: y) (x' :&: y)
-bsecond  :: B y y' -> B (x :&: y) (x :&: y')
-(***)    :: B x x' -> B y y' -> B (x :&: y) (x' :&: y')
-bswap    :: B (x :&: y) (y :&: x)
-bdup     :: B x (x :&: x)
-bfst     :: B (x :&: y) x
-bsnd     :: B (x :&: y) y
-bassoclp :: B (x :&: (y :&: z)) ((x :&: y) :&: z)
-bassocrp :: B ((x :&: y) :&: z) (x :&: (y :&: z))
-
-bleft    :: B x x' -> B (x :|: y) (x' :|: y)
-bright   :: B y y' -> B (x :|: y) (x :|: y')
-(+++)    :: B x x' -> B y y' -> B (x :|: y) (x' :|: y')
-bmirror  :: B (x :|: y) (y :|: x)
-bmerge   :: B (x :|: x) x
-binl     :: B x (x :|: y)
-binr     :: B y (x :|: y)
-bassocls :: B (x :|: (y :|: z)) ((x :|: y) :|: z)
-bassocrs :: B ((x :|: y) :|: z) (x :|: (y :|: z))
-
-bfwd = id
-
-bfirst = B_on_fst
-bsecond f = bswap >>> bfirst f >>> bswap 
-(***) f g = bfirst f >>> bsecond g
-bswap = B_swap
-bdup = B_dup
-bfst = B_fst
-bsnd = bswap >>> bfst
-bassoclp = B_asso_p
-bassocrp = bswap3 >>> bassoclp >>> bswap3
-
-bleft = B_on_lft
-bright f = bmirror >>> bleft f >>> bmirror
-(+++) f g = bleft f >>> bright g
-bmirror = B_mirror
-bmerge = B_merge
-binl = B_in_lft
-binr = binl >>> bmirror
-bassocls = B_asso_s
-bassocrs = bmirr3 >>> bassocls >>> bmirr3
-
--- bswap3 is utility for bassocrp
-bswap3 :: B ((x :&: y) :&: z) (z :&: (y :&: x))
-bswap3 = bfirst bswap >>> bswap
-
--- bmirror3 is utility for bassocrs
-bmirr3 :: B ((x :|: y) :|: z) (z :|: (y :|: x))
-bmirr3 = bleft bmirror >>> bmirror
 
 -- | Map an arbitrary Haskell function across an input signal.
 bfmap :: (a -> b) -> B (S p a) (S p b)
@@ -92,13 +69,7 @@ bconst c = B_mkLnk tr_fwd constLnk >>> beqshift alwaysEq
 bvoid :: B x y -> B x x
 bvoid b = bdup >>> bfirst b >>> bsnd 
 
--- | conjoin is a partial merge. 
-bconjoinl :: B ((x :&: y) :|: (x :&: z)) (x :&: (y :|: z))
-bconjoinr :: B ((x :&: z) :|: (y :&: z)) ((x :|: y) :&: z)
-bconjoinl = bdup >>> (isolateX *** isolateYZ) 
-   where isolateX = (bfst +++ bfst) >>> bmerge
-         isolateYZ = (bsnd +++ bsnd)
-bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
+
 
 -- | Disjoin will distribute a decision. To achieve disjoin involves 
 -- combining a signal representing a split with an external signal.
@@ -277,62 +248,17 @@ bUnsafeSplit = bUnsafeLnk $ MkLnk
     , ln_build = return . ln_split
     }
 
--- | bUnsafeLnk extends Sirea with primitive behaviors, FFI, foreign
--- services, legacy adapters, access to state and IO. Most primitive
--- behaviors that touch signals are implemented atop the same MkLnk
--- mechanism. bUnsafeLnk can be used safely, but it takes caution to
--- avoid violating RDP's declarative properties:
---
---   spatial commutativity - order of link creation or attach does
---     not affect program behavior.
---   spatial idempotence - if two links have equivalent demands at a
---     given time, they have equivalent response. Duplicate demands
---     do not cause any additional effect.
---   duration coupling - the activity of response is tightly coupled
---     to activity of demand. Signals cannot be created or destroyed
---     by the link, only transformed.
---   locally stateless - caches are allowed, but there should be no
---     `history` of a signal kept in the link itself; i.e. if the
---     link is destroyed and created fresh, it will recover the same
---     state it had before. State can be modeled as external to the
---     link (e.g. in a filesystem or database)
---   eventless - a signal with zero duration is never observed. If 
---     the link is updated multiple times at a given instant, only
---     the last update should have a lasting effect on system state.
---   
--- Further the developer must ensure that the created links properly
--- detach when the signal is in a final state (s_fini) so that the
--- behavior can be garbage collected. This is especially important
--- when using dynamic behaviors!
---
--- While delay is a normal part of RDP behavior, it is also critical
--- that it be accessible at compile time, so bUnsafeLnk must add no
--- delay to signals. Use bdelay instead. 
---
--- Complex signals entering bUnsafeLnk are implicitly synchronized.
---
--- Each instance of bUnsafeLnk results in construction of one link 
--- (via ln_build operation) when the Sirea behavior is started. Dead 
--- code from binl or binr would be an exception. The IO operation in
--- MkLnk is for intermediate caches and other preparation, not for
--- observable side-effects. The link only becomes active when the
--- signal is updated.
---
--- Hopefully a few useful libraries of behaviors can be built atop 
--- this to cover most common requirements safely.
-bUnsafeLnk :: MkLnk x y -> B x y
-bUnsafeLnk mklnk = bsynch >>> B_tshift xBarrier >>> B_mkLnk tr_unit mklnk
-    where xBarrier dts = 
-            let bNeedBarrier = ldt_minCurr dts /= ldt_maxCurr dts in
-            if ln_tsen mkLnk || bNeedBarrier
-                then flip lnd_fmap dts $ \ x -> x { ldt_curr = (ldt_goal x) }
-                else dts -- no change; all or nothing (for now)
 
 
 -- todo:
---   Sirea Context - might not be worth it (painful for user)
+--   Context - via Control.Make.
+--     will use an applicative behavior transformer.
+--     add tuning for partitions, bconst, badjeqf, bforce, bstrat
+--
+--   Sirea Context - might not be worth it
 --     tuning: max outstanding ops between threads
 --     initial partitions (if any) can be added
+--     behaviors in each thread
 --     can be used for multiple initial behaviors.
 --
 --   Should I attempt to support `periodic` actions?
@@ -341,6 +267,8 @@ bUnsafeLnk mklnk = bsynch >>> B_tshift xBarrier >>> B_mkLnk tr_unit mklnk
 --        without compromising computation of Sirea behaviors.
 --      Alternatively, this could be provided by the 
 --
+--   Maybe some sort of partition-local observable variables? (PVar?)
+--  
 --   Observable variables: (OVar y)
 --     some sort of externally managed observable variable
 --
