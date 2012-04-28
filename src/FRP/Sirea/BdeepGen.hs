@@ -31,7 +31,7 @@ deepThoughts =
     "                           " +\
     "This reads as `behavior on first second left second`. Note that" +\
     "the order of characters corresponds to the path of application." +\
-    "These are defined up to 5 deep, for a total 1340 functions. The" +\
+    "These are defined up to 5 deep, for a total 1364 functions. The" +\
     "shallow elements bonf (= bfirst), bons, bonl, bonr are included" +\
     "for consistency.           " +\
     "                           " +\
