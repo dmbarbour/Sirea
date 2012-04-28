@@ -1,4 +1,6 @@
 dist/
 tmp/
 *~
-
+*.hi
+*.o
+src/FRP/Sirea/BdeepGen
