@@ -169,7 +169,7 @@ s_ap sf sa = mkSig (f a) (ds_ap f a fs as)
 -- | zip two signals using a provided function. The resulting signal
 -- is active only when both inputs are active. 
 s_zip :: (a -> b -> c) -> Sig a -> Sig b -> Sig c
-s_zip fn = s_ap . s_fmap fn
+s_zip = s_full_zip . liftA2
 
 -- | Full zip applies a function across periods of inactivity, too.
 s_full_zip :: (Maybe a -> Maybe b -> Maybe c) -> Sig a -> Sig b -> Sig c
