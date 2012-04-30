@@ -181,7 +181,6 @@ ds_adjeqfx eq x ds = DSeq $ \ tq ->
             else DSNext tx x' (ds_adjeqfx eq x' ds')
 
 -- | apply elements of one sequence to another on matching times.
--- This can be a bit more efficient than zip, due to partial reuse.
 ds_ap :: (Ord t) => (x -> y) -> x -> DSeq t (x -> y) -> DSeq t x -> DSeq t y
 ds_ap f x fs xs = DSeq $ \ tq ->
     let uf = dstep fs tq in

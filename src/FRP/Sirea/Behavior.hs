@@ -12,7 +12,7 @@ module FRP.Sirea.Behavior
     , (>>>) -- from Control.Category
     , bfwd
     , BFmap(..)
-    , BProd(..), bsecond, bsnd, bassorcrp, (***), (&&&), bvoid
+    , BProd(..), bsecond, bsnd, bassocrp, (***), (&&&), bvoid
     , BSum(..), bright, binr, bassocrs, (+++), (|||), bskip
     , bconjoinl, bconjoinr
     , BDisjoin(..), bdisjoin'
@@ -25,7 +25,8 @@ module FRP.Sirea.Behavior
 
 import Prelude hiding (id,(.))
 import Control.Category
-import Control.Parallel.Strategies (Strategy, withStrategy)
+import Control.Parallel (pseq)
+import Control.Parallel.Strategies (Eval, runEval, rpar)
 
 import FRP.Sirea.Internal.STypes ((:&:),(:|:),S)
 import FRP.Sirea.Internal.BTypes (B)
@@ -85,10 +86,10 @@ class (Category b) => BFmap b where
 
     -- | bstrat applies a parallel strategy to a signal based on
     -- sampling. The essential idea is to initialize evaluation of
-    -- the next couple samples before the current one is processed.
-    -- This simple technique can achieve a respectable level of data
-    -- parallelism, control space overhead, avoid wasted sparks, and
-    -- minimize latency for the next observations.
+    -- the next sample when the current one is accessed. This simple
+    -- technique can achieve respectable levels of data parallelism. 
+    -- Since logical delay corresponds to physical delays, this also
+    -- controls space overhead and avoids wasted sparks.
     --
     -- Ignoring performance concerns, bstrat is a simple variation
     -- of bfmap. A parallel strategy is typically (x -> Eval x), but
@@ -96,7 +97,7 @@ class (Category b) => BFmap b where
     --
     -- See Control.Parallel.Strategies for more information. 
     bstrat :: (x -> Eval y) -> b (S p x) (S p y)
-    bstrat = bfmap . (runEval .)
+    bstrat = bfmap . (runEval .) -- same value; loses most parallelism
 
     -- | Types that can be tested for equality can be filtered to
     -- eliminate redundant updates. Redundant updates are common if
@@ -109,6 +110,19 @@ class (Category b) => BFmap b where
     badjeqf :: (Eq x) => b (S p x) (S p x)
     badjeqf = bfwd -- semantically
 
+-- | bspark will initiate computation of a signal's future value in 
+-- parallel when the current value is sampled. A useful technique is
+--
+-- >  import Control.DeepSeq
+-- >  bspark rnf -- reduce values to normal form.
+--
+-- This leverages both data parallelism and dataflow parallelism.
+-- Lazy thunks are computed in parallel, and the future values of a
+-- signal are computed in parallel with observing present values.
+--
+bspark :: (BFmap b) => (x -> ()) -> b (S p x) (S p x)
+bspark f = bstrat $ rpar . withSeq f
+    where withSeq f x = f x `pseq` x
 
 -- | BProd - data plumbing for asynchronous products. Asynchronous
 -- product (x :&: y) means that both signals are active for the same
@@ -154,8 +168,8 @@ bsecond f = bswap >>> bfirst f >>> bswap
 bsnd = bswap >>> bfst
 bassocrp = bswap3 >>> bassoclp >>> bswap3
 bswap3 = bfirst bswap >>> bswap
-(f *** g) = bfirst f >>> bsecond g
-(f &&& g) = bdup >>> (f *** g)
+(***) f g = bfirst f >>> bsecond g
+(&&&) f g = bdup >>> (f *** g)
 bvoid f = bdup >>> bfirst f >>> bsnd
 
 -- | BSum - data plumbing for asynchronous sums. Asynchronous sums
@@ -200,8 +214,8 @@ bskip    :: (BSum b) => b y x -> b x x
 bright f = bmirror >>> bleft f >>> bmirror
 binr = binl >>> bmirror
 bassocrs = bmirror3 >>> bassocls >>> bmirror3
-(f +++ g) = bleft f >>> bright g
-(f ||| g) = (f +++ g) >>> bmerge
+(+++) f g = bleft f >>> bright g
+(|||) f g = (f +++ g) >>> bmerge
 bmirror3 = bleft bmirror >>> bmirror
 bskip f = binr >>> bleft f >>> bmerge
 
@@ -261,7 +275,7 @@ bdisjoin' = dupChoiceSig >>> bdisjoin >>> rotChoiceSig
 --
 -- At least one of bzip or bzap must be defined.
 --
-class (BProd b, BFmap) => BZip b where
+class (BProd b, BFmap b) => BZip b where
     -- | bzip is a traditional zip, albeit between signals.
     bzip :: b (S p x :&: S p y) (S p (x,y))
     bzip = bzipWith (,)
@@ -381,20 +395,47 @@ class (BEmbed b b', Behavior b, Behavior b') => BDynamic b b' where
     -- If the dynamic behavior would take more than DT time, or has
     -- other static problems, failure is returned immediately via
     -- the left output signal (failure :|: result).
-    beval :: DT -> b (S p (b' (S p x) (S p y)) :&: S p x)
+    beval :: DT -> b (S p (b' (S p x) (S p y)) 
+                          :&: (S p x)         )
                      (S p () :|: S p y)
 
+{- I'll eventually want higher arities for asynchronous parameters 
+   to achieve higher stability for the beval operation. 
+    -- | evaluate with two asynchronous arguments, one result.
+    beval2to1 :: DT -> b (S p (b' (S p x :&: S p y) (S p z)) 
+                              :&: (S p x :&: S p y)         )
+                         (S p () :|: S p z)
+-}
+
+-- | DYNAMIC BEHAVIORS
+--
+-- RDP behaviors may be first-class, which enables Object Oriented
+-- styles of programming, and object capability model approaches to
+-- security. This is represented by having signals carry behaviors
+-- (which looks in Haskell's type system like 'S p (B x y)'). Small
+-- behaviors can be composed into complex applications then invoked
+-- with beval or bexec.
+--
+-- Unlike OO styles, or even FRP switches, first-class behaviors in
+-- RDP cannot be stored. They are volatile, implicitly revoked after
+-- you stop sharing them. This is a valuable property for security,
+-- safety, resource management (including GC), and live programming.
+-- 
+
+
+
 -- Note: I probably need several more variations of beval:
---  more than one input and output
---  access to `choice` for some of those inputs and outputs.
+--  more asynchronous inputs and outputs (how many? 3? 4?)
+--  support for sums on inputs and outputs.
+-- But these are all performance options. For now, just get it working!
 
 -- | BEmbed - embed (or lift) behaviors. 
 class BEmbed b b' where
     bembed :: b' x y -> b x y
 
-
 -- convenience operators?
 --  operations on (x :&: (y :&: (z :& ...
+--  folds? max-length, dynamic, etc. (x :&: (x :&: (x ...
 --  maybe a dedicated module, `BStack`. 
 --  could be useful, but somewhat limited
 -- Some Forth-inspired operators might be neat, treating this as a
@@ -431,6 +472,30 @@ class BEmbed b b' where
 "bsecond.bfirst" forall f g .
                 (bsecond f) . (bfirst g) = (bfirst g) . (bsecond f)
  #-}
+
+---------------------------
+-- Concrete Instances: B --
+---------------------------
+
+-- TUNING (Could I make this configurable?)
+-- dt_eqf_peek: 
+--   (for bconst, badjeqf via beqshift)
+--
+--   The first update in a signal might not represent a real change.
+--   Delivering it as a change, however, might cause redundant eval
+--   later in the pipeline (e.g. when zipping values). Ideally find
+--   the first real change in signal and deliver that as the time of 
+--   signal state update. But discovering such a time potentially 
+--   needs infinite search. As compromise, I search bounded distance
+--   into future for change, relative to stability. Idea is that the
+--   computation doesn't run very far ahead of stability anyway, so
+--   pushing update ahead of stability is almost free. 
+dt_eqf_peek :: DT
+dt_eqf_peek = 3.0 -- seconds ahead of stability
+
+
+
+
 
 
 
