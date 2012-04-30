@@ -3,24 +3,13 @@
 -- | BImpl has the implementation details for most of Sirea's
 -- concrete behaviors, mostly because I did not want them cluttering
 -- FRP.Sirea.Behavior (which is about documenting typeclasses).
-module FRP.Sirea.Internal.BImpl where
+module FRP.Sirea.Internal.BImpl
+    ( 
+    ) where
 
 
--- TUNING (Could I make this configurable?)
--- dt_eqf_peek: 
---   (for bconst, badjeqf via beqshift)
---
---   The first update in a signal might not represent a real change.
---   Delivering it as a change, however, might cause redundant eval
---   later in the pipeline (e.g. when zipping values). Ideally find
---   the first real change in signal and deliver that as the time of 
---   signal state update. But discovering such a time potentially 
---   needs infinite search. As compromise, I search bounded distance
---   into future for change, relative to stability. Idea is that the
---   computation doesn't run very far ahead of stability anyway, so
---   pushing update ahead of stability is almost free. 
-dt_eqf_peek :: DT
-dt_eqf_peek = 3.0 -- seconds ahead of stability
+import FRP.Sirea.Internal.BTypes
+
 
 instance Category B where
   id  = B_fwd
@@ -29,21 +18,6 @@ instance Category B where
 
 
 
-
--- | DYNAMIC BEHAVIORS
---
--- RDP behaviors may be first-class, which enables Object Oriented
--- styles of programming, and object capability model approaches to
--- security. This is represented by having signals carry behaviors
--- (which looks in Haskell's type system like 'S p (B x y)'). Small
--- behaviors can be composed into complex applications then invoked
--- with beval or bexec.
---
--- Unlike OO styles, or even FRP switches, first-class behaviors in
--- RDP cannot be stored. They are volatile, implicitly revoked after
--- you stop sharing them. This is a valuable property for security,
--- safety, resource management (including GC), and live programming.
--- 
 
 
 
