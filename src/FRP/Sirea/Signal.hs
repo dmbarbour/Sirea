@@ -27,6 +27,7 @@ module FRP.Sirea.Signal
  , s_never, s_always
  , s_const 
  , s_fmap, s_full_map
+ , s_ap
  , s_zip, s_full_zip
  , s_mask
  , s_merge
@@ -157,21 +158,26 @@ s_full_map f s0 = mkSig y ys
     where y = f (s_head s0)
           ys = ds_map f (s_tail s0)
 
+-- | Ap applies one signal to another. 
+s_ap :: Sig (a -> b) -> Sig a -> Sig b
+s_ap sf sa = mkSig (f a) (ds_ap f a fs as)
+    where f  = (s_head sf <*>)
+          fs = ds_map (<*>) (s_tail sf)
+          a  = s_head sa
+          as = s_tail sa
+
 -- | zip two signals using a provided function. The resulting signal
 -- is active only when both inputs are active. 
 s_zip :: (a -> b -> c) -> Sig a -> Sig b -> Sig c
-s_zip = s_full_zip . liftA2
+s_zip fn = s_ap . s_fmap fn
 
 -- | Full zip applies a function across periods of inactivity, too.
 s_full_zip :: (Maybe a -> Maybe b -> Maybe c) -> Sig a -> Sig b -> Sig c
-s_full_zip jf sa sb =
-    let a  = s_head sa in
-    let b  = s_head sb in
-    let as = s_tail sa in
-    let bs = s_tail sb in
-    let c  = jf a b in
-    let cs = ds_zip jf a b as bs in 
-    mkSig c cs
+s_full_zip jf sa sb = mkSig (f b) (ds_ap f b fs bs)
+    where f  = jf (s_head sa)
+          fs = ds_map jf (s_tail sa)
+          b  = s_head sb
+          bs = s_tail sb
 
 -- | Mask one signal with the activity profile of another. That is,
 -- the resulting signal is only active when both input signals are
@@ -328,7 +334,7 @@ instance Functor Sig where
 
 instance Applicative Sig where
     pure  = s_always
-    (<*>) = s_zip ($)
+    (<*>) = s_ap
     (<*)  = s_mask
     (*>)  = flip s_mask
 
