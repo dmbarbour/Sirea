@@ -27,7 +27,7 @@ module FRP.Sirea.DiscreteTimedSeq
     , ds_filter
     , ds_adjeqfx
     , ds_adjn0, ds_adjn1
-    , ds_zip
+    , ds_ap
     , ds_merge 
     , ds_mask0, ds_mask1
     ) where
@@ -180,32 +180,31 @@ ds_adjeqfx eq x ds = DSeq $ \ tq ->
             then dstep (ds_adjeqfx eq x ds') tq
             else DSNext tx x' (ds_adjeqfx eq x' ds')
 
-
--- | zip two temporal signals, with given initial values
-ds_zip :: (Ord t) => (a -> b -> c) -> a -> b 
-                  -> DSeq t a -> DSeq t b -> DSeq t c
-ds_zip jf x y xs ys = DSeq $ \ tq ->
+-- | apply elements of one sequence to another on matching times.
+-- This can be a bit more efficient than zip, due to partial reuse.
+ds_ap :: (Ord t) => (x -> y) -> x -> DSeq t (x -> y) -> DSeq t x -> DSeq t y
+ds_ap f x fs xs = DSeq $ \ tq ->
+    let uf = dstep fs tq in
     let ux = dstep xs tq in
-    let uy = dstep ys tq in
-    ds_zip_step jf x y ux uy
+    ds_ap_step f x uf ux
 
--- ds_zip_step is an internal function.
-ds_zip_step :: (Ord t) => (a -> b -> c) -> a -> b 
-            -> DStep t a -> DStep t b -> DStep t c
-ds_zip_step jf _ y ux DSDone = ds_map_step (\ x -> jf x y) ux
-ds_zip_step jf x _ DSDone uy = ds_map_step (\ y -> jf x y) uy
-ds_zip_step jf x y (DSWait xs) (DSWait ys) = DSWait (ds_zip jf x y xs ys)
-ds_zip_step jf _ y (DSNext tx x' xs') (DSWait ys) = 
-    DSNext tx (jf x' y) (ds_zip jf x' y xs' ys)
-ds_zip_step jf x _ (DSWait xs) (DSNext ty y' ys') = 
-    DSNext ty (jf x y') (ds_zip jf x y' xs ys')
-ds_zip_step jf x y (DSNext tx x' xs') (DSNext ty y' ys') =
-    case (compare tx ty) of
-        LT -> DSNext tx (jf x' y ) (ds_zip jf x' y  xs' ys )
-        EQ -> DSNext tx (jf x' y') (ds_zip jf x' y' xs' ys')
-        GT -> DSNext ty (jf x  y') (ds_zip jf x  y' xs  ys')
-    where xs = ds_first tx x' xs'
-          ys = ds_first ty y' ys'
+-- internal operation for ds_ap
+ds_ap_step :: (Ord t) => (x -> y) -> x 
+                      -> DStep t (x -> y) -> DStep t x -> DStep t y
+ds_ap_step _ x uf DSDone = ds_map_step ($ x) uf
+ds_ap_step f _ DSDone ux = ds_map_step f ux
+ds_ap_step f x (DSWait fs) (DSWait xs) = DSWait (ds_ap f x fs xs)
+ds_ap_step _ x (DSNext tf f' fs') (DSWait xs) =
+    DSNext tf (f' x) (ds_ap f' x fs' xs)
+ds_ap_step f _ (DSWait fs) (DSNext tx x' xs') =
+    DSNext tx (f x') (ds_ap f x' fs xs')
+ds_ap_step f x (DSNext tf f' fs') (DSNext tx x' xs') =
+    case compare tf tx of
+        LT -> DSNext tf (f' x ) (ds_ap f' x  fs' xs )
+        EQ -> DSNext tf (f' x') (ds_ap f' x' fs' xs')
+        GT -> DSNext tx (f  x') (ds_ap f  x' fs  xs')
+    where fs = ds_first tf f' fs'
+          xs = ds_first tx x' xs'
 
 -- | ds_merge treats the sequences as signals, and combines two
 -- signals favoring the RHS while active. This is basically a

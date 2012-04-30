@@ -16,9 +16,9 @@ module FRP.Sirea.Behavior
     , BSum(..), bright, binr, bassocrs, (+++), (|||), bskip
     , bconjoinl, bconjoinr
     , BDisjoin(..), bdisjoin'
-    , BZip(..), BSplit(..)
-    , bsplit
-    , bdelay, bsynch, bdelbar
+    , BZip(..), bzipWith, bunzip
+    , BSplit(..), bsplitWith, bunsplit
+    , BTemporal(..), BPeek(..)
     -- , bcross, bscope - see FRP.Sirea.Partition
     -- , bUnsafeLnk - see FRP.Sirea.Link
     ) where
@@ -122,8 +122,7 @@ class (Category b) => BFmap b where
 --     bassoclp - products are associative (move parens left)
 --
 -- The above operations should be free at runtime. A few operations 
--- are defined based on the above, leveraging bswap liberally, which
--- should also be free at runtime. 
+-- are defined based on the above. 
 --
 --     bsecond - operate on second signal
 --     bsnd - keep second signal, drop first
@@ -148,8 +147,8 @@ bsnd     :: (BProd b) => b (x :&: y) y
 bassocrp :: (BProd b) => b ((x :&: y) :&: z) (x :&: (y :&: z))
 (***)    :: (BProd b) => b x x' -> b y y' -> b (x :&: y) (x' :&: y')
 (&&&)    :: (BProd b) => b x y  -> b x z  -> b x (y :&: z)
-bvoid    :: (BProd b) => b x y  -> b x x
 bswap3   :: (BProd b) => b ((x :&: y) :&: z) (z :&: (y :&: x))
+bvoid    :: (BProd b) => b x y  -> b x x
 
 bsecond f = bswap >>> bfirst f >>> bswap
 bsnd = bswap >>> bfst
@@ -161,10 +160,10 @@ bvoid f = bdup >>> bfirst f >>> bsnd
 
 -- | BSum - data plumbing for asynchronous sums. Asynchronous sums
 -- (x :|: y) means that x and y are active for different durations
--- and different times (modulo overlap due to variations in delay). 
+-- and times, but may overlap slightly due to variation in delay. 
 -- Sums model conditional expressions in RDP, and can work well at
--- smaller scales. If there are a large number of choices, BDynamic
--- may offer better performance.
+-- smaller scales. If there are a large number of rare choices, or
+-- an unbounded number of choices, BDynamic should be favored.
 --
 --     bleft - apply behavior only to left path.
 --     bmerge - combine elements of a sum (implicit synch)
@@ -222,65 +221,79 @@ bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
 --
 -- Unfortunately, disjoin is neither generic nor dual to conjoin.
 -- This seems unavoidable due to potential for partitioning and the
--- need to communicate between partitions. A more generic variation
--- might be built atop bdisjoin with type or template programming.
+-- need to communicate between partitions. 
+--
+-- Due to lack of generic disjoin, a structural discipline can be
+-- used to rapidly disjoin multiple elements. See 
 --
 -- In some cases it may be more convenient to use intermediate state
 -- rather than disjoin. Disjoin is necessary to model lexical scope
 -- without shared state.
 --
 class (BSum b, BProd b) => BDisjoin b where
-    -- | bdisjoin0 combines a signal representing the current choice
+    -- | bdisjoinl combines a signal representing the current choice
     -- (S p ()) and a signal representing available data (S p x) in
     -- the same partition `p`. This splits the external data.
     bdisjoin  :: b (S p x :&: ((S p () :&: y) :|: z) )
                    ( (S p x :&: y) :|: (S p x :&: z) )
 
 -- | bdisjoin' preserves the choice signal to support further disjoin.
-bdisjoin' :: b (S p x :&: ((S p () :&: y) :|: z))
-               ((S p () :&: S p x :&: y) :|: (S p x :&: z))
+bdisjoin' :: (BDisjoin b) => b (S p x :&: ((S p () :&: y) :|: z))
+                               ((S p () :&: S p x :&: y) :|: (S p x :&: z))
 bdisjoin' = dupChoiceSig >>> bdisjoin >>> rotChoiceSig
-    where on_y = bsecond . bleft
-          dupChoiceSig = (bsecond . bleft) $ bfirst bdup >>> bassocrp
-          rotChoiceSig = (bleft) $ bassoclp >>> bfirst bswap >>> bassocrp
+    where dupChoiceSig = (bsecond . bleft) $ bfirst bdup >>> bassocrp
+          rotChoiceSig = bleft $ bassoclp >>> bfirst bswap >>> bassocrp
 
--- A more generic version of bdisjoin might look like:
---   bdisjoin b (x :&: ((Blank x :&: y) :|: z) ((x :&: y) :|: (x :&: z))
--- Where Blank (S p x) = (S p ())
---       Blank (x :&: y) = (Blank x :&: Blank y)
---       Blank (x :|: y) = (Blank x :|: Blank y)
---   And I have some generic way to:
---       mask x with Blank x
---       invert Blank x
--- But to actually make it useful would require similar mechanisms
--- for building `bcross` behaviors.
---
--- Alternatively, I could create a series of bdisjoin ops based on
--- a stack-structure for elements. ((x :|: y) :&: (k1 :&: (k2 :&: (k3 ...
+-- now what I need is to systematically split a stack.
+-- and maybe a way to split a split?  some distribution mechanic would be nice:
+--    ((a :|: b) :&: (c :|: d)) -> 
+--       ((a :&: c) :|: (a :&: d) :|: (b :&: c) :|: (b :&: d)) 
+--    probably would need conjoin to make that work.
+-- I think a language for RDP dataflow between partitions 
+-- will need some auto-wiring mechanisms...
+
 
 
 -- | BZip is a behavior for combining elements of an asynchronous 
 -- product. The main purpose is to combine them to apply a Haskell
 -- function. The arguments must already be in the same partition to
 -- zip them. The signals are implicitly synchronized.
--- 
--- Only one of bzip or bzipWith need to be defined.
-class (BProd b) => BZip b where
+--
+-- At least one of bzip or bzap must be defined.
+--
+class (BProd b, BFmap) => BZip b where
+    -- | bzip is a traditional zip, albeit between signals.
     bzip :: b (S p x :&: S p y) (S p (x,y))
+    bzip = bzipWith (,)
+    
+    -- | bzap describes an applicative structure. It applies a
+    -- function while zipping the two signals. Usefully, this can
+    -- support some partial reuse optimizations if the left element
+    -- changes slower than the right element.
+    bzap :: b (S p (x -> y) :&: S p x) (S p y)
+    bzap = bzip >>> bfmap (uncurry ($))
 
--- | A common pattern is to zip with a function.
-bzipWith :: (BZip b, BFmap b) => (x -> y -> z) -> b (S p x :&: S p y) (S p z)
-bzipWith = bzip >>> bfmap (uncurry f)
+-- | A common pattern - zip with a particular function.
+bzipWith :: (BZip b) => (x -> y -> z) -> b (S p x :&: S p y) (S p z)
+bzipWith fn = bfirst (bfmap fn) >>> bzap
+
+-- | unzip is included for completeness. 
+bunzip :: (BProd b, BFmap b) => b (S p (x,y)) (S p x :&: S p y)
+bunzip = (bfmap fst &&& bfmap snd)
 
 -- | BSplit is how we lift decisions from data to control. It is the
 -- RDP equivalent to `if then else` expressions, except bdisjoin is
 -- necessary to apply the split to any parameters. 
-class (BSum b) => BSplit b where
+class (BSum b, BFmap b) => BSplit b where
     bsplit :: b (S p (Either x y)) (S p x :|: S p y)
 
--- | Most splits are performed based on an immediate prior function.
-bsplitWith :: (BSum b, BFmap b) => (x -> Either y z) -> b (S p x) (S p y :|: S p z)
-bsplitWith f = bfmap f >>> bsplit 
+-- | bsplitWith is included to dual zip, and might be useful.
+bsplitWith :: (BSplit b) => (x -> Either y z) -> b (S p x) (S p y :|: S p z)
+bsplitWith fn = bfmap fn >>> bsplit
+
+-- | unsplit is included for completeness.
+bunsplit :: (BSum b, BFmap b) => b (S p x :|: S p y) (S p (Either x y))
+bunsplit = (bfmap Left ||| bfmap Right)
 
 -- | BTemporal - operations for orchestrating signals in time.
 -- (For spatial orchestration, see FRP.Sirea.Partition.)
