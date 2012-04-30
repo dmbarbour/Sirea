@@ -5,6 +5,10 @@ module Main where
 
 import Control.Exception (assert)
 
+depth :: Int
+depth = 5
+
+
 infixr 4 +\
 (+\) :: String -> String -> String
 hd +\ tl = hd ++ "\n-- " ++ tl
@@ -55,8 +59,8 @@ deepThoughts =
     "coupling constraints. These are also defined up to 5 depth, for " +\
     "total 62 functions.       " +\
     "                          " +\
-    "The dual to bx* is also provided, just for completeness. This is " +\
-    "another 60 functions for injection - `binlr` is `binl >>> binr`." +\
+    "The dual to bx* is also provided, for dual completeness. This is" +\
+    "another 60 functions for injection - `binlr` is `binl <<< binr`." +\
     "These might be useful if a behavior is a big switch, but that may " +\
     "be an anti-pattern (better to use a lot of small behaviors)." +\
     "                           " +\
@@ -99,15 +103,17 @@ chunksOf _ [] = []
 chunksOf n xs = assert (n > 0) $ (take n xs):(chunksOf n $ drop n xs)
 
 deepAppFunctions, deepExtractFunctions, deepInjectFunctions, allFunctions :: [String]
-deepAppFunctions = map ("bon"++)    $ allCombosUpToSize 5 "fslr"
-deepExtractFunctions = map ("bx"++) $ allCombosUpToSize 5 "fs"
-deepInjectFunctions = map ("bin"++) $ allCombosUpToSize 5 "lr"
+deepAppFunctions = map ("bon"++)    $ allCombosUpToSize depth "fslr"
+deepExtractFunctions = map ("bx"++) $ allCombosUpToSize depth "fs"
+deepInjectFunctions = map ("bin"++) $ allCombosUpToSize depth "lr"
 allFunctions = deepExtractFunctions ++ deepInjectFunctions ++ deepAppFunctions
 
 deepHeader = 
+    "{-# LANGUAGE TypeOperators #-} \n" ++
     "module FRP.Sirea.Bdeep \n" ++
     "    ( " ++ listFunctions ++ "\n" ++
     "    ) where \n" ++ 
+    "import Control.Category ((<<<))\n" ++
     "import FRP.Sirea.Behavior \n\n"
     where separated sep xs = foldl (\ln s -> ln ++ sep ++ s) (head xs) (tail xs) 
           listFunctions = 
@@ -128,9 +134,24 @@ buildFn ('b':'i':'n':lr) = binBody lr
 buildFn ('b':'x':fs) = bxBody fs
 buildFn s = error $ "unknown function: " ++ s
 
-bonType fslr = "bon" ++ fslr ++ " :: b e e' -> b " ++ stype fslr "e " ++ " " ++ stype fslr "e'"
-binType lr = "bin" ++ lr ++ " :: b e " ++ stype lr "e "
-bxType fs = "bx" ++ fs ++ " :: b " ++ stype fs "e " ++ " e"
+bonType fslr = "bon" ++ fslr ++ " :: " ++ genClass ++ " b e e' -> b " ++ stype fslr "e " ++ " " ++ stype fslr "e'"
+    where genClass = bonClass False False fslr
+binType lr = "bin" ++ lr ++ " :: (BSum b) => b e " ++ stype lr "e "
+bxType fs = "bx" ++ fs ++ " :: (BProd b) => b " ++ stype fs "e " ++ " e"
+
+bonClass :: Bool -> Bool -> String -> String
+bonClass bfs blr [] = 
+    if (bfs && blr) then "(BProd b, BSum b) =>"
+    else if(bfs) then "(BProd b) =>"
+    else if(blr) then "(BSum b) =>"
+    else error "illegal path"
+bonClass bfs blr ('f':path) = bonClass True blr path
+bonClass bfs blr ('s':path) = bonClass True blr path
+bonClass bfs blr ('l':path) = bonClass bfs True path
+bonClass bfs blr ('r':path) = bonClass bfs True path
+bonClass _ _ _ = error "illegal signal type"
+
+
 
 bonBody "f" = "bonf = bfirst  -- for consistent naming"
 bonBody "s" = "bons = bsecond -- for consistent naming"
@@ -140,7 +161,7 @@ bonBody s@(x:xs) = "bon" ++ s ++ " = bon" ++ [x] ++ " . bon" ++ xs
 
 binBody "l" = "-- binl already defined in FRP.Sirea.Behavior."
 binBody "r" = "-- binr already defined in FRP.Sirea.Behavior."
-binBody s@(x:xs) = "bin" ++ s ++ " = bin" ++ [x] ++ " >>> bin" ++ xs
+binBody s@(x:xs) = "bin" ++ s ++ " = bin" ++ [x] ++ " <<< bin" ++ xs
 
 bxBody "f"  = "bxf = bfst     -- for consistent naming"
 bxBody "s"  = "bxs = bsnd     -- for consistent naming"
