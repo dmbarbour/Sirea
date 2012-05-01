@@ -117,7 +117,7 @@ deepHeader =
     "import FRP.Sirea.Behavior \n\n"
     where separated sep xs = foldl (\ln s -> ln ++ sep ++ s) (head xs) (tail xs) 
           listFunctions = 
-            let namesPerLine = chunksOf 6 (deepExtractFunctions ++ deepAppFunctions) in 
+            let namesPerLine = chunksOf 6 allFunctions in 
             let linesOfNames = map (separated ", ") namesPerLine in
             separated "\n    , " linesOfNames
 
