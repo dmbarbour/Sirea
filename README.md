@@ -216,13 +216,21 @@ Also, while Sirea ensures snapshot consistency between partitions, there is stil
 
 ### Temporal Behavior
 
-TODO
-    bsynch :: B x x 
+If behaviors were pure, we could pretend they were instantaneous. But effects make timing very relevant. We cannot perform an effect based on a value that is still being calculated earlier in the pipeline, or that must be communicated from a distant partition. So RDP models simple, static delays for communication and computation. Delays are important for consistency, to protect against *straggling* updates (updates that arrive too late). Delay is also useful to control feedback when interacting with shared state.
+
+There are three primitive temporal behaviors:
+
     bdelay :: DT -> B x x
-Why would you model delay? (consistency; state anomalies in a pipeline)
-How much delay?
+    bsynch :: B x x
+    bpeek  :: DT -> B (S p x) (S p (Either x ()))
 
+The `bdelay` behavior will add a constant delay to every concrete signal in `x`. In general, developers should add a small delay after any expensive operation based on a rough estimate, except for `bcross` and other operations that can be responsible for their own delay values. Sirea provides a simple _delay aggregation_ optimization so a lot of small delays can often be applied as one big delay just before time-sensitive effects. By adding delay, a straggling update might no longer be straggling, or even arrive slightly ahead of time (thus providing slack for concurrent operations or underestimates later in the pipeline). 
 
+The slack is more important than the accuracy of delay estimates. Developers only need to get delays in the right ballpark - low enough to meet latency constraints, high enough that updates aren't straggling too badly. Many problem domains can even tolerate straggling updates, depending instead on Sirea's snapshot consistency between partitions or eventual consistency.
+
+The `bsynch` behavior will logically synchronize signals. Different branches of `(x :&: y)` or `(x :|: y)` tend to accummulate different amounts of delay, which is why they are called asynchronous products and sums. Use of `bsynch` will add delay to each concrete signal that would arrive earlier than the highest latency branch, such that the delays are equal on every branch. This works even across partitions, though the extent to which logical synchronization corresponds to physical synchronization is subject to whimsy of schedulers or clocks. It is best to have a little slack in the model to buffer effects ahead of time (sound or video or animation).
+
+The `bpeek` behavior allows developers to peek a small distance into the future, to *anticipate* future demands, or to compare the future against the present to detect changes (without accumulating state). The result is either a future value or an indication that the signal will be inactive at that time in the future. Use of `bpeek` tends to sacrifice stability to improve latency, but is explicit about it and thus more readily constrained to problems that can tolerate straggling updates. Typically use of `bsplit` is applied after `bpeek`.
 
 ### Dynamic Behavior
 
@@ -271,9 +279,58 @@ The `ln_build` operation is executed when the behavior is first built. The behav
 
 Sirea clients can add new primitive behaviors via `bUnsafeLnk`, but must be cautious to avoid breaking RDP abstractions. Clients should be able to adapt most new resources using simple combinations of existing behaviors.
 
-Declarative Effects and Concurrency
------------------------------------
+Declarative Effects and Concurrency in RDP
+------------------------------------------
 
-TODO
+RDP is effectful, but is limited to *declarative effects* - by which I mean effects that are (at any given logical instant, i.e. *spatially*) commutative and idempotent, and that hold over for non-zero periods of time. Declarative effects offer many of the reasoning and refactoring benefits associated with pure code: expressions can easily be rearranged, duplicate expressions can be eliminated, or duplicates can be introduced so overlapping subprograms can be abstracted. 
+
+RDP is not the only paradigm with declarative effects. If you are unfamiliar with [Temporal Logic](http://www.eecs.berkeley.edu/Pubs/TechRpts/2009/EECS-2009-173.html), [Event Calculus](http://en.wikipedia.org/wiki/Event_calculus), [Synchronous Programming](http://en.wikipedia.org/wiki/Synchronous_programming_language), or [Concurrent constraint programming](http://en.wikipedia.org/wiki/Concurrent_constraint_logic_programming) then I do recommend researching some of those techniques to broaden your horizons. The [Berkeley Orders Of Magnitude](http://boom.cs.berkeley.edu/) project is making good use of temporal logic for similar reasons that RDP focuses on declarative effects - for scalability to distributed systems, and to simplify reasoning. 
+
+Due to the prevalence of message-passing concurrency, a common misconception is that concurrency is incompatible with synchronous behaviour. But concurrency just means that computations overlap in time in a semantically relevant way - i.e. they interact with each other. RDP behaviors interact by influencing and observing shared services and resources, including shared state.
+
+RDP differs from other declarative effects models in the following aspects:
+
+* RDP is *continuous* in time, rather than discrete time. Sirea models only discrete-varying behaviors, and actually uses a fixpoint representation of time (with nanosecond precision), but treats time as continuous with respect to semantics and logic.
+* RDP is *internally stateless*. State is regressed to the edges of the system, to external resources like databases. This is an important property for runtime upgrades, live programming, and resilience. It also simplifies orthogonal persistence.
+* RDP is uniformly *bidirectional*. Observable resources are aware of observers, and may be influenced by them. This is useful for robust resource management, e.g. activating services only when they are needed, and deactivating services that are no longer necessary. 
+* RDP enforces a *duration coupling* constraint. This ensures that behaviors, and effects they control, can be halted. This is important for process control and security in distributed systems. Unlike mobile computing, it is easy to ensure an RDP application will never escape its human administrators.
+* RDP is *open*. An application may be extended at runtime (via dynamic behavior) with access to new services and resources. RDP uses a universal time model to ensure behaviors compose properly in open systems. Resources and services are external and might be influenced or observed by parties outside local control.
+* RDP is *securable*, via [capability](n.wikipedia.org/wiki/Capability-based_security) patterns. Behaviors provide access and authority to specific external resources or services. There is no implicit data space like in traditional logic programming. [Ambient authority](http://en.wikipedia.org/wiki/Ambient_authority) can be eliminated, and securely emulated with context objects providing behaviors.
+
+Between *declarative effects* and RDP's own unique properties, developers will need new idioms for problems that might have been trivial in imperative code. Consider imperative state manipulation: `(x := x + 1)`. If we tried to hold this effect over continuous time, over one millisecond say, would it mean we increment once? or a million times for a million nanoseconds? or infinite times? A developer would instead need to express an effect of the form `(x := x + 1 with 60ms cooldown)` to account for how an effect applies over time. (See the section on _Declarative State Models for RDP_, below.)
+
+OTOH, many RDP features or patterns would be difficult to express in imperative code. RDP is not *less* expressive than imperative, but is *differently* expressive.
+
+Effects in RDP are controlled by input signals to effectful behaviors. These signals are called *demands* in a similar sense that messages intended to cause effects are often called *commands*. But where commands are processed one at a time, demands that hold at any given time are processed simultaneously - as a set. Consider the earlier example for controlling a camera:
+
+    bcamctl   :: B (S p PanTiltZoom) (S p ())
+
+This behavior receives a PanTiltZoom signal that might control actuator efforts or provide a carrot for end-goal positions (depending on how PanTiltZoom is specified). But the same behavior could be invoked from multiple locations in an RDP behavior (possibly from multiple applications), resulting in simultaneous PanTiltZoom demands on the actuators. In many cases those demands will be compatible such as `pan left` and `zoom in` simultaneously. 
+
+However, RDP provides no guarantee that demands are conflict free. It is possible to express systems that demand `pan left` and `pan right` on the same camera at the same time. Similar can be expressed in message passing systems, of course, and an implicit, indeterministic race would determine which command wins. For RDP, there are no implicit races. There is only a set of demands. Resolution must be continuous, commutative, idempotent - declarative. *But resolution may still be arbitrary.* For example:
+
+* take no action, report conflicts via another behavior
+* favor inertia, whichever direction the camera is already moving
+* combine as new behavior, e.g. pan left, pan right, repeat
+* favor left arbitrarily because it is lower in lexicographic order
+
+The holistic, set-based view of simultaneous demands will also force developers to confront the issue of conflicts early in their designs. Developers can aim to avoid conflicts before they happen - e.g. control distribution of the `bcamctl` behavior, or express camera commands in terms of weighted constraints. Between avoiding conflicts early in design and resolving them with holistic intelligence (able to resolve many concurrent demands at once), RDP *should* more readily support open, pluggable, extensible programs than many other paradigms - though I've yet to verify this property.
+
+_Note:_ Where possible, developers should design for stateless, deterministic resolution of conflicts (even if arbitrary). Avoiding non-essential state is valuable for resilience, and avoiding indeterminism is valuable for validation and robustness. Indeterminism and state both add to a system's complexity. 
+
+### Anticipation and Idempotence
+
+### Metacircular Dynamic
+
+No floor, no ceiling. RDP applications, including linking of effectful behaviors and linking, can always be understood as dynamic behaviors in yet a lower level RDP application.
+
+### Declarative State for RDP
+
+### Stateless Stable Models for RDP
+
+### Modeling Control Flow and Traditional Asynchrony in RDP
+
+### Modeling Incremental and Batch Processing in RDP
+
 
 

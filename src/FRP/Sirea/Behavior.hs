@@ -13,7 +13,7 @@ module FRP.Sirea.Behavior
     , bfwd
     , BFmap(..)
     , BProd(..), bsecond, bsnd, bassocrp, (***), (&&&), bvoid
-    , BSum(..), bright, binr, bassocrs, (+++), (|||), bskip
+    , BSum(..), bright, binr, bassocrs, (+++), (|||), bskip 
     , bconjoinl, bconjoinr
     , BDisjoin(..), bdisjoin'
     , BZip(..), bzipWith, bunzip
@@ -172,6 +172,9 @@ bswap3 = bfirst bswap >>> bswap
 (&&&) f g = bdup >>> (f *** g)
 bvoid f = bdup >>> bfirst f >>> bsnd
 
+-- staticSelect :: (BProd b) => Bool -> b (x :&: x) x
+-- staticSelect choice = if choice then bfst else bsnd
+
 -- | BSum - data plumbing for asynchronous sums. Asynchronous sums
 -- (x :|: y) means that x and y are active for different durations
 -- and times, but may overlap slightly due to variation in delay. 
@@ -218,6 +221,9 @@ bassocrs = bmirror3 >>> bassocls >>> bmirror3
 (|||) f g = (f +++ g) >>> bmerge
 bmirror3 = bleft bmirror >>> bmirror
 bskip f = binr >>> bleft f >>> bmerge
+
+-- staticSwitch :: (BSum b) => Bool -> b x (x :|: x)
+-- staticSwitch choice = if choice then binl else binr
 
 
 -- | bconjoin is a partial merge, extracting from a sum. 

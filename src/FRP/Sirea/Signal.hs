@@ -160,11 +160,7 @@ s_full_map f s0 = mkSig y ys
 
 -- | Ap applies one signal to another. 
 s_ap :: Sig (a -> b) -> Sig a -> Sig b
-s_ap sf sa = mkSig (f a) (ds_ap f a fs as)
-    where f  = (s_head sf <*>)
-          fs = ds_map (<*>) (s_tail sf)
-          a  = s_head sa
-          as = s_tail sa
+s_ap = s_full_zip (<*>)
 
 -- | zip two signals using a provided function. The resulting signal
 -- is active only when both inputs are active. 

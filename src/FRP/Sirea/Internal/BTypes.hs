@@ -60,6 +60,11 @@ data B x y where
   -- most signal operations
   B_mkLnk   :: !(TR x y) -> !(MkLnk x y) -> B x y
 
+  -- uniquified behaviors might eventually support some
+  -- duplicate elimination optimizations. For now, though,
+  -- I don't really have these.
+  -- B_unique :: !UniqueID -> !(B x y) -> B x y
+
   -- time modeling, logical delay, concrete delay
   B_tshift  :: !(TS x) -> B x x
 

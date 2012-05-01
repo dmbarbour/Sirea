@@ -39,10 +39,13 @@ import Data.IORef
 --
 --   tsen - time sensitive: if true, prevents delay aggregation and
 --     forces aggregated delay to apply prior to reaching link. 
+--   peek - how much the link might peek into the future to. May
+--     influence choked updates and other optimizations.
 --
 data MkLnk x y = MkLnk 
-    { ln_tsen  :: !Bool 
-    , ln_build :: !(Lnk y -> IO (Lnk x))
+    { ln_build  :: !(Lnk y -> IO (Lnk x))
+    , ln_tsen   :: !Bool 
+    , ln_peek   :: !DT
     }
 
 -- | A Lnk describes a complex product of LnkUp values, to 
