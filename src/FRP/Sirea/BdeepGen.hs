@@ -6,7 +6,7 @@ module Main where
 import Control.Exception (assert)
 
 depth :: Int
-depth = 5
+depth = 4
 
 
 infixr 4 +\
@@ -35,17 +35,17 @@ deepThoughts =
     "                           " +\
     "This reads as `behavior on first second left second`. Note that" +\
     "the order of characters corresponds to the path of application." +\
-    "These are defined up to 5 deep, for a total 1364 functions. The" +\
+    "These are defined up to 4 deep, for a total 340 functions. The" +\
     "shallow elements bonf (= bfirst), bons, bonl, bonr are included" +\
     "for consistency.           " +\
     "                           " +\
     "Similarly, rather than:    " +\
     "                           " +\
-    "> bfst >>> bsnd >>> bfst >>> bfst >>> bsnd " +\
+    "> bfst >>> bsnd >>> bfst >>> bfst" +\
     "                           " +\
     "Developers can write:      " +\
     "                           " +\
-    "> bxfsffs                  " +\
+    "> bxfsff                   " +\
     "                           " +\
     "This reads as `behavior extract first second first first second." +\
     "The forward order of characters corresponds to the path. This is" +\
@@ -53,21 +53,21 @@ deepThoughts =
     "                           " +\
     "To extract multiple elements, use the (&&&) behavior: " +\
     "                           " +\
-    " > bxfsffs &&& bxssffs     " +\
+    " > bxfsfs &&& bxssfs       " +\
     "                           " +\
     "Note: extraction is NOT possible for left/right, due to duration " +\
-    "coupling constraints. These are also defined up to 5 depth, for " +\
-    "total 62 functions.       " +\
+    "coupling constraints. These are also defined up to 4 depth, for " +\
+    "total 32 functions.       " +\
     "                          " +\
-    "The dual to bx* is also provided, for dual completeness. This is" +\
-    "another 60 functions for injection - `binlr` is `binl <<< binr`." +\
+    "The dual of bx* is also provided, for completeness and another 30" +\
+    "functions for injection - `binlrr` is `binl <<< binr <<< binr`." +\
     "These might be useful if a behavior is a big switch, but that may " +\
     "be an anti-pattern (better to use a lot of small behaviors)." +\
     "                           " +\
-    "If 5 depth isn't enough, these operations are readily composed." +\
+    "If 4 depth isn't enough, these operations are readily composed." +\
     "E.g. consider a stack-like environment:" +\
-    "  extract 8th element: bxsssss >>> bxssf " +\
-    "  operate on 8th element: (bonsssss . bonssf) op " +\
+    "  extract 8th element: bxssss >>> bxsssf " +\
+    "  operate on 8th element: (bonssss . bonsssf) op " +\
     "Though FRP.Sirea.Bstack provides richer Forth-inspired operators" +\
     "for pointfree stack operations." +\
     "                           " +\
@@ -142,8 +142,8 @@ bxType fs = "bx" ++ fs ++ " :: (BProd b) => b " ++ stype fs "e " ++ " e"
 bonClass :: Bool -> Bool -> String -> String
 bonClass bfs blr [] = 
     if (bfs && blr) then "(BProd b, BSum b) =>"
-    else if(bfs) then "(BProd b) =>"
-    else if(blr) then "(BSum b) =>"
+    else if(bfs) then    "(BProd b        ) =>"
+    else if(blr) then    "(         BSum b) =>"
     else error "illegal path"
 bonClass bfs blr ('f':path) = bonClass True blr path
 bonClass bfs blr ('s':path) = bonClass True blr path

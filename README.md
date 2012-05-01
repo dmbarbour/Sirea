@@ -133,7 +133,7 @@ All behaviors operate on _signals in space and time_. Many behaviors are data pl
     bfst   :: B (x :&: y) x
     binl   :: B x (x :|: y)
 
-There are around thirty or forty of these that must be learned to use RDP effectively. Fortunately, many of those are simple symmetries, dualities, or combinations that make them easier to remember. There are a thousand shorthand composites defined in [FRP.Sirea.Bdeep](src/FRP/Sirea/Bdeep.hs) but they have consistent naming so you only need to learn a few to know them all. A few useful behaviors serve as performance annotations, to force lazy thunks, parallelize future computations, eliminate redundant updates, or simplistic memoization.
+There are around thirty or forty of these that must be learned to use RDP effectively. Fortunately, many of those are simple symmetries, dualities, or combinations that make them easier to remember. There are a few hundred shorthand composites defined in [FRP.Sirea.Bdeep](src/FRP/Sirea/Bdeep.hs) but they have consistent naming so you only need to learn a few to know them all. A few useful behaviors serve as performance annotations, to force lazy thunks, parallelize future computations, eliminate redundant updates, or simplistic memoization.
 
 The most common behavior I use is simple sequencing:
     
