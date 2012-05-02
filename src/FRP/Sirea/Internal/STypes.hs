@@ -7,6 +7,7 @@ module FRP.Sirea.Internal.STypes
     , S
     ) where 
 
+import Data.Typeable -- all are typeable
 
 -- | (x :&: y). Product of asynchronous or partitioned signals, but
 -- x and y will have equal and tightly coupled active periods. For
@@ -45,6 +46,23 @@ infixr 2 :|:
 data S p a
 
 
+---------------------------
+-- Data.Typeable Support --
+---------------------------
+
+tcSig, tcSum, tcProd :: TyCon
+tcSig  = mkTyCon3 "Sirea" "Behavior" "S"
+tcSum  = mkTyCon3 "Sirea" "Behavior" "(:|:)"
+tcProd = mkTyCon3 "Sirea" "Behavior" "(:&:)"
+
+instance Typeable2 S where
+    typeOf2 _ = mkTyConApp tcSig []
+
+instance Typeable2 (:|:) where
+    typeOf2 _ = mkTyConApp tcSum []
+
+instance Typeable2 (:&:) where
+    typeOf2 _ = mkTyConApp tcProd []
 
 
 

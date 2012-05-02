@@ -19,11 +19,14 @@ module FRP.Sirea.Internal.BTypes
     , ldt_maxCurr, ldt_minCurr
     ) where
 
-import FRP.Sirea.Internal.STypes
+import FRP.Sirea.Internal.STypes (S,(:&:),(:|:))
 import FRP.Sirea.Internal.LTypes (MkLnk)
 import FRP.Sirea.Time (DT)
 import Control.Exception (assert)
 import Data.Function (on)
+
+import Data.Typeable -- B is typeable
+
 
 -- | (B x y) describes an RDP behavior - a signal transformer with
 -- potential for declarative `demand effects`. Signal x is called
@@ -86,6 +89,12 @@ data B x y where
   B_merge   :: B (x :|: x) x
   B_asso_s  :: B (x :|: (y :|: z)) ((x :|: y) :|: z) 
 
+tcB :: TyCon
+tcB = mkTyCon3 "Sirea" "Behavior" "B"
+
+instance Typeable2 B where
+    typeOf2 _ = mkTyConApp tcB []
+    
 
 ---------------------------------------------------------
 -- A simple model for time-shifts. We have a current delay and a
@@ -160,7 +169,5 @@ lnd_aggr :: (b -> b -> b) -> LnkD b x -> b
 lnd_aggr _ (LnkDUnit b) = b
 lnd_aggr fn (LnkDProd l r) = fn (lnd_aggr fn l) (lnd_aggr fn r)
 lnd_aggr fn (LnkDSum l r) = fn (lnd_aggr fn l) (lnd_aggr fn r)
-
-
 
 
