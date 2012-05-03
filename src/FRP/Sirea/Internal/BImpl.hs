@@ -9,14 +9,15 @@
 -- treatment at compilation. 
 module FRP.Sirea.Internal.BImpl
     ( fwdB
+    , fstB, firstB, swapB, assoclpB, dupB -- BProd 
+    , inlB, leftB, mirrorB, assocrsB, mergeB -- BSum
+    , zapB, splitB
+    , disjoinB
     , fmapB, constB, forceB, stratB, adjeqfB -- BFmap
     , delayB, synchB, peekB, forceDelayB
-    , disjoinB, zapB, splitB
-    , fstB, firstB, swapB, dupB, assoclpB -- BProd (first pass)
-    , fstBLnk, swapBLnk, dupBLnk, assoclpBLnk -- impls
-    , inlB, leftB, mirrorB, mergeB, assocrsB -- BSum
-    , inlBLnk, mirrorBLnk, assocrsBLnk -- impls
-    , mergeBLnkOpt
+
+    , tshiftB
+
     ) where
 
 import Prelude hiding (id,(.))
@@ -31,24 +32,12 @@ instance Category B where
   id  = fwdB
   (.) = flip B_pipe
 
--- miscellaneous. Note that:
---   first, left, and merge
--- need some special support from the compiler. First and left
--- need it for traversals, and merge for optimizations.
-fwdB     :: B x x 
-firstB   :: B x x' -> B (x :&: y) (x' :&: y)
-fstB     :: B (x :&: y) x
-swapB    :: B (x :&: y) (y :&: x)
-dupB     :: B x (x :&: x)
-assoclpB :: B (x :&: (y :&: z)) ((x :&: y) :&: z)
-leftB    :: B x x' -> B (x :|: y) (x' :|: y)
-inlB     :: B x (x :|: y)
-mirrorB  :: B (x :|: y) (y :|: x)
-mergeB   :: B (x :|: x) x
-asscorsB :: B (x :|: (y :|: z)) ((x :|: y) :|: z)
 
-firstB   = B_first
-leftB    = B_left
+firstB :: B x x' -> B (x :&: y) (x' :&: y)
+firstB = B_first
+
+leftB :: B x x' -> B (x :|: y) (x' :|: y)
+leftB = B_left
 
 mkLnkPure :: (Lnk y -> Lnk x) -> MkLnk x y
 mkLnkPure bfn = MkLnk { ln_tsen = False 
@@ -60,18 +49,37 @@ mkLnkB :: TR x y -> MkLnk x y -> B x y
 mkLnkB = B_mkLnk
 
 -- fwdB is the simplest behavior...
+fwdB :: B x x 
 fwdB = mkLnkB id $ mkLnkPure id
 
 -- in fstB, snd output is dead. 
+fstB :: B (x :&: y) x
 fstB = mkLnkB lnd_fst $ mkLnkPure lnFst
     where lnFst ln = LnkProd ln LnKDead 
 
 -- simple swap on Lnk sinks
+swapB :: B (x :&: y) (y :&: x)
 swapB = mkLnkB trSwap $ mkLnkPure lnSwap
     where trSwap tr = LnkDProd (lnd_snd tr) (lnd_fst tr)
           lnSwap ln = LnkProd (ln_snd ln) (ln_fst ln)
 
+-- simple rearrangement like swap            
+assoclpB :: B (x :&: (y :&: z)) ((x :&: y) :&: z)
+assoclpB = mkLnkB trRotl $ mkLnkPure lnAso
+    where trRotl tr = 
+            let tx = lnd_fst tr in
+            let ty = (lnd_snd >>> lnd_fst) tr in
+            let tz = (lnd_snd >>> lnd_snd) tr in
+            LnkDProd (LnkDProd tx ty) tz
+          lnAso ln =
+            let x = ln_fst ln in
+            let y = (ln_snd >>> ln_fst) ln in
+            let z = (ln_snd >>> ln_snd) ln in
+            LnkProd (LnkProd x y) z
+
+
 -- deep-duplicate signals (at least where two sinks are available)
+dupB :: B x (x :&: x)
 dupB = mkLnkB trDup $ mkLnkPure lnDup
     where trDup tr = LnkDProd tr tr
           lnDup ln = lnDeepDup (ln_fst ln) (ln_snd ln)
@@ -93,20 +101,9 @@ lnDeepDup (LnkSig x) (LnkSig y) =
     let update su = ln_update x su >> ln_update y su in
     LnkSig $ LnkUp { ln_touch = touch, ln_update = update } 
 
--- simple rearrangement like swap            
-assoclpB = mkLnkB trRotl $ mkLnkPure lnAso
-    where trRotl tr = 
-            let tx = lnd_fst tr in
-            let ty = (lnd_snd >>> lnd_fst) tr in
-            let tz = (lnd_snd >>> lnd_snd) tr in
-            LnkDProd (LnkDProd tx ty) tz
-          lnAso ln =
-            let x = ln_fst ln in
-            let y = (ln_snd >>> ln_fst) ln in
-            let z = (ln_snd >>> ln_snd) ln in
-            LnkProd (LnkProd x y) z
            
 -- if inl, can ignore the right bucket
+inlB :: B x (x :|: y)
 inlB = mkLnkB trinl $ mkLnkPure ln_left
     where trinl tr = LnkDSum tr (tr_dead tr)
 
@@ -119,32 +116,119 @@ tr_dead x = LnkDUnit ldtDead
                         }
 
 -- simple rearrangement
+mirrorB :: B (x :|: y) (y :|: x)
 mirrorB = mkLnkB trMirr $ mkLnkPure lnMirr 
     where trMirr tr = LnkDSum (lnd_right tr) (lnd_left tr)
           lnMirr ln = LnkSum (ln_right ln) (ln_left ln)
 
 -- simple rearrangement
+asscorsB :: B (x :|: (y :|: z)) ((x :|: y) :|: z)
 assoclsB = mkLnkB trRotl $ mkLnkPure lnAso
     where trRotl tr =
-            let tx = lnd_fst tr in
-            let ty = (lnd_snd >>> lnd_fst) tr in
-            let tz = (lnd_snd >>> lnd_snd) tr in
+            let tx = lnd_left tr in
+            let ty = (lnd_right >>> lnd_left) tr in
+            let tz = (lnd_right >>> lnd_right) tr in
             LnkDSum (LnkDSum tx ty) tz
           lnAso ln =
-            let x = ln_fst ln in
-            let y = (ln_snd >>> ln_fst) ln in
-            let z = (ln_snd >>> ln_snd) ln in
+            let x = ln_left ln in
+            let y = (ln_right >>> ln_left) ln in
+            let z = (ln_right >>> ln_left) ln in
             LnkSum (LnkSum x y) z
 
--- merge is among the most challenging behaviors, in part because it
--- must 
-mergeB :: LnkD LDT (x :|: x) -> B (x :|: x) x
-
+-- merge is among the more challenging behaviors due to complex
+-- synchronization and optimization requirements.
+mergeB :: B (x :|: x) x
+mergeB = mergeSynchB >>> latentBC0Time mergeSigsB
 
 mergeSynchB :: B (x :|: x) (x :|: x)
-mergeSynchB
+mergeSynchB = B_tshift synchTs
+    where synchTs xx = uncurry LnkDSum $ 
+                deepSynchMergeTs (lnd_left xx) (lnd_right xx)
 
+-- deepSynchMergeTs will synch matching signals only, and will add 
+-- delay to at most one of them. Liveness and other properties are 
+-- preserved. Output has same order as input.
+deepSynchMergeTs :: LnkD LDT x -> LnkD LDT x -> (LnkD LDT x, LnkD LDT x)
+deepSynchMergeTs (LnkDSum xl yl) (LnkDSum xr yr) =
+    let (xl',xr') = deepSynchMergeTs xl xr in
+    let (yl',yr') = deepSynchMergeTs yl yr in
+    let lhs = LnkDSum xl' yl' in
+    let rhs = LnkDSum xr' yr' in
+    (lhs,rhs)
+deepSynchMergeTs (LnkDProd xl yl) (LnkDProd xr yr) =
+    let (xl',xr') = deepSynchMergeTs xl xr in
+    let (yl',yr') = deepSynchMergeTs yl yr in
+    let lhs = LnkDProd xl' yl' in
+    let rhs = LnkDProd xr' yr' in
+    (lhs,rhs)
+deepSynchMergeTs (LnkDUnit lhs) (LnkDUnit rhs) = 
+    let maxGoal = max (ldt_goal lhs) (ldt_goal rhs) in
+    let maxCurr = max (ldt_curr lhs) (ldt_curr rhs) in
+    let wUpdT ldt = ldt { ldt_goal = maxGoal, ldt_curr = maxCurr } in
+    let updUnit = LnkDUnit . wUpdT in
+    (updUnit lhs, updUnit rhs)
 
+mergeSigsB :: LnkD LDT (x :|: x) -> B (x :|: x) x
+mergeSigsB tr = mkLnkB trMerge lnkMerge
+    where trMerge xx = trDeepMerge (lnd_left xx) (lnd_right xx)
+          lnkMerge = MkLnk { ln_tsen = False
+                           , ln_peek = 0
+                           , ln_build = buildMergeB tr
+                           }
+
+-- trDeepMerge computes liveness for each signal after merge.
+-- (liveness is lost due to binl, binr).
+trDeepMerge :: LnkD LDT x -> LnkD LDT x -> LnkD LDT x
+trDeepMerge (LnkDSum xl yl) (LnkDSum xr yr) =
+    let x = trDeepMerge xl xr in
+    let y = trDeepMerge yl yr in
+    LnkDSum x y
+trDeepMerge (LnkDProd xl yl) (LnkDProd xr yr) =
+    let x = trDeepMerge xl xr in
+    let y = trDeepMerge yl yr in
+    LnkDProd x y
+trDeepMerge (LnkDUnit lhs) (LnkDUnit rhs) =
+    assert (ldt_goal lhs == ldt_goal rhs) $
+    assert (ldt_curr lhs == ldt_curr rhs) $
+    let liveness = ldt_live lhs || ldt_live rhs in
+    LnkDUnit $ LDT 
+        { ldt_curr = (ldt_curr lhs)
+        , ldt_goal = (ldt_goal lhs)
+        , ldt_live = liveness
+        }
+
+-- now to actually build the merge behaviors, including dead code
+-- optimizations. Most relevant is the optimization where if only
+-- one branch is dead, the destination is passed onto the other 
+-- branch without any zip action. 
+buildMergeB :: LnkD LDT (x :|: x) -> Lnk x -> IO (Lnk (x :|: x))
+buildMergeB tr dst =
+    buildMergeB_i (lnd_left tr) (lnd_right tr) dst >>= 
+    return . uncurry LnkDSum
+
+buildMergeB_i :: LnkD LDT x -> LnkD LDT x -> Lnk x -> IO (Lnk x, Lnk x)
+buildMergeB_i _ _ LnkDead = return (LnkDead, LnkDead)
+buildMergeB_i tl tr (LnkProd x y) =
+    buildMergeB_i (lnd_fst tl) (lnd_fst tr) x >>= \ (xl,xr) ->
+    buildMergeB_i (lnd_snd tl) (lnd_snd tr) y >>= \ (yl,yr) ->
+    return (LnkProd xl yl, LnkProd xr yr)
+buildMergeB_i tl tr (LnkSum x y) =
+    buildMergeB_i (lnd_left tl) (lnd_left tr) x >>= \ (xl,xr) ->
+    buildMergeB_i (lnd_right tl) (lnd_right tr) y >>= \ (yl,yr) ->
+    return (LnkSum xl yl, LnkSum xr yr)
+buildMergeB_i tl tr (LnkSig lu) =
+    let lAlive = (ldt_live . lnd_sig) tl in
+    let rAlive = (ldt_live . lnd_sig) tr in
+    case (lAlive, rAlive) of
+        (False,False) -> return (LnkDead, LnkDead)
+        (False,True) -> return (LnkDead, LnkSig lu)
+        (True,False) -> return (LnkSig lu, LnkDead)
+        (True,True) -> 
+            -- perform an actual merge of live data!
+            let onEmit = ln_update lu . sm_emit (<|>) in
+            let onTouch = ln_touch lu in
+            ln_withSigM onTouch onEmit >>= \ (ul,ur) ->
+            return (LnkSig ul, LnkSig ur)
 
 -- | map an arbitrary Haskell function across an input signal.
 fmapB :: (a -> b) -> B (S p a) (S p b)
@@ -161,6 +245,31 @@ constB dt c = mkLnkB tr_fwd constLnk >>> eqshiftB dt alwaysEq
 
 lnConst :: c -> (Lnk (S p c) -> LnkUp (S p b))
 lnConst = ln_lumap . ln_sumap . su_fmap . (<$)
+
+-- | forceB with you!
+-- force evaluation of a signal relative to stability.
+forceB :: DT -> B (S p x) (S p x)
+forceB dt = mkLnkB tr_fwd forceLnk
+    where forceLnk = MkLnk { ln_tsen = False
+                           , ln_peek = 0
+                           , ln_build = buildForceB
+                           }
+
+buildForceB :: Lnk (S p x) -> IO (Lnk (S p x))
+buildForceB (LnkSig lu) = 
+    newIORef 
+    return (LnkSig lu')
+
+buildForceB_i lu >>= return . LnkSig
+
+buildForceB_i :: LnkUp x -> IO (LnkUp x)
+
+
+
+This keeps
+-- an internal copy of the signal, and forces 
+-- This keeps an internal copy of the signal, and force
+
 
 
 -- | delay a signal (logically)
@@ -198,6 +307,7 @@ forceDelayB = B_tshift doBar
 -- | disjoin will distribute a decision. This will synchronize the
 -- choice signal with the external signal (a special case for which
 -- B_tshift was heavily revised) then apply the split.
+--   TODO: optimize disjoinB for dead splits. 
 disjoinB :: B (S p a :&: ((S p () :&: x) :|: y) )
                ( (S p a :&: x) :|: (S p a :&: y) )
 disjoinB = B_tshift disjSynch >>> B_mkLnk disjTime disjLnk
@@ -244,8 +354,8 @@ disjBuild lxry =
     let x   = (ln_snd . ln_left) lxry in
     let y   = (ln_snd . ln_right) lxry in
     let bNull = ln_null lnl && ln_null lnr in
-    let LnkDead = LnkDead `LnkProd` ((LnkDead `LnkProd` x) `LnkSum` y) in
-    if bNull then return LnkDead else 
+    let lnkDead = LnkDead `LnkProd` ((LnkDead `LnkProd` x) `LnkSum` y) in
+    if bNull then return lnkDead else 
     let l   = ln_lnkup lnl in
     let r   = ln_lnkup lnr in
     let onTouch = ln_touch l >> ln_touch r in

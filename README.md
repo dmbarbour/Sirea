@@ -282,7 +282,7 @@ Sirea clients can add new primitive behaviors via `bUnsafeLnk`, but must be caut
 Declarative Effects and Concurrency in RDP
 ------------------------------------------
 
-RDP is effectful, but is limited to *declarative effects* - by which I mean effects that are (at any given logical instant, i.e. *spatially*) commutative and idempotent, and that hold over for non-zero periods of time. Declarative effects offer many of the reasoning and refactoring benefits associated with pure code: expressions can easily be rearranged, duplicate expressions can be eliminated, or duplicates can be introduced so overlapping subprograms can be abstracted. 
+RDP is effectful, but is limited to *declarative effects* - by which I mean effects that are (at any given logical instant, i.e. *spatially*) commutative and idempotent, and that hold over for a time. Declarative effects offer many of the reasoning and refactoring benefits associated with pure code: expressions can easily be rearranged, duplicate expressions can be eliminated, or duplicates can be introduced so overlapping subprograms can be abstracted. 
 
 RDP is not the only paradigm with declarative effects. If you are unfamiliar with [Temporal Logic](http://www.eecs.berkeley.edu/Pubs/TechRpts/2009/EECS-2009-173.html), [Event Calculus](http://en.wikipedia.org/wiki/Event_calculus), [Synchronous Programming](http://en.wikipedia.org/wiki/Synchronous_programming_language), or [Concurrent constraint programming](http://en.wikipedia.org/wiki/Concurrent_constraint_logic_programming) then I do recommend researching some of those techniques to broaden your horizons. The [Berkeley Orders Of Magnitude](http://boom.cs.berkeley.edu/) project is making good use of temporal logic for similar reasons that RDP focuses on declarative effects - for scalability to distributed systems, and to simplify reasoning. 
 
@@ -314,15 +314,7 @@ However, RDP provides no guarantee that demands are conflict free. It is possibl
 * combine as new behavior, e.g. pan left, pan right, repeat
 * favor left arbitrarily because it is lower in lexicographic order
 
-The holistic, set-based view of simultaneous demands will also force developers to confront the issue of conflicts early in their designs. Developers can aim to avoid conflicts before they happen - e.g. control distribution of the `bcamctl` behavior, or express camera commands in terms of weighted constraints. Between avoiding conflicts early in design and resolving them with holistic intelligence (able to resolve many concurrent demands at once), RDP *should* more readily support open, pluggable, extensible programs than many other paradigms - though I've yet to verify this property.
-
-_Note:_ Where possible, developers should design for stateless, deterministic resolution of conflicts (even if arbitrary). Avoiding non-essential state is valuable for resilience, and avoiding indeterminism is valuable for validation and robustness. Indeterminism and state both add to a system's complexity. 
-
-### Anticipation and Idempotence
-
-### Metacircular Dynamic
-
-No floor, no ceiling. RDP applications, including linking of effectful behaviors and linking, can always be understood as dynamic behaviors in yet a lower level RDP application.
+The holistic, set-based view of simultaneous demands will also force developers to confront the issue of conflicts early in their designs. Developers can aim to avoid conflicts before they happen or make them easier to resolve - e.g. control distribution of the `bcamctl` behavior, or express camera commands in terms of weighted constraints. Between avoiding conflicts early in design and resolving them with holistic intelligence (able to resolve many concurrent demands at once), RDP *should* more readily support open, pluggable, extensible programs than many other paradigms - though I've yet to verify this property.
 
 ### Declarative State for RDP
 
@@ -332,5 +324,10 @@ No floor, no ceiling. RDP applications, including linking of effectful behaviors
 
 ### Modeling Incremental and Batch Processing in RDP
 
+### Anticipation and Idempotence
+
+### Metacircular Dynamic
+
+No floor, no ceiling. RDP applications, including linking of effectful behaviors and linking, can always be understood as dynamic behaviors in yet a lower level RDP application.
 
 

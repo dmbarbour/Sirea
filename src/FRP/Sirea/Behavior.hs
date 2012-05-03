@@ -498,15 +498,19 @@ benvseq bx by = bdup >>> (bfst *** bx) >>> by
 --   behaviors. (or alternatively define it based on the ln_peek 
 --   values in the behavior). I don't want it cluttering the normal
 --   interface, though.
---
+-- dtStratB: maximum distance to compute ahead of stability, for the
+--   bforce and bstrat behaviors. 
 dtScanAheadB :: DT
 dtScanAheadB = 2.0 -- seconds ahead of stability
+
+dtStratB :: DT
+dtStratB = 0.1 -- seconds ahead of stability
 
 instance BFmap B where 
     bfmap    = fmapB
     bconst   = constB dtScanAheadB
-    bforce   = forceB
-    bstrat   = stratB
+    bforce   = forceB dtStratB
+    bstrat   = stratB dtStratB
     badjeqf  = adjeqfB dtScanAheadB
 instance BProd B where
     bfirst   = firstB

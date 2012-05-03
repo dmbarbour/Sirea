@@ -17,6 +17,8 @@ module FRP.Sirea.Internal.BTypes
     , lnd_aggr
     , ldt_maxGoal, ldt_minGoal
     , ldt_maxCurr, ldt_minCurr
+    , ldt_anyLive
+    , latentOnTime
     ) where
 
 import FRP.Sirea.Internal.STypes (S,(:&:),(:|:))
@@ -98,8 +100,8 @@ data BC0 x = BC0
     { bc_time :: LnkD LDT x
     }
 
-latentBCTime :: (LnkD LDT x -> B x y) -> B x y
-latentBCTime fn = B_latent (fn . bc_time)
+latentOnTime :: (LnkD LDT x -> B x y) -> B x y
+latentOnTime fn = B_latent (fn . bc_time)
 
 
 ---------------------------------------------------------
