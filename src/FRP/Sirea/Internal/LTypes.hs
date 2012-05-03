@@ -127,7 +127,6 @@ ln_lumap :: (LnkUp x -> LnkUp y) -> Lnk (S p x) -> Lnk (S p y)
 ln_lumap _ LnkDead = LnkDead
 ln_lumap fn (LnkSig l) = LnkSig (fn l)
 
-
 -- | Each signal update carries:
 --    state - the new state of the signal, starting at a given time
 --      which must be greater or equal to current stability. The

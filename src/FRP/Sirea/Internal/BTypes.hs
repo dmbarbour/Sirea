@@ -60,41 +60,47 @@ import Data.Typeable -- B is typeable
 -- more constrained due to partitioning, asynchrony, and duration
 -- coupling. 
 data B x y where
-  -- most signal operations
+  -- most operations
   B_mkLnk   :: !(TR x y) -> !(MkLnk x y) -> B x y
-
-  -- uniquified behaviors might eventually support some
-  -- duplicate elimination optimizations. For now, though,
-  -- I don't really have these.
-  -- B_unique :: !UniqueID -> !(B x y) -> B x y
 
   -- time modeling, logical delay, concrete delay
   B_tshift  :: !(TS x) -> B x x
 
   -- category
-  B_fwd     :: B x x
   B_pipe    :: !(B x y) -> !(B y z) -> B x z
 
-  -- data plumbing (products)
-  B_fst     :: B (x :&: y) x
-  B_on_fst  :: !(B x x') -> B (x :&: y) (x' :&: y)
-  B_swap    :: B (x :&: y) (y :&: x)
-  B_dup     :: B x (x :&: x)
-  B_asso_p  :: B (x :&: (y :&: z)) ((x :&: y) :&: z)
-  
-  -- data plumbing (choices)
-  B_in_lft  :: B x (x :|: y)
-  B_on_lft  :: !(B x x') -> B (x :|: y) (x' :|: y)
-  B_mirror  :: B (x :|: y) (y :|: x)
-  B_merge   :: B (x :|: x) x
-  B_asso_s  :: B (x :|: (y :|: z)) ((x :|: y) :|: z) 
+  -- arrows
+  B_first   :: !(B x x') -> B (x :&: y) (x' :&: y)
+  B_left    :: !(B x x') -> B (x :|: y) (x' :|: y)
+
+  -- bmerge needed some extra info to perform critical
+  -- dead code elimination. Basically, it needs compile
+  -- data from the forward pass.
+  B_latent  :: !(BC0 x -> B x y) -> B x y
+
+  -- B_unique :: !UniqueID -> !(B x y) -> B x y
+
 
 tcB :: TyCon
 tcB = mkTyCon3 "Sirea" "Behavior" "B"
 
 instance Typeable2 B where
     typeOf2 _ = mkTyConApp tcB []
-    
+
+---------------------------------------------------------
+-- B is designed for a simple two-pass compilation model.
+-- In the first pass, delays are aggregated and latent
+-- behaviors are completed; this occurs from start to end.
+-- The second pass is end to start, and actually constructs
+-- the elements. Dead code elimination happens in both 
+-- directions.
+data BC0 x = BC0 
+    { bc_time :: LnkD LDT x
+    }
+
+latentBCTime :: (LnkD LDT x -> B x y) -> B x y
+latentBCTime fn = B_latent (fn . bc_time)
+
 
 ---------------------------------------------------------
 -- A simple model for time-shifts. We have a current delay and a
@@ -108,8 +114,9 @@ instance Typeable2 B where
 type TR x y = LnkD LDT x -> LnkD LDT y
 type TS x = TR x x
 data LDT = LDT 
-    { ldt_curr :: !DT -- actual delay from start of behavior
-    , ldt_goal :: !DT -- aggregated but unapplied logical delay
+    { ldt_curr :: !DT   -- actual delay from start of behavior
+    , ldt_goal :: !DT   -- aggregated but unapplied logical delay
+    , ldt_live :: !Bool -- is this a live branch (not binl or binr?)
     }
 
 ldt_maxGoal, ldt_minGoal, ldt_maxCurr, ldt_minCurr :: LnkD LDT x -> DT
@@ -117,6 +124,10 @@ ldt_maxGoal = lnd_aggr max . lnd_fmap ldt_goal
 ldt_minGoal = lnd_aggr min . lnd_fmap ldt_goal
 ldt_maxCurr = lnd_aggr max . lnd_fmap ldt_curr
 ldt_minCurr = lnd_aggr min . lnd_fmap ldt_curr
+
+-- ldt_anyLive returns true if ANY inputs are alive.
+ldt_anyLive :: LnkD LDT x -> Bool
+ldt_anyLive = lnd_aggr (||) . lnd_fmap ldt_live
 
 -- tr_unit validates an assumption that all inputs have uniform
 -- timing properties. It is the normal timing translator for MkLnk.
@@ -127,9 +138,13 @@ tr_unit x =
     LnkDUnit $ LDT 
         { ldt_curr = ldt_maxCurr x
         , ldt_goal = ldt_maxGoal x
+        , ldt_live = ldt_anyLive x
         }
 tr_fwd :: TR (S p1 x1) (S p2 x2)
 tr_fwd = LnkDUnit . lnd_sig
+
+
+
 
 ----------------------------------------------------------
 -- LnkD is a more generic version of LnkW for metadata.

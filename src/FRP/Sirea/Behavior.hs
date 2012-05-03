@@ -51,22 +51,20 @@ class ( Category b
 bfwd :: (Category b) => b x x
 bfwd = id
 
--- | BFmap - pure operations on concrete signals.
---
--- Sirea assumes all partitions are Haskell partitions. Distributed
--- RDP would require more precision regarding which function types 
--- can be applied in which partition types.
---
--- Also some useful performance annotations to control for laziness.
+-- | BFmap - pure operations on concrete signals. Includes common
+-- performance annotations. BFmap supports arbitrary Haskell 
+-- functions. 
 class (Category b) => BFmap b where
     -- | bfmap applies a function to a concrete signal. This allows
     -- arbitrary Haskell functions to integrate with RDP. Lazy.
     bfmap :: (x -> y) -> b (S p x) (S p y)
 
-    -- | bconst applies a constant to a signal.
-    --     bconst = bfmap . const
-    -- The specialization allows for optimizations, in particular a
-    -- cheaper variation of badjeqf.
+    -- | bconst maps a constant to the signal. The resulting signal
+    -- is still non-trivial, varying between active and inactive as
+    -- did the input signal. 
+    --   bconst = bfmap . const
+    -- It may be specialized easily for performance, e.g. eliminate
+    -- most redundant updates like badjeqf.
     bconst :: y -> b (S p x) (S p y)
     bconst = bfmap . const
 
@@ -97,7 +95,7 @@ class (Category b) => BFmap b where
     --
     -- See Control.Parallel.Strategies for more information. 
     bstrat :: (x -> Eval y) -> b (S p x) (S p y)
-    bstrat = bfmap . (runEval .) -- same value; loses most parallelism
+    bstrat = bfmap . (runEval .) -- semantically
 
     -- | Types that can be tested for equality can be filtered to
     -- eliminate redundant updates. Redundant updates are common if
@@ -107,6 +105,11 @@ class (Category b) => BFmap b where
     -- The reason to eliminate redundant updates is to eliminate
     -- redundant computations further down the line, eg. at `bzip`.
     -- This is a valuable performance optimization.
+    --
+    -- Not all redundant updates are eliminated. When a signal is
+    -- updated, scanning for the first actual change could diverge
+    -- if there is no change. Type `b` may allow configuration of
+    -- how far to scan.
     badjeqf :: (Eq x) => b (S p x) (S p x)
     badjeqf = bfwd -- semantically
 
@@ -308,7 +311,8 @@ class (BSum b, BFmap b) => BSplit b where
     bsplit :: b (S p (Either x y)) (S p x :|: S p y)
 
 -- | bsplitWith is included to dual zip, and might be useful.
-bsplitWith :: (BSplit b) => (x -> Either y z) -> b (S p x) (S p y :|: S p z)
+bsplitWith :: (BSplit b) => (x -> Either y z) 
+           -> b (S p x) (S p y :|: S p z)
 bsplitWith fn = bfmap fn >>> bsplit
 
 -- | unsplit is included for completeness.
@@ -381,14 +385,15 @@ class (BTemporal b) => BPeek b where
 
 -- | Dynamic behaviors are behaviors constructed or discovered at
 -- runtime. They are useful for modeling resources, extensions,
--- service brokering, and staged computation (compilation, linking).
--- They can also represent runtime authorities (object capability
--- patterns), with implicit revocation when you stop sharing the
--- behavior.
+-- service brokering, live programming, and staged computation 
+-- (compilation, linking). They can represent runtime authority 
+-- and object capability patterns. Dynamic behaviors continuously
+-- expire, so to stop sharing a behavior also revokes it.
 --
--- Unfortunately, such behaviors are not first class, for reasons
+-- Unfortunately, dynamic behaviors are not first class for reasons
 -- similar to bdisjoin. Every dynamic behavior must start and end
--- in a single partition. 
+-- in a single partition. (It is possible to use `bcross` within the
+-- dynamic behavior, though.)
 --
 -- Dynamic behaviors may perform better than use of sum types (:|:)
 -- in some cases, especially when there are a lot of rarely selected
@@ -413,21 +418,6 @@ class (BEmbed b b', Behavior b, Behavior b') => BDynamic b b' where
                          (S p () :|: S p z)
 -}
 
--- | DYNAMIC BEHAVIORS
---
--- RDP behaviors may be first-class, which enables Object Oriented
--- styles of programming, and object capability model approaches to
--- security. This is represented by having signals carry behaviors
--- (which looks in Haskell's type system like 'S p (B x y)'). Small
--- behaviors can be composed into complex applications then invoked
--- with beval or bexec.
---
--- Unlike OO styles, or even FRP switches, first-class behaviors in
--- RDP cannot be stored. They are volatile, implicitly revoked after
--- you stop sharing them. This is a valuable property for security,
--- safety, resource management (including GC), and live programming.
--- 
-
 
 
 -- Note: I probably need several more variations of beval:
@@ -439,15 +429,15 @@ class (BEmbed b b', Behavior b, Behavior b') => BDynamic b b' where
 class BEmbed b b' where
     bembed :: b' x y -> b x y
 
--- convenience operators?
---  operations on (x :&: (y :&: (z :& ...
---  folds? max-length, dynamic, etc. (x :&: (x :&: (x ...
---  maybe a dedicated module, `BStack`. 
---  could be useful, but somewhat limited
--- Some Forth-inspired operators might be neat, treating this as a
--- stack for rotations and operations. 
---    take3 : takes 3 items off stack
---    put2 : put 2 items on the stack
+-- TODO: convenience operators?
+--  I've added Bdeep - eqvs. of bcadadr and setf bcadadr from Lisp
+--  Need some stack-like operators
+--      on (x :&: (y :&: (z :& ...
+--      kswap, krotl(3,4,5,6,7), krotr(3,4,5,6,7), kdup, kover, 
+--      kdisjoin would be feasible for some number of arguments.
+--      ktake,kput
+--  Maybe some support for data-driven dynamic patterns.
+--      folds, recursion
 --
 -- support for bcar, bcdr, bcadr, bcddr, bcdar, bcaar, etc. from Lisp
 --    plus variations for first, second (application to elements)
@@ -479,31 +469,69 @@ class BEmbed b b' where
                 (bsecond f) . (bfirst g) = (bfirst g) . (bsecond f)
  #-}
 
+
+
+{- transformative behaviors. Need a dedicated `Trans` model, which 
+   in turn needs a 'class' for behaviors.
+-- berrseq - composition with error options.
+-- todo: move to a arrow transformer...
+berrseq :: B x (err :|: y) -> B y (err :|: z) -> B x (err :|: z)
+berrseq bx by = bx >>> bright by >>> bassocls >>> bleft bmerge
+
+-- benvseq - composition with environment (~reader)
+-- todo: move to a arrow transfomer
+benvseq :: B (env :&: x) y -> B (env :&: y) z -> B (env :&: x) z
+benvseq bx by = bdup >>> (bfst *** bx) >>> by
+ -}
+
+
+
 ---------------------------
 -- Concrete Instances: B --
 ---------------------------
 
--- TUNING (Could I make this configurable?)
--- dt_eqf_peek: 
---   (for bconst, badjeqf via beqshift)
+-- TUNING
+-- dtScanAheadB: default lookahead for constB, adjeqfB. Must limit
+--   scan ahead to avoid divergence. A larger lookahead reduces risk
+--   of rework down the line but might cause more rework immediately.
+--   I'd like this to be tunable in a higher layer for constructing
+--   behaviors. (or alternatively define it based on the ln_peek 
+--   values in the behavior). I don't want it cluttering the normal
+--   interface, though.
 --
---   The first update in a signal might not represent a real change.
---   Delivering it as a change, however, might cause redundant eval
---   later in the pipeline (e.g. when zipping values). Ideally find
---   the first real change in signal and deliver that as the time of 
---   signal state update. But discovering such a time potentially 
---   needs infinite search. As compromise, I search bounded distance
---   into future for change, relative to stability. Idea is that the
---   computation doesn't run very far ahead of stability anyway, so
---   pushing update ahead of stability is almost free. 
-dt_eqf_peek :: DT
-dt_eqf_peek = 3.0 -- seconds ahead of stability
+dtScanAheadB :: DT
+dtScanAheadB = 2.0 -- seconds ahead of stability
 
-
-
-
-
-
+instance BFmap B where 
+    bfmap    = fmapB
+    bconst   = constB dtScanAheadB
+    bforce   = forceB
+    bstrat   = stratB
+    badjeqf  = adjeqfB dtScanAheadB
+instance BProd B where
+    bfirst   = firstB
+    bdup     = dupB
+    bfst     = fstB
+    bswap    = swapB
+    bassoclp = assoclpB
+instance BSum B where
+    bleft    = leftB
+    bmirror  = mirrorB
+    bmerge   = mergeB
+    binl     = inlB
+    bassocls = assoclsB
+instance BZip B where
+    bzap     = zapB
+instance BSplit B where
+    bsplit   = splitB
+instance BDisjoin B where 
+    bdisjoin = disjoinB
+instance BTemporal B where
+    bdelay   = delayB
+    bsynch   = synchB
+instance BPeek B where
+    bpeek    = peekB
+instance Behavior B
 
 
 
