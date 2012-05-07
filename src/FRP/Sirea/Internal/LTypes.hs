@@ -183,11 +183,6 @@ data SigSt a = SigSt
     , st_expect :: !Bool       -- recent `touch`
     }
 
-st_stabilize :: Maybe T -> SigSt a -> SigSt a
-st_stabilize tf st = 
-    assert (monotonicStability (st_stable st) tf) $
-    st { st_stable = tf, st_expect = False }
-
 -- st_zero is an initial SigSt value.
 st_zero :: SigSt a
 st_zero = SigSt { st_signal = s_never, st_stable = Nothing, st_expect = False }
@@ -200,18 +195,27 @@ st_clear :: T -> SigSt a -> SigSt a
 st_clear tt st = st { st_signal = sf }
     where sf = s_trim (st_signal st) tt
 
+-- update the SigSt. In debug compiles, this will validate
+-- that stability assumptions are respected. 
 st_sigup :: SigUp a -> SigSt a -> SigSt a
 st_sigup su st =
-    let tm = su_stable su in
-    let sf = su_apply su (st_signal st) in
-    assert (monotonicStability (st_stable st) tm) $
-    SigSt { st_signal = sf, st_stable = tm, st_expect = False } 
+    let oldStability  = st_stable st in
+    let newStability  = su_stable su in
+    let tmUpdate      = fmap snd (su_state su) in
+    let sigWithUpdate = su_apply su (st_signal st) in
+    assert (respectsStability oldStability tmUpdate) $
+    assert (monotonicStability oldStability newStability) $
+    SigSt { st_signal = sigWithUpdate
+          , st_stable = newStability
+          , st_expect = False 
+          } 
 
 -- for some extra validation and debugging, ensure that stability
 -- is non-decreasing (excepting Forever, which acts as a reset).
-monotonicStability :: Maybe T -> Maybe T -> Bool
+monotonicStability, respectsStability :: Maybe T -> Maybe T -> Bool
 monotonicStability (Just t0) (Just tf) = (tf >= t0)
 monotonicStability _ _ = True
+respectsStability = monotonicStability
 
 ------------------------------------------------------------------
 -- SigM represents states for two signals, for zip, merge, and 

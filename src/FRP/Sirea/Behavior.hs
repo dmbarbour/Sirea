@@ -68,32 +68,23 @@ class (Category b) => BFmap b where
     bconst :: y -> b (S p x) (S p y)
     bconst = bfmap . const
 
-    -- | bforce can force computation of accummulated thunks from
-    -- fmap and other operations. This can control space costs and
-    -- improve parallelism (by forcing in multiple partitions). This
-    -- is applied per update, based on stability and perhaps a bit
-    -- beyond the stable value (based on type b, configurable or
-    -- adaptive). Since updates tend to monotonically increase
-    -- stability, this results in incrementally forcing evaluations.
+    -- | bforce informs the implementation that this is a good place
+    -- to force computation of accummulated lazy thunks. Force is 
+    -- applied as the signal is updated, and is applied relative to
+    -- stability of the signal. Developers may provide the function
+    -- to force lazy thunks. Semantically same as bfwd.
     --
-    -- How much is forced is configurable via a sequential strategy,
-    -- (x -> ()), which allows arbitrarily deep sequencing. See
-    -- Control.Seq for more information.
+    -- The cost of bforce is the potential for redundant computation
+    -- when there are many tightly spaced updates.
     bforce :: (x -> ()) -> b (S p x) (S p x)
     bforce _ = bfwd -- semantically
 
-    -- | bstrat applies a parallel strategy to a signal based on
-    -- sampling. The essential idea is to initialize evaluation of
-    -- the next sample when the current one is accessed. This simple
-    -- technique can achieve respectable levels of data parallelism. 
-    -- Since logical delay corresponds to physical delays, this also
-    -- controls space overhead and avoids wasted sparks.
-    --
-    -- Ignoring performance concerns, bstrat is a simple variation
-    -- of bfmap. A parallel strategy is typically (x -> Eval x), but
-    -- this is generalized to (x -> Eval y) to enforce semantics.
-    --
-    -- See Control.Parallel.Strategies for more information. 
+
+    -- | bstrat can initiate parallel strategies on signals based on
+    -- sampling. This can be an effective path to data parallelism,
+    -- but only works well when signals are stable for long periods.
+    -- Other than potential for parallel evaluation, bstrat is bfmap
+    -- with runEval.
     bstrat :: (x -> Eval y) -> b (S p x) (S p y)
     bstrat = bfmap . (runEval .) -- semantically
 
@@ -246,17 +237,14 @@ bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
 -- This seems unavoidable due to potential for partitioning and the
 -- need to communicate between partitions. 
 --
--- Due to lack of generic disjoin, a structural discipline can be
--- used to rapidly disjoin multiple elements. See 
---
 -- In some cases it may be more convenient to use intermediate state
 -- rather than disjoin. Disjoin is necessary to model lexical scope
 -- without shared state.
---
 class (BSum b, BProd b) => BDisjoin b where
     -- | bdisjoinl combines a signal representing the current choice
     -- (S p ()) and a signal representing available data (S p x) in
     -- the same partition `p`. This splits the external data.
+    -- May perform implicit logical synchronization, if necessary.
     bdisjoin  :: b (S p x :&: ((S p () :&: y) :|: z) )
                    ( (S p x :&: y) :|: (S p x :&: z) )
 
@@ -330,21 +318,16 @@ class (Category b) => BTemporal b where
     --
     -- Delays for elements of asynchronous products and sums diverge
     -- due to bfirst, bleft.
+    --
+    -- This is logical delay. It does not cause an actual wait in 
+    -- the implementaiton. 
     bdelay :: DT -> b x x
     
     -- | Synchronize signals. Affects asynchronous products or sums.
-    -- Ensures that delay on every branch is equal, suitable for zip
-    -- or merge. Note that the signal components may be in different
-    -- partitions, which makes bsynch useful for synchronous action
-    -- at a distance.
-    --
-    -- Synch is achieved by adding delay to the faster branches. It
-    -- has no effect if applied to an already synchronous signal or
-    -- a lone concrete signal.
-    --
-    -- Synchronization is implicit for many operations like zip or
-    -- merge. RDP forbids combining signals of different latencies
-    -- (except indirectly, e.g. via shared state resources).
+    -- Adds delay to the lower-latency signals to ensure every input
+    -- has equal latency - i.e. logical synchronization. Forms of
+    -- synch might be performed implicitly by operations that need
+    -- synchronized input (zip, merge, disjoin). 
     bsynch :: b x x
 
 
@@ -383,6 +366,8 @@ class (BTemporal b) => BPeek b where
     -- Use of Either here (instead of Maybe) enables use of bsplit.
     bpeek :: DT -> b (S p a) (S p (Either a ()))
 
+
+
 -- | Dynamic behaviors are behaviors constructed or discovered at
 -- runtime. They are useful for modeling resources, extensions,
 -- service brokering, live programming, and staged computation 
@@ -390,10 +375,8 @@ class (BTemporal b) => BPeek b where
 -- and object capability patterns. Dynamic behaviors continuously
 -- expire, so to stop sharing a behavior also revokes it.
 --
--- Unfortunately, dynamic behaviors are not first class for reasons
--- similar to bdisjoin. Every dynamic behavior must start and end
--- in a single partition. (It is possible to use `bcross` within the
--- dynamic behavior, though.)
+-- Like bdisjoin, dynamic behaviors are not first class due to the
+-- constraint on partitions. 
 --
 -- Dynamic behaviors may perform better than use of sum types (:|:)
 -- in some cases, especially when there are a lot of rarely selected
@@ -406,9 +389,9 @@ class (BEmbed b b', Behavior b, Behavior b') => BDynamic b b' where
     -- If the dynamic behavior would take more than DT time, or has
     -- other static problems, failure is returned immediately via
     -- the left output signal (failure :|: result).
-    beval :: DT -> b (S p (b' (S p x) (S p y)) 
-                          :&: (S p x)         )
+    beval :: DT -> b (S p (b' (S p x) (S p y)) :&: (S p x))
                      (S p () :|: S p y)
+
 
 {- I'll eventually want higher arities for asynchronous parameters 
    to achieve higher stability for the beval operation. 
@@ -504,7 +487,7 @@ dtScanAheadB :: DT
 dtScanAheadB = 2.0 -- seconds ahead of stability
 
 dtStratB :: DT
-dtStratB = 0.1 -- seconds ahead of stability
+dtStratB = 0.1 -- seconds ahead to potentially sample
 
 instance BFmap B where 
     bfmap    = fmapB

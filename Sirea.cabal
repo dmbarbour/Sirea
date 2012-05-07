@@ -5,40 +5,26 @@ Synopsis: Simply Reactive! Declarative orchestration in Haskell with RDP.
 Category: Reactive, FRP
 Description:
   Reactive Demand Programming (RDP) is a paradigm for declarative
-  orchestration of systems by use of signals. Services, resources,
-  and functions are represented as behaviors that transform signals
-  (without creating or destroying them - output has equal duration 
-  as input). Signals to a resource often represent a simple query,
-  but in general can control or influence its behavior. Signal based
-  control is commutative, idempotent, continuous, and concurrent.
+  orchestration of open systems. Services, resources, and functions 
+  are represented as behaviors that transform signals. For services
+  and resources, signals act as live queries, commands, demands able 
+  to observe and influence them. However, effects are constrained:
+  continuous, collaborative, concurrent, commutative, idempotent.
   .
-  Those properties allow developers to reason about and refactor RDP
-  code in a very declarative manner. Further, ability to encapsulate
-  effects and acquire resources dynamically make RDP suitable for
-  composition and orchestration of open systems. There is no need to
-  pipe a signal all the way through an RDP program just to raise a
-  window or control a widget.
+  Those constraints ensure even the side effects are declarative. 
   .
-  First class RDP behaviors are supported, though eval is explicit
-  and they cannot be stored statefully. RDP is designed for staged
-  programming by use of these behaviors, using one RDP behavior to
-  construct another slightly less stable behavior. This can model
-  many things - staged meta-programming, live programming, runtime
-  compilation and linking, grants and revocations of authority.
-  .
-  RDP approaches state differently than FRP. FRP programs accumulate
-  events or integrate signals. RDP behaviors are locally stateless.
-  Instead, developers manipulate external state services - databases
-  or filesystems. This has advantages for orthogonal persistence and
-  live programming. Sirea provides persistence by default for state
-  controlled by Sirea, and state names will be stable to allow minor
-  changes in code or behavior (up to compatible representations).
+  RDP is not FRP, but much should be familiar to those who work with 
+  arrowized FRP models. The big differences regard how RDP manages
+  effects and state, and RDP's lack of direct support for events.
+  State is modeled as an external resource. Events are represented 
+  by transient (but not instantaneous) changes in state or a signal. 
   .
   Sirea is an implementation of RDP for use in a Haskell process. It
-  allows the full gamut of Haskell types, and uses Haskell threads
-  to model spatial partitions. Sirea is designed to be suitable for 
-  long lived soft real time applications such as multimedia, games,
-  command and control software. 
+  allows the full gamut of Haskell types. Sirea behaviors can create
+  threads and help build connectivity to resources so developers can
+  avoid hooking things up by hand. Sirea is designed to be suitable  
+  for long lived soft real time applications such as multimedia, 
+  games, command and control software, or live programming. 
 
 Author: David Barbour
 Maintainer: dmbarbour@gmail.com
@@ -52,7 +38,7 @@ build-type: Simple
 Library
   hs-Source-Dirs: src
   Extensions:
-  Build-Depends: base>4
+  Build-Depends: base>4.5
     ,parallel>3
     ,time
 
@@ -60,8 +46,6 @@ Library
     FRP.Sirea.Time
     FRP.Sirea.Signal
     FRP.Sirea.Behavior
-
-  Other-Modules:
 
   ghc-options: -threaded -Wall -fno-warn-orphans 
 

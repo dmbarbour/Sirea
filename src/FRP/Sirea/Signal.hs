@@ -37,6 +37,7 @@ module FRP.Sirea.Signal
  , s_delay, s_peek
  , s_select
  , s_adjeqf
+ --, s_strat
  -- instances: functor, applicative, alternative
  ) where
 
@@ -44,6 +45,7 @@ import FRP.Sirea.Time
 import FRP.Sirea.DiscreteTimedSeq
 import Control.Exception (assert)
 import Control.Applicative
+import Control.Paralle.Strategies (Eval)
 
 -- | Sig is an abstract type for discrete-varying signals in Sirea.
 -- A signal is defined for all times, but in practice the past is
@@ -114,8 +116,8 @@ s_sample_d s0 tLower tUpper =
         DSWait xs' -> (Nothing, mkSig x xs')
         DSNext tx x' xs' ->
             if tLower < tx
-                then s_sample_d (mkSig x' xs') tLower tUpper
-                else (Just (tx,x'), mkSig x' xs')
+                then (Just (tx,x'), mkSig x' xs')
+                else s_sample_d (mkSig x' xs') tLower tUpper
 
 
 -- | sigToList will obtain the [(T,Maybe a)] states in a given time
@@ -289,10 +291,11 @@ s_adjeqf eq s0 =
           meq (Just x) (Just y) = eq x y
           meq _ _ = False
 
---
-
--- Apply a strategy incrementally to a signal, such that you are
--- evaluating always slightly ahead of the current element. 
+-- TODO:
+-- Apply a strategy to initialize parallel evaluation of a signal 
+-- during sampling. I.e. if you sample at time T, may initialize 
+-- parallel computation of the signal at time T+dt. 
+-- s_strat :: DT -> (a -> Eval b) -> Sig a -> Sig b
 
 
 -- IDEAS:
@@ -301,9 +304,6 @@ s_adjeqf eq s0 =
 --    update by switching. Probably doesn't help much if we assume
 --    lazy computation of signal values anyway.
 --  chokeqf - choke with a filter for similar updates
---  strat - apply a parallel strategy incrementally to the signal, 
---    such that evaluation of sparks is always slightly ahead of 
---    the current element. (Maybe a separate module?)
 --  updating `profile` of a constant signal...
 --     similar to s_adjeqf, but limited to just the update?
 --     maybe s_adjeqf_switch? Might need a maximum T for the handoff,
