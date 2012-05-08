@@ -11,7 +11,7 @@ module FRP.Sirea.Behavior
     ( (:&:), (:|:), S, B 
     , (>>>) -- from Control.Category
     , bfwd
-    , BFmap(..)
+    , BFmap(..), bspark, btouch
     , BProd(..), bsecond, bsnd, bassocrp, (***), (&&&), bvoid
     , BSum(..), bright, binr, bassocrs, (+++), (|||), bskip 
     , bconjoinl, bconjoinr
@@ -25,8 +25,8 @@ module FRP.Sirea.Behavior
 
 import Prelude hiding (id,(.))
 import Control.Category
-import Control.Parallel (pseq)
-import Control.Parallel.Strategies (Eval, runEval, rpar)
+import Control.Parallel (pseq, par)
+import Control.Parallel.Strategies (Eval, runEval)
 
 import FRP.Sirea.Internal.STypes ((:&:),(:|:),S)
 import FRP.Sirea.Internal.BTypes (B)
@@ -84,46 +84,58 @@ class (Category b) => BFmap b where
     -- The cost of bforce is the potential for redundant computation
     -- when there are many tightly spaced updates.
     bforce :: (x -> ()) -> b (S p x) (S p x)
-    bforce _ = bfwd -- semantically
+    bforce _ = bfwd -- semantic effect is identity
 
-
-    -- | bstrat can initiate parallel strategies on signals based on
-    -- sampling. This can be an effective path to data parallelism,
-    -- but only works well when signals are stable for long periods.
-    -- Other than potential for parallel evaluation, bstrat is bfmap
-    -- with runEval.
+    -- | bstrat helps developers annotate data parallelism by use of
+    -- Control.Parallel.Strategies. The `Eval` monad enables precise
+    -- control of when evaluation occurs or sparks, in particular it
+    -- should assure that the `Eval` completes before the `Just y`
+    -- constructor is observed, without evaluating y. This can be 
+    -- combined with other annotations like `btouch`.
     bstrat :: (x -> Eval y) -> b (S p x) (S p y)
-    bstrat = bfmap . (runEval .) -- semantically
+    bstrat = bfmap . (runEval .) -- semantically fmap with runEval
 
     -- | Types that can be tested for equality can be filtered to
     -- eliminate redundant updates. Redundant updates are common if
-    -- mapping lossy functions (like `x->Bool`)to signals. badjeqf,
-    -- for adjacent equality filter, performs this operation.
+    -- mapping lossy functions (like `x->Bool`) to signals. badjeqf,
+    -- for "behavior adjacent equality filter", annotates the RDP
+    -- computation to perform such filtering.
     --
     -- The reason to eliminate redundant updates is to eliminate
     -- redundant computations further down the line, eg. at `bzip`.
-    -- This is a valuable performance optimization.
+    -- This is a valuable, safe performance optimization, though it
+    -- must be used judiciously (or badjeqf could itself become the
+    -- redundant computation).
     --
     -- Not all redundant updates are eliminated. When a signal is
     -- updated, scanning for the first actual change could diverge
     -- if there is no change. Type `b` may allow configuration of
     -- how far to scan.
     badjeqf :: (Eq x) => b (S p x) (S p x)
-    badjeqf = bfwd -- semantically
+    badjeqf = bfwd -- semantic effect is identity
 
--- | bspark will initiate computation of a signal's future value in 
--- parallel when the current value is sampled. A useful technique is
+-- | btouch will force evaluation of a signal only up to the Just or
+-- Nothing stage, i.e. bforce without the force. It could be useful
+-- in combination with bstrat.
+btouch :: (BFmap b) => b (S p x) (S p x)
+btouch = bforce (const ())
+
+-- | bspark will initiate computation of a signal's values as the
+-- signal is updated, but in a different thread. I.e. it is a drop
+-- in replacement for bforce if it would cause a thread to run too
+-- slow or the parallelism is worth it. This is structured to force
+-- a spark for every value, and observations on the response signal 
+-- wait for the spark to complete. (This strictness is important to
+-- control memory growth of the process.)
 --
--- >  import Control.DeepSeq
--- >  bspark rnf -- reduce values to normal form.
---
--- This leverages both data parallelism and dataflow parallelism.
--- Lazy thunks are computed in parallel, and the future values of a
--- signal are computed in parallel with observing present values.
---
+-- A useful technique might be to spark right before sending a value
+-- to another partition, so the value is received in normal form. 
 bspark :: (BFmap b) => (x -> ()) -> b (S p x) (S p x)
-bspark f = bstrat $ rpar . withSeq f
-    where withSeq f x = f x `pseq` x
+bspark f = bstrat doSpark >>> btouch
+    where doSpark x = 
+            let done = f x in
+            done `par` return (done `pseq` x)
+
 
 -- | BProd - data plumbing for asynchronous products. Asynchronous
 -- product (x :&: y) means that both signals are active for the same

@@ -13,15 +13,15 @@ Features
 
 Sirea is not ready for its first release. It probably doesn't compile. It has no usable features yet.
 
-Here are some features I look forward to:
+Here are some features I aim to have by version 1.0:
 
 * _Declarative effects._ Effects expressed by RDP are commutative, idempotent, continuous, and concurrent. These properties offer many of the reasoning and refactoring benefits associated with _pure_ programming styles (i.e. ability to move code around, abstract it, eliminate duplicates), while also supporting open composition, encapsulation, and dynamic acquisition of resources similar to an OOP model. There is no need to pipe data all the way through the application just to raise a window or manage a widget.
 
-* _Declarative linking._ Easily attach your RDP behavior to the real world with a simple dependency-injection framework. Control.Make minimizes boiler-plate in the default case while enabling safe, non-invasive configuration when you need it. 
+* _Declarative linking._ Attach your RDP behavior to the real world with a simple dependency-injection model. Volatile resources, such as a GLUT thread or cache, can be created and controlled declaratively. No need for boiler-plate creation or explicitly hooking callbacks. External services, such as a filesystem or database or HTTP internet access, are controlled indirectly through volatile resources. Simple configuration options may also be represented as dependencies. Multiple implementations for dependencies may coexist, supporting defaults, overrides, fallbacks, and preferences. The basis for Sirea's dependency model is developed as a separate library, `control-make`.
 
 * _Predictable, composable performance._ Sirea is designed for soft real time applications. It will control the amount of in-flight or lazy computations at any given instant to keep memory footprint and incremental CPU costs under control. Sirea won't forbid expensive functions growing state, but an attentive developers should have very little difficulty managing performance and memory footprint. 
 
-* Practical parallelism through two orthogonal, declarative mechanisms.
+* _Parallelism._ Through two practical, orthogonal, declarative mechanisms.
     1. Data Parallel Haskell (DPH) sparks are available by use of `bstrat`, which allows firing sparks a few milliseconds before you need the result. The tight bond between sparks and time of sampling helps control memory overhead and prevents sparks from "fizzling." 
     2. Sirea models partitioning and spatial distribution by use of `bcross`. Sirea will automatically create a thread for each partition reached by `bcross`. RDP communication between threads is performed in coarse-grained batches. The batches provide efficiency and snapshot consistency between partitions. Sirea may block on send to control performance, but should often be wait-free if every thread is keeping up with its computation burdens.
 
@@ -29,7 +29,9 @@ Here are some features I look forward to:
 
 * _Anticipation._ RDP does not make predictions, but it does _propagate_ them. Decent predictions at just a few locations can have a widespread effect in an RDP system, supporting optimistic computation and timely preparation of resources, e.g. loading a texture, or opening a window slightly ahead of requirement so they are available right when we need them. Anticipation is valuable even if it were only an implementation detail, but developers have access to anticipation by use of `bpeek`.
 
-* _Embeddable._ Sirea doesn't take over the main loop. Instead, Sirea supplies a step function for starting and maintaining the behavior. These properties also apply partition threads created by Sirea. They can do useful work, such as managing state, network, or display in addition to processing RDP communication. Sirea supplies some simple mechanisms for communicating between threads and RDP, providing a frozen snapshot view of other threads (only updated between steps). Developers also have power to create new behavior primitives to attach new resources with `bUnsafeLnk`.
+* _Embeddable, Extension Language._ Sirea doesn't take over the main loop. Instead, Sirea supplies a step function for starting and maintaining the behavior. These properties also apply partition threads created by Sirea. They can do useful work, such as managing state, network, or display in addition to processing RDP communication. Sirea supplies some simple mechanisms for communicating between threads and RDP, providing a frozen snapshot view of other threads (only updated between steps). Developers also have power to create new behavior primitives to attach new resources with `unsafeLnkB`.
+
+* _Extensible and Live Programming._ Sirea (via separate library, `sirea-plugin`) provides a runtime plugin framework. Plugins primarily provide service modules. Service modules can fulfill dependencies for _declarative linking_. Plugins may also provide application behavior modules, allowing multiple _main_ behaviors to run concurrently and interact through shared services. Plugins can be recompiled on the fly and hot-swapped, ensuring application behavior is consistent with code in the editor. Live programming with plugins provides a beautiful alternative to REPL loops, and also a viable route for live DSL programming (by live compilation to a Sirea plugin). Sirea as an application platform can run as a thin wrapper for the live plugin programming framework.
 
 
 Reactive Demand Programming (in Sirea)
@@ -125,6 +127,7 @@ All behaviors operate on _signals in space and time_. Many behaviors are data pl
     bfirst :: B x x' -> B (x :&: y) (x' :&: y) 
     (>>>)  :: B x y -> B y z -> B x z
     bzip   :: B (S p a :&: S p b) (S p (a,b))
+    bzap   :: B (S p (a -> b) :&: S p a) (S p b))
     bsplit :: B (S p (Either a b)) (S p a :|: S p b)
     bdup   :: B x (x :&: x)
     bmerge :: B (x :|: x) x
@@ -133,11 +136,23 @@ All behaviors operate on _signals in space and time_. Many behaviors are data pl
     bfst   :: B (x :&: y) x
     binl   :: B x (x :|: y)
 
-There are around thirty or forty of these that must be learned to use RDP effectively. Fortunately, many of those are simple symmetries, dualities, or combinations that make them easier to remember. There are a few hundred shorthand composites defined in FRP.Sirea.Bdeep but they have consistent naming so you only need to learn a few to know them all. A few useful behaviors serve as performance annotations, to force lazy thunks, parallelize future computations, eliminate redundant updates, or simplistic memoization.
+There are around thirty or forty of these that must be learned to use RDP effectively. Fortunately, most of those include symmetries, dualities, or combinations that make them easier to remember. There are a few hundred shorthand composites defined in FRP.Sirea.Bdeep but they have consistent naming so you only need to learn a few to know them all. A few useful behaviors serve as performance annotations, to force lazy thunks, parallelize future computations, eliminate redundant updates, or simplistic memoization.
 
-The most common behavior I use is simple sequencing:
-    
-    bxy >>> byz
+If you are unfamiliar with Arrows, I strongly recommend reading [Understanding Arrows](http://en.wikibooks.org/wiki/Haskell/Understanding_arrows) in the Haskell wikibook. 
+
+The basic data plumbing behaviors of RDP is essentially an arrows model, albeit somewhat more restrained in order to support asynchronous products and sums, and asynchronous updates of effectful signals. For example, there is no variation of `arr` that applies over all elements in an asynchronous product. Instead there is `bfmap` that applies a function to just one signal, and `bzip` or `bzap` to combine signals that happen to be in the same partition.
+
+All the traditional Arrow and ArrowChoice composition operators are provided:
+
+    (>>>) :: B x y  -> B y z  -> B x z                   -- pipeline
+    (***) :: B x x' -> B y y' -> B (x :&: y) (x' :&: y') -- parallel
+    (&&&) :: B x y  -> B x z  -> B x (y :&: z)           -- duplication
+    (+++) :: B x x' -> B y y' -> B (x :|: y) (x' :|: y') -- choice, case
+    (|||) :: B x z  -> b y z  -> B (x :|: y) z           -- merge
+
+RDP supports a high level of potential parallelism. There is pipeline parallelism from (>>>) - computing a newer y and an older z in parallel. There is task parallelism from (***) - computing x' and y' at the same time. Data parallelism is also readily supported. 
+
+Due to continuous semantics, RDP allows a great deal of parallelism from the first three compositions. Pipeline parallelism, via (>>>), involves pipeline parallelism (from >>>, computing a newer y and an older z in parallel), task parallelism (from *** or &&&; computing x' and y' in parallel), 
 
 Since behaviors operate on continuous signals, the above actually represents a pipeline with potential for parallelism: fresh `x` values can be continuously computed in parallel with older `y` values. A vertical slice through the pipeline is effectively the signal type at that point, in this case `y`.
 
@@ -273,11 +288,11 @@ Sirea provides one concrete behavior type, a GADT simply named `B`. The GADT sym
       su_update :: Maybe (T, Sig a)
     }
     
-    bUnsafeLnk :: MkLnk x y -> B x y
+    unsafeLnkB :: MkLnk x y -> B x y
 
 The `ln_build` operation is executed when the behavior is first built. The behavior is built backwards - given the output target, you return the input target. Once built, `ln_update` will be called after each update, allowing the concrete signal values to be processed. _(Optimization is left out of the above representation; see the code for details.)_
 
-Sirea clients can add new primitive behaviors via `bUnsafeLnk`, but must be cautious to avoid breaking RDP abstractions. Clients should be able to adapt most new resources using simple combinations of existing behaviors.
+Sirea clients can add new primitive behaviors via `unsafeLnkB`, but must be cautious to avoid breaking RDP abstractions. Clients should be able to adapt most new resources using simple combinations of existing behaviors.
 
 Declarative Effects and Concurrency in RDP
 ------------------------------------------
@@ -316,17 +331,20 @@ However, RDP provides no guarantee that demands are conflict free. It is possibl
 
 The holistic, set-based view of simultaneous demands will also force developers to confront the issue of conflicts early in their designs. Developers can aim to avoid conflicts before they happen or make them easier to resolve - e.g. control distribution of the `bcamctl` behavior, or express camera commands in terms of weighted constraints. Between avoiding conflicts early in design and resolving them with holistic intelligence (able to resolve many concurrent demands at once), RDP *should* more readily support open, pluggable, extensible programs than many other paradigms - though I've yet to verify this property.
 
-### Declarative State for RDP
+### Declarative State
 
-### Stateless Stable Models for RDP
+### Stability Models
 
-### Modeling Control Flow and Traditional Asynchrony in RDP
+### Control Flow and Traditional Asynchrony
 
-### Modeling Incremental and Batch Processing in RDP
+### Incremental and Batch Processing
 
 ### Anticipation and Idempotence
 
 ### Metacircular Dynamic
+
+RDP is designed for a notion of *RDP all the way down.* The application itself be treated as a dynamic behavior, computed in a larger RDP system. 
+
 
 No floor, no ceiling. RDP applications, including linking of effectful behaviors and linking, can always be understood as dynamic behaviors in yet a lower level RDP application.
 

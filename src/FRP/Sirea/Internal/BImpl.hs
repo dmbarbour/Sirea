@@ -14,7 +14,8 @@ module FRP.Sirea.Internal.BImpl
     , disjoinB, zapB, splitB
     , fmapB, constB, forceB, stratB, adjeqfB -- BFmap
     , addStabilityB, delayB, synchB, peekB, forceDelayB, tshiftB
-    , eqshiftB
+    , unsafeEqShiftB
+    , unsafeFullMapB
     ) where
 
 import Prelude hiding (id,(.))
@@ -376,9 +377,15 @@ fmapB :: (a -> b) -> B (S p a) (S p b)
 fmapB = mkLnkB tr_fwd . mkLnkPure . lnFmap
     where lnFmap = ln_lumap . ln_sumap . su_fmap . fmap
 
+-- | map haskell function across an input signal 
+-- (unsafe! could damage duration coupling.) 
+unsafeFullMapB :: (Maybe a -> Maybe b) -> B (S p a) (S p b)
+unsafeFullMapB = mkLnkB tr_fwd . mkLnkPure . lnFullMap
+    where lnFullMap = ln_lumap . ln_sumap . su_fmap . s_full_map
+
 -- | map a constant to a signal. 
 constB :: DT -> c -> B (S p a) (S p c)
-constB dt c = mkLnkB tr_fwd constLnk >>> eqshiftB dt alwaysEq
+constB dt c = mkLnkB tr_fwd constLnk >>> unsafeEqShiftB dt alwaysEq
     where constLnk = mkLnkPure $ lnConst c
           alwaysEq = (const . const) True
           lnConst  = ln_lumap . ln_sumap . su_fmap . (<$)
@@ -452,23 +459,27 @@ forceSig rnf tLower tUpper sig =
             forceSig rnf tLower tUpper sig'
         
 
--- | At the moment stratB is a dummy implementation. Eventually, 
--- however, it should set up a signal to initiate evaluation of its
--- own future whenever the current value is sampled. This will be a
--- tricky bit of code. It might be best if I get a bit sloppy about
--- the update handoff, in which case stratB could be a pure signal
--- operation. Trying to be clever about this is giving me headaches.
---
--- TODO: initiate evaluation of future in parallel with sampling. 
+-- | stratB currently evaluates based on stability, not sampling. It
+-- ensures that evaluation is initialized before the `Just y` signal
+-- value is observed. This should achieve a decent level of parallelism.
 stratB :: DT -> (x -> Eval y) -> B (S p x) (S p y)
-stratB _ = fmapB . (runEval .)
+stratB dt r = applyStratB r >>> forceB dt (const ())
 
+-- | apply a strategy without forcing it
+applyStratB :: (x -> Eval y) -> B (S p x) (S p y)
+applyStratB = unsafeFullMapB . maybeStrat
+
+-- translate a strategy to operate on Maybe types, with observation
+-- of the `Just` constructor forcing the evaluation.
+maybeStrat :: (x -> Eval y) -> (Maybe x -> Maybe y)
+maybeStrat _ Nothing = Nothing
+maybeStrat r (Just x) = runEval (Just <$> r x)
 
 -- | filter adjacent equal values from a signal (performance), with
 -- some scan-ahead to combine equal values. Useful after fmapB if 
 -- it results in far fewer values. 
 adjeqfB :: (Eq x) => DT -> B (S p x) (S p x)
-adjeqfB dt = adjeqfSig >>> eqshiftB dt (==)
+adjeqfB dt = adjeqfSig >>> unsafeEqShiftB dt (==)
     where adjeqfSig = mkLnkB id $ mkLnkPure lnAdjeqf
           lnAdjeqf = ln_lumap $ ln_sumap $ su_fmap $ s_adjeqf (==)
 
@@ -535,8 +546,8 @@ buildTshift t0 tf (LnkSig lu) =
 -- would otherwise be redundant, with a given limit for how far into
 -- the future we should search for the first change. The given eq
 -- function might be a semi-decision on equality, in general.
-eqshiftB :: DT -> (a -> a -> Bool) -> B (S p a) (S p a)
-eqshiftB dt eq = mkLnkB id (mkLnkSimp (buildEqShift dt eq))
+unsafeEqShiftB :: DT -> (a -> a -> Bool) -> B (S p a) (S p a)
+unsafeEqShiftB dt eq = mkLnkB id (mkLnkSimp (buildEqShift dt eq))
 
 buildEqShift :: DT -> (a -> a -> Bool) -> Lnk (S p a) -> IO (Lnk (S p a))
 buildEqShift _ _ LnkDead = return LnkDead

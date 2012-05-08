@@ -1,6 +1,12 @@
+{-# LANGUAGE TypeOperators, EmptyDataDecls #-}
 
+module FRP.Sirea.Partition 
+    (
+    ) where
 
-module FRP.Sirea.Partition where
+import Data.Typeable
+import 
+
 
 
 {-

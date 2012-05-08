@@ -1,8 +1,7 @@
-
 {-# LANGUAGE GADTs, TypeOperators #-}
 
 module FRP.Sirea.Link 
-    ( bUnsafeLnk
+    ( unsafeLnkB
     -- the following are re-exported from LTypes
     , MkLnk(..), LnkUp(..), Lnk, LnkW(..), SigUp(..)
     , ln_zero, ln_lnkup
@@ -61,9 +60,11 @@ import FRP.Sirea.Behavior
 -- something. But it is okay to prepare some resources if they can
 -- be GC'd if later unused. Primary use of IO is to build caches.
 --
-bUnsafeLnk :: MkLnk x y -> B x y
-bUnsafeLnk mklnk = bsynch >>> B_tshift xBarrier >>> B_mkLnk tr_unit mklnk
-    where xBarrier dts = 
+unsafeLnkB :: MkLnk x y -> B x y
+unsafeLnkB mklnk = bsynch >>> B_tshift xBarrier >>> B_mkLnk tr_unit mklnk
+    where xBarrier dts =
+            assert (ldt_valid dts) $
+            assert (ldt_minGoal dts == ldt_maxGoal dts) $ 
             let bNeedBarrier = ldt_minCurr dts /= ldt_maxCurr dts in
             if ln_tsen mkLnk || bNeedBarrier
                 then flip lnd_fmap dts $ \ x -> x { ldt_curr = (ldt_goal x) }
