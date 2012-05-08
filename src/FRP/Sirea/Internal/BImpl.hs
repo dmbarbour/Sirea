@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeOperators #-} 
+{-# LANGUAGE TypeOperators, GADTs #-} 
 
 -- | BImpl has the implementation details for most of Sirea's
 -- concrete behaviors, mostly because I did not want them cluttering
@@ -10,7 +10,7 @@
 module FRP.Sirea.Internal.BImpl
     ( fwdB
     , fstB, firstB, swapB, assoclpB, dupB -- BProd 
-    , inlB, leftB, mirrorB, assocrsB, mergeB -- BSum
+    , inlB, leftB, mirrorB, assoclsB, mergeB -- BSum
     , disjoinB, zapB, splitB
     , fmapB, constB, forceB, stratB, adjeqfB -- BFmap
     , addStabilityB, delayB, synchB, peekB, forceDelayB, tshiftB
@@ -28,6 +28,8 @@ import Control.Category
 import Control.Applicative
 import Control.Parallel.Strategies (Eval, runEval)
 import Control.Exception (assert)
+import Data.Function (on)
+import Data.IORef (newIORef, readIORef, writeIORef, IORef)
 
 import qualified Data.List as L
 
@@ -43,7 +45,7 @@ leftB :: B x x' -> B (x :|: y) (x' :|: y)
 leftB = B_left
 
 mkLnkPure :: (Lnk y -> Lnk x) -> MkLnk x y
-mkLnkPure bfn = mkLnkSimp (return . bfn)
+mkLnkPure = mkLnkSimp . (return .)
 
 mkLnkSimp :: (Lnk y -> IO (Lnk x)) -> MkLnk x y
 mkLnkSimp build = MkLnk { ln_tsen = False 
@@ -61,7 +63,7 @@ fwdB = mkLnkB id $ mkLnkPure id
 -- in fstB, snd output is dead. 
 fstB :: B (x :&: y) x
 fstB = mkLnkB lnd_fst $ mkLnkPure lnFst
-    where lnFst ln = LnkProd ln LnKDead 
+    where lnFst ln = LnkProd ln LnkDead 
 
 -- simple swap on Lnk sinks
 swapB :: B (x :&: y) (y :&: x)
@@ -78,10 +80,10 @@ assoclpB = mkLnkB trRotl $ mkLnkPure lnAso
             let tz = (lnd_snd >>> lnd_snd) tr in
             LnkDProd (LnkDProd tx ty) tz
           lnAso ln =
-            let x = ln_fst ln in
-            let y = (ln_snd >>> ln_fst) ln in
-            let z = (ln_snd >>> ln_snd) ln in
-            LnkProd (LnkProd x y) z
+            let x = (ln_fst >>> ln_fst) ln in
+            let y = (ln_fst >>> ln_snd) ln in
+            let z = ln_snd ln in
+            LnkProd x (LnkProd y z)
 
 
 -- deep-duplicate signals (at least where two sinks are available)
@@ -113,10 +115,10 @@ inlB = mkLnkB trinl $ mkLnkPure ln_left
     where trinl tr = LnkDSum tr (tr_dead tr)
 
 -- the `time` of the RHS signal is dead when we're `binl`
-tr_dead :: TR x -> TR y
+tr_dead :: LnkD LDT x -> LnkD LDT y
 tr_dead x = LnkDUnit ldtDead
-    where ldtDead = LDT { ldt_curr = ldt_minCurr x
-                        , ldt_goal = ldt_minGoal x
+    where ldtDead = LDT { ldt_curr = ldt_maxCurr x
+                        , ldt_goal = ldt_maxGoal x
                         , ldt_live = False 
                         }
 
@@ -134,16 +136,16 @@ assoclsB = mkLnkB trRotl $ mkLnkPure lnAso
             let ty = (lnd_right >>> lnd_left) tr in
             let tz = (lnd_right >>> lnd_right) tr in
             LnkDSum (LnkDSum tx ty) tz
-          lnAso ln =
-            let x = ln_left ln in
-            let y = (ln_right >>> ln_left) ln in
-            let z = (ln_right >>> ln_left) ln in
-            LnkSum (LnkSum x y) z
+          lnAso ln = -- here `ln` is output
+            let x = (ln_left >>> ln_left) ln in
+            let y = (ln_left >>> ln_right) ln in
+            let z = ln_right ln in
+            LnkSum x (LnkSum y z)
 
 -- merge is among the more challenging behaviors due to complex
 -- synchronization and optimization requirements.
 mergeB :: B (x :|: x) x
-mergeB = mergeSynchB >>> latentBC0Time mergeSigsB
+mergeB = mergeSynchB >>> latentOnTime mergeSigsB
 
 -- pre-synch for merge; minimal, does not synch with dead branches
 mergeSynchB :: B (x :|: x) (x :|: x)
@@ -170,7 +172,7 @@ shallowSynch lhs rhs =
         }
 
 mergeSigsB :: LnkD LDT (x :|: x) -> B (x :|: x) x
-mergeSigsB tr = mkLnk trMerge (mkLnkSimp $ buildMerge tr) 
+mergeSigsB tr = mkLnkB trMerge (mkLnkSimp $ buildMerge tr) 
     where trMerge xx = lnd_zip ldtMerge (lnd_left xx) (lnd_right xx)
           ldtMerge lhs rhs =
             let inl = not (ldt_live lhs) in
@@ -182,24 +184,24 @@ mergeSigsB tr = mkLnk trMerge (mkLnkSimp $ buildMerge tr)
             lhs
 
 -- now to build the link behaviors for merge.
-buildMergeB :: LnkD LDT (x :|: x) -> Lnk x -> IO (Lnk (x :|: x))
-buildMergeB tr dst =
-    buildMergeB_i (lnd_left tr) (lnd_right tr) dst >>= 
-    return . uncurry LnkDSum
+buildMerge :: LnkD LDT (x :|: x) -> Lnk x -> IO (Lnk (x :|: x))
+buildMerge tr dst =
+    buildMerge_i (lnd_left tr) (lnd_right tr) dst >>= 
+    return . uncurry LnkSum
 
 -- this variation is a bit more structure agnostic to support
 -- recursive deep-merge of sum and product types.
-buildMergeB_i :: LnkD LDT x -> LnkD LDT x -> Lnk x -> IO (Lnk x, Lnk x)
-buildMergeB_i _ _ LnkDead = return (LnkDead, LnkDead)
-buildMergeB_i tl tr (LnkProd x y) =
-    buildMergeB_i (lnd_fst tl) (lnd_fst tr) x >>= \ (xl,xr) ->
-    buildMergeB_i (lnd_snd tl) (lnd_snd tr) y >>= \ (yl,yr) ->
+buildMerge_i :: LnkD LDT x -> LnkD LDT x -> Lnk x -> IO (Lnk x, Lnk x)
+buildMerge_i _ _ LnkDead = return (LnkDead, LnkDead)
+buildMerge_i tl tr (LnkProd x y) =
+    buildMerge_i (lnd_fst tl) (lnd_fst tr) x >>= \ (xl,xr) ->
+    buildMerge_i (lnd_snd tl) (lnd_snd tr) y >>= \ (yl,yr) ->
     return (LnkProd xl yl, LnkProd xr yr)
-buildMergeB_i tl tr (LnkSum x y) =
-    buildMergeB_i (lnd_left tl) (lnd_left tr) x >>= \ (xl,xr) ->
-    buildMergeB_i (lnd_right tl) (lnd_right tr) y >>= \ (yl,yr) ->
+buildMerge_i tl tr (LnkSum x y) =
+    buildMerge_i (lnd_left  tl) (lnd_left  tr) x >>= \ (xl,xr) ->
+    buildMerge_i (lnd_right tl) (lnd_right tr) y >>= \ (yl,yr) ->
     return (LnkSum xl yl, LnkSum xr yr)
-buildMergeB_i tl tr (LnkSig lu) =
+buildMerge_i tl tr (LnkSig lu) =
     let lLiv = (ldt_live . lnd_sig) tl in
     let rLiv = (ldt_live . lnd_sig) tr in
     case (lLiv, rLiv) of
@@ -219,20 +221,23 @@ buildMergeB_i tl tr (LnkSig lu) =
 -- B_tshift was heavily revised) then apply the split.
 disjoinB :: B (S p a :&: ((S p () :&: x) :|: y) )
               ( (S p a :&: x) :|: (S p a :&: y) )
-disjoinB = disjSynchB >>> latentBC0Time disjSigsB
+disjoinB = disjSynchB >>> latentOnTime disjSigsB
 
 -- pre-synch for disjoin operation
 disjSynchB :: B (S p a :&: ((S p () :&: x) :|: y) ) 
                  (S p a :&: ((S p () :&: x) :|: y) )
-disjSynchB = B_tshift disjSynchTS
+disjSynchB = B_tshift disjSynchTs
     where disjSynchTs auxy = 
             let ux  = (lnd_left . lnd_snd) auxy in
+            let a   = (lnd_fst) auxy in
+            let u   = (lnd_fst) ux in
+            let x   = (lnd_snd) ux in
             let y   = (lnd_right . lnd_snd) auxy in
             let inl = not (ldt_anyLive y) in
             let inr = not (ldt_anyLive ux) in
             if (inl || inr) then auxy else
-            let dta = (lnd_sig . lnd_fst) auxy in
-            let dtu = (lnd_sig . lnd_fst . lnd_left . lnd_snd) auxy in
+            let dta = (lnd_sig) a in
+            let dtu = (lnd_sig) u in
             let dts = shallowSynch dta dtu in
             let a' = LnkDUnit dts in
             let u' = LnkDUnit dts in
@@ -243,7 +248,7 @@ disjSynchB = B_tshift disjSynchTS
 disjSigsB :: LnkD LDT (S p a :&: ((S p () :&: x) :|: y))
           -> B (S p a :&: ((S p () :&: x) :|: y) )
                ( (S p a :&: x) :|: (S p a :&: y) )
-disjSigsB tr = mkLnkB disjTR (mkLnkSimp $ buildDisj tr)
+disjSigsB tr = mkLnkB disjTr (mkLnkSimp $ buildDisj tr)
     where disjTr auxy = 
             -- restructure data; maintain liveness of x,y. 
             let ux   = (lnd_left . lnd_snd) auxy in
@@ -255,7 +260,7 @@ disjSigsB tr = mkLnkB disjTR (mkLnkSimp $ buildDisj tr)
             let rLiv = aLiv && ldt_anyLive y in
             let l = LnkDUnit $ dta { ldt_live = lLiv } in
             let r = LnkDUnit $ dta { ldt_live = rLiv } in
-            ((l `LnkProd` x) `LnkSum` (r `LnkProd` y))
+            ((l `LnkDProd` x) `LnkDSum` (r `LnkDProd` y))
 
 -- build disjoin behavior, using some input to decide left/right path.
 buildDisj :: LnkD LDT (S p a :&: ((S p () :&: x) :|: y))
@@ -295,8 +300,8 @@ buildDisjFull lxry =
     let x = (ln_snd . ln_left) lxry in
     let r = (ln_fst . ln_right) lxry in
     let y = (ln_snd . ln_right) lxry in
-    let bLnkDead = ln_null l && ln_null r in -- don't need `S p a`
-    let lnkIfDead = LnkDead `LnkProd` ((LnkDead `LnkProx` x) `LnkSum` y) in
+    let bLnkDead = ln_dead l && ln_dead r in -- don't need `S p a`
+    let lnkIfDead = LnkDead `LnkProd` ((LnkDead `LnkProd` x) `LnkSum` y) in
     if bLnkDead then return lnkIfDead else
     -- else need to perform masking for left, right, or both
     let lul = ln_lnkup l in
@@ -337,19 +342,19 @@ buildZap (LnkSig lu) =
 
 -- | split a signal based on its data. Main source of (:|:) signals.
 splitB :: B (S p (Either x y)) (S p x :|: S p y)
-splitB = mkLnkPure trSplit lnkSplit 
+splitB = mkLnkB trSplit $ mkLnkPure lnkSplit 
     where trSplit = LnkDUnit . lnd_sig -- unit of a different type
           lnkSplit lr =
             let l = ln_left lr in
             let r = ln_right lr in
-            let bDead = ln_null l && ln_null r in
+            let bDead = ln_dead l && ln_dead r in
             if bDead then LnkDead else
             let lul = ln_lnkup l in
             let lur = ln_lnkup r in
             let touch = ln_touch lul >> ln_touch lur in
             let update su = 
-                    let sul = (su_fmap . s_adjn . s_full_map takeLeft) su in
-                    let sur = (su_fmap . s_adjn . s_full_map takeRight) su in
+                    let sul = (su_fmap (s_adjn . s_full_map takeLeft)) su in
+                    let sur = (su_fmap (s_adjn . s_full_map takeRight)) su in
                     ln_update lul sul >>
                     ln_update lur sur
             in
@@ -382,7 +387,7 @@ constB dt c = mkLnkB tr_fwd constLnk >>> eqshiftB dt alwaysEq
 addStabilityB :: DT -> B (S p x) (S p x)
 addStabilityB dt = if (0 == dt) then fwdB else 
     mkLnkB id (mkLnkPure lnAddStability)
-    where lnAddStability = ln_lumap . ln_sumap . suAddStability
+    where lnAddStability = ln_lumap $ ln_sumap suAddStability
           suAddStability su =
             let tStable = fmap (flip addTime dt) (su_stable su) in
             su { su_stable = tStable }
@@ -401,16 +406,16 @@ forceB dt rnf = wrapStability dt $ mkLnkB id $ mkLnkSimp $ buildForceB rnf
 -- force up to stability
 buildForceB :: (x -> ()) -> Lnk (S p x) -> IO (Lnk (S p x))
 buildForceB rnf (LnkSig lu) = 
-    newIORef (s_never, Nothing) >>= \ rfSt ->
-    let lu' = buildForceB' dt rnf rfSt lu in
+    newIORef (s_never, Nothing) >>= \ rf ->
+    let lu' = buildForceB' rnf rf lu in
     return (LnkSig lu')
 
 -- force signal up to stability.
 -- stability may have been adjusted a bit just for this op, so it
 -- does not make stability assumptions (and doesn't use SigSt). 
-buildForceB' :: (x -> ()) -> IORef (SigSt x) -> LinkUp x -> LinkUp x
+buildForceB' :: (x -> ()) -> IORef (Sig x, Maybe T) -> LnkUp x -> LnkUp x
 buildForceB' rnf rf lu = 
-    LinkUp { ln_touch = (ln_touch lu), ln_update = onUpdate }
+    LnkUp { ln_touch = (ln_touch lu), ln_update = onUpdate }
     where onUpdate su = 
             -- update state and cleanup
             readIORef rf >>= \ (s0,t0) ->
@@ -421,16 +426,15 @@ buildForceB' rnf rf lu =
             writeIORef rf (scln,tf) >>
 
             -- obtain bounds for computing signal sf.
-            let mtOld   = st_stable st0 in
             let mtUpd   = fmap snd (su_state su) in
-            let mtLower = (pure min <*> mtOld <*> mtUpd) <|> mtOld <|> mtUpd
-            let mtUpper = st_stable stUp <|> mtUpd in
-            let mtPair  = pure (,) <*> mtLower <*> mtUpper
+            let mtLower = (pure min <*> t0 <*> mtUpd) <|> t0 <|> mtUpd in
+            let mtUpper = tf in
+            let mtPair  = pure (,) <*> mtLower <*> mtUpper in
             let compute = case mtPair of
                     Nothing -> ()
                     Just (tLower,tUpper) -> 
                         if(tLower < tUpper) 
-                        then forceSig rnf tLower tUpper (st_signal st)
+                        then forceSig rnf tLower tUpper sf
                         else ()
             in
             -- force thunks then forward the update.
@@ -466,12 +470,12 @@ stratB _ = fmapB . (runEval .)
 adjeqfB :: (Eq x) => DT -> B (S p x) (S p x)
 adjeqfB dt = adjeqfSig >>> eqshiftB dt (==)
     where adjeqfSig = mkLnkB id $ mkLnkPure lnAdjeqf
-          lnAdjeqf = ln_lumap . ln_sumap . su_fmap . s_adjeqf (==)
+          lnAdjeqf = ln_lumap $ ln_sumap $ su_fmap $ s_adjeqf (==)
 
 -- | delay a signal (logically)
 delayB :: DT -> B x x
 delayB = B_tshift . lnd_fmap . addDelay
-    where addDelay dt ldt = ldt { ldt_goal = (dt + (ldt_goal lt)) }
+    where addDelay dt ldt = ldt { ldt_goal = (dt + (ldt_goal ldt)) }
 
 -- | synchronize signals (logically)
 -- note: ignores dead branches due to binl or binr.
@@ -482,21 +486,19 @@ synchB = B_tshift doSynch
             assert (ldt_valid x) $
             let dtGoal = lnd_aggr max $ lnd_fmap (liveGoalOr 0) x in
             lnd_fmap (applyGoal dtGoal) x
-          liveGoalOr def x = 
-            if (ldt_live x) then (ldt_goal x) else def
-          applyGoal dtg x = 
-            if (ldt_live x) then ldt { ldt_goal = dtg } else ldt
+          liveGoalOr def ldt = 
+            if (ldt_live ldt) then (ldt_goal ldt) else def
+          applyGoal dtg ldt = 
+            if (ldt_live ldt) then ldt { ldt_goal = dtg } else ldt
 
 -- | look ahead in a signal slightly.
-peekB :: DT -> B (S p x) (S p (Either x ())
+peekB :: DT -> B (S p x) (S p (Either x ()))
 peekB dt = mkLnkB tr_fwd peekLnk
-    where peekLnk = MkLnk { ln_tsen  = False
+    where lnPeek = ln_lumap $ ln_sumap $ su_fmap $ s_peek dt
+          peekLnk = MkLnk { ln_tsen  = False
                           , ln_peek  = dt -- to track anticipation.
-                          , ln_build = return . ln_peek dt
+                          , ln_build = return . lnPeek
                           }
-
-ln_peek :: DT -> LnkUp (Either a ()) -> LnkUp a
-ln_peek = ln_lumap . ln_sumap . su_fmap . s_peek
 
 -- | force aggregated lazy delays to apply at this location.
 -- (unnecessary in most cases)
@@ -507,7 +509,7 @@ forceDelayB = B_tshift doBar
 -- | tshiftB turns a difference of `tshift` values into a MkLnk behavior.
 -- This is used by the compiler to apply delays. 
 tshiftB :: LnkD LDT x -> LnkD LDT x -> B x x
-tshiftB t0 tf = mkLnkB id (mkLnkPure $ buildTsift t0 tf)
+tshiftB t0 tf = mkLnkB id (mkLnkPure $ buildTshift t0 tf)
 
 -- buildTshift will apply delays based on before/after LDT values
 buildTshift :: LnkD LDT x -> LnkD LDT x -> Lnk x -> Lnk x
@@ -526,7 +528,7 @@ buildTshift t0 tf (LnkSig lu) =
     let dtDiff = (ldt_curr dtf) - (ldt_curr dt0) in
     assert (dtDiff >= 0) $
     if (0 == dtDiff) then LnkSig lu else
-    LnkSig ((ln_sumap . su_delay dtDiff) lu)
+    LnkSig (ln_sumap (su_delay dtDiff) lu)
     
 
 -- | eqshiftB tries to push updates a bit into the future if they
@@ -534,26 +536,26 @@ buildTshift t0 tf (LnkSig lu) =
 -- the future we should search for the first change. The given eq
 -- function might be a semi-decision on equality, in general.
 eqshiftB :: DT -> (a -> a -> Bool) -> B (S p a) (S p a)
-eqshiftB dt eq = mkLnkSimp id (buildEqShift dt eq)
+eqshiftB dt eq = mkLnkB id (mkLnkSimp (buildEqShift dt eq))
 
 buildEqShift :: DT -> (a -> a -> Bool) -> Lnk (S p a) -> IO (Lnk (S p a))
 buildEqShift _ _ LnkDead = return LnkDead
 buildEqShift dt eq (LnkSig lu) = 
     newIORef st_zero >>= \ rfSt ->
     let lu' = lnEqShift dt eq rfSt lu in
-    LnkSig lu'
+    return (LnkSig lu')
 
 lnEqShift :: DT -> (a -> a -> Bool) -> IORef (SigSt a) -> LnkUp a -> LnkUp a
 lnEqShift dt eq rf lu = LnkUp { ln_touch = onTouch, ln_update = onUpdate }
     where onTouch = ln_touch lu
           onUpdate su = 
             readIORef rf >>= \ st ->
-            let s0 = st_state st in
+            let s0 = st_signal st in
             let st' = st_sigup su st in
             let stCln = maybe st_zero (flip st_clear st') (st_stable st') in
             stCln `seq` 
             writeIORef rf stCln >>
-            case su_state us of
+            case su_state su of
                 Nothing -> ln_update lu su
                 Just (sf,tLower) ->
                     -- search for change between update time and stability + dt

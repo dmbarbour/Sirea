@@ -30,6 +30,13 @@ import Control.Parallel.Strategies (Eval, runEval, rpar)
 
 import FRP.Sirea.Internal.STypes ((:&:),(:|:),S)
 import FRP.Sirea.Internal.BTypes (B)
+import FRP.Sirea.Internal.BImpl 
+    ( fmapB, constB, forceB, stratB, adjeqfB
+    , firstB, dupB, fstB, assoclpB, swapB
+    , leftB, mergeB, inlB, assoclsB, mirrorB
+    , disjoinB, zapB, splitB
+    , delayB, synchB, peekB
+    )
 import FRP.Sirea.Time (DT)
 
 infixr 3 ***
