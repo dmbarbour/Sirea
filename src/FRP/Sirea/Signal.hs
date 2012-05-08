@@ -32,11 +32,10 @@ module FRP.Sirea.Signal
  , s_mask
  , s_merge
  , s_switch
- , s_split
  , s_is_final
  , s_delay, s_peek
  , s_select
- , s_adjeqf
+ , s_adjn, s_adjeqf
  --, s_strat
  -- instances: functor, applicative, alternative
  ) where
@@ -45,7 +44,7 @@ import FRP.Sirea.Time
 import FRP.Sirea.DiscreteTimedSeq
 import Control.Exception (assert)
 import Control.Applicative
-import Control.Paralle.Strategies (Eval)
+import Control.Parallel.Strategies (Eval)
 
 -- | Sig is an abstract type for discrete-varying signals in Sirea.
 -- A signal is defined for all times, but in practice the past is
@@ -209,18 +208,6 @@ s_switch :: Sig a -> T -> Sig a -> Sig a
 s_switch s0 t sf =
     mkSig (s_head s0) (ds_sigup (s_tail s0) t (s_head sf) (s_tail sf))
 
-
--- | Split an Either signal into two separate signals active at
--- different times.
-s_split :: Sig (Either a b) -> (Sig a, Sig b)
-s_split s0 = (sa,sb)
-  where sa = s_adjn (s_full_map takeLeft s0)
-        sb = s_adjn (s_full_map takeRight s0)
-        takeLeft (Just (Left a))   = Just a
-        takeLeft _                 = Nothing
-        takeRight (Just (Right b)) = Just b
-        takeRight _                = Nothing
-
 -- | Test whether a signal is in its final state from a particular
 -- instant. This is useful for garbage collection and optimizations.
 -- This is a semi-decision; it may return False if the answer is
@@ -233,7 +220,8 @@ s_is_final s0 tm =
         _ -> False
 
 
--- s_adjn is a filter that combines adjacent `Nothing` values.l
+-- | s_adjn will eliminate adjacent `Nothing` values. These might 
+-- exist after s_full_map to filter a signal by its values.
 s_adjn :: Sig a -> Sig a
 s_adjn s0 =
     case s_head s0 of

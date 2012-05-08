@@ -13,11 +13,10 @@ module FRP.Sirea.Internal.BTypes
     , lnd_left -- :: LnkD d (x :|: y) -> LnkD d x
     , lnd_right -- :: LnkD d (x :|: y) -> LnkD d y
     , lnd_sig -- :: LnkD d (S p x) -> d
-    , lnd_fmap
-    , lnd_aggr
+    , lnd_fmap, lnd_aggr, lnd_zip
     , ldt_maxGoal, ldt_minGoal
     , ldt_maxCurr, ldt_minCurr
-    , ldt_anyLive
+    , ldt_anyLive, ldt_valid
     , latentOnTime
     ) where
 
@@ -131,10 +130,19 @@ ldt_minCurr = lnd_aggr min . lnd_fmap ldt_curr
 ldt_anyLive :: LnkD LDT x -> Bool
 ldt_anyLive = lnd_aggr (||) . lnd_fmap ldt_live
 
+-- simple validation on LnkD LDT structure
+-- not very efficient, but okay for assert
+ldt_valid :: LnkD LDT x -> Bool
+ldt_valid (LnkDUnit ldt) = (ldt_goal ldt >= ldt_curr ldt)
+ldt_valid (LnkDSum x y) = ldt_valid x && ldt_valid y
+ldt_valid (LnkDProd x y) = ldt_valid x && ldt_valid y && 
+    (ldt_anyLive x == ldt_anyLive y)
+
 -- tr_unit validates an assumption that all inputs have uniform
 -- timing properties. It is the normal timing translator for MkLnk.
 tr_unit :: TR x y
 tr_unit x =
+    assert (ldt_valid x) $
     assert (ldt_maxGoal x == ldt_minGoal x) $
     assert (ldt_maxCurr x == ldt_minCurr x) $
     LnkDUnit $ LDT 
@@ -142,6 +150,7 @@ tr_unit x =
         , ldt_goal = ldt_maxGoal x
         , ldt_live = ldt_anyLive x
         }
+
 tr_fwd :: TR (S p1 x1) (S p2 x2)
 tr_fwd = LnkDUnit . lnd_sig
 
@@ -186,5 +195,32 @@ lnd_aggr :: (b -> b -> b) -> LnkD b x -> b
 lnd_aggr _ (LnkDUnit b) = b
 lnd_aggr fn (LnkDProd l r) = fn (lnd_aggr fn l) (lnd_aggr fn r)
 lnd_aggr fn (LnkDSum l r) = fn (lnd_aggr fn l) (lnd_aggr fn r)
+
+-- apply a function pairwise between matching elements in structure.
+lnd_zip :: (a -> b -> c) -> LnkD a x -> LnkD b x -> LnkD c x
+lnd_zip fn (LnkDUnit a) (LnkDUnit b) = 
+    LnkDUnit (fn a b)
+lnd_zip fn (LnkDSum al ar) blr = 
+    let cl = lnd_zip fn al (lnd_left blr) in
+    let cr = lnd_zip fn ar (lnd_right blr) in
+    LnkDSum cl cr
+lnd_zip fn alr (LnkDSum bl br) =
+    let cl = lnd_zip fn (lnd_left alr) bl in
+    let cr = lnd_zip fn (lnd_right alr) br in
+    LnkDSum cl cr
+lnd_zip fn (LnkDProd a1 a2) b12 =
+    let c1 = lnd_zip fn a1 (lnd_fst b12) in
+    let c2 = lnd_zip fn a2 (lnd_snd b12) in
+    LnkDProd c1 c2
+lnd_zip fn a12 (LnkDProd b1 b2) =
+    let c1 = lnd_zip fn (lnd_fst a12) b1 in
+    let c2 = lnd_zip fn (lnd_snd a12) b2 in
+    LnkDProd c1 c2
+
+
+
+
+
+
 
 

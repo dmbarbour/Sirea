@@ -9,13 +9,31 @@ TWO TYPES OF PARTITION:
   bcross - between true partitions
   bscope - between thread-local partitions
 
+limited number of comm batch-update between threads
+- combine batches and updates if one thread is faster than another (efficiency)
+- ensure progress of all threads is relatively close (but not lockstep)
+- limits memory consumption (max # in-flight batches and updates)
+- limits amount of computation in step (max # incoming batches)
 
+Threads can have other responsibilities
+- e.g. maintain GLUT window. 
 
 NOT SUPPORTED BY SIREA (BUT DOCUMENTED ANYWAY)
   bremote - remote partitions, like bcross but extra constraints:
      serializable message
      extra response type to model disruption
 
+Support for easy integration with imperative ops within threads.
+  partition-specific variables, observable in RDP.
+  may set future values, observe current values. 
+  (named by type)
+  update only in partition's thread
+  observe only via RDP; updates not observable until next RDP step
+
+  linear variables, may be assigned by exactly one source?
+    (build-time error if used more than once).
+  
+  
 
 bscope is free. It is useful if:
 * you need more partition types (e.g. to model distinct resources, objects)
