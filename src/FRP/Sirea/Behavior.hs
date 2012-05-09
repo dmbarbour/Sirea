@@ -82,9 +82,8 @@ class (Category b) => BFmap b where
     -- ensure that the `Eval` completes before `Just x` constructor
     -- is observed whens ampling the signal, without evaluating x.
     --
-    -- This is meant for use in combination with btouch to kickstart
-    -- the computation, and bfmap to get the `Eval` in the first
-    -- place. 
+    -- This is for use in combination with btouch to kickstart the 
+    -- computation, and bfmap to get the `Eval` in the first place. 
     bstrat :: b (S p (Eval a)) (S p a)
     bstrat = bfmap runEval
 
@@ -133,12 +132,9 @@ bforce f = bfmap seqf >>> bstrat >>> btouch
 
 -- | `bspark` is the similar to `bforce` except that it sparks each
 -- computation rather than running it in the partition thread, and 
--- does not wait for the computation to complete. This can help with
--- pipeline parallelism even in a single-partition RDP behavior. Use
--- of sequential strategies is not best for parallelism, but having
--- a drop-in replacement for bforce is convenient.
---
--- bspark does ensure the evaluation completes before x is observed.
+-- does not wait for the computation to complete. However, observing
+-- the result value will require waiting for the sparked computation
+-- to complete. 
 bspark :: (BFmap b) => (x -> ()) -> b (S p x) (S p x)
 bspark f = bfmap sparkf >>> bstrat >>> btouch
     where sparkf x = 
