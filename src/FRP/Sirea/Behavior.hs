@@ -1,5 +1,5 @@
 
-{-# LANGUAGE TypeOperators, MultiParamTypeClasses #-}
+{-# LANGUAGE TypeOperators, MultiParamTypeClasses, Rank2Types #-}
 
 -- | This module describes the basic RDP behaviors in Sirea. It also
 -- exports the concrete behavior type `B` for clients.
@@ -11,7 +11,7 @@ module FRP.Sirea.Behavior
     ( (:&:), (:|:), S, B 
     , (>>>) -- from Control.Category
     , bfwd
-    , BFmap(..)
+    , BFmap(..), bforce, bspark, bstratf
     , BProd(..), bsecond, bsnd, bassocrp, (***), (&&&), bvoid
     , BSum(..), bright, binr, bassocrs, (+++), (|||), bskip 
     , bconjoinl, bconjoinr
@@ -75,16 +75,21 @@ class (Category b) => BFmap b where
     bconst :: y -> b (S p x) (S p y)
     bconst = bfmap . const
 
-    -- | bstrat helps developers annotate data parallelism by use of
-    -- Control.Parallel.Strategies. One may represent sequential
-    -- strategies, too. The `Eval` monad enables precise control of
-    -- when, where, and how much evaluation occurs. `beval` should
-    -- ensure that the `Eval` completes before `Just x` constructor
-    -- is observed whens ampling the signal, without evaluating x.
+    -- | bstrat provides developers great control of when and where
+    -- computations occur. Control.Parallel.Strategies can specify
+    -- both data parallelism (via sparks) and sequential strategies.
+    -- Other evaluator models (Monad.Par, for example) can be lifted
+    -- across bstrat by use of bstratf.
+    --
+    -- The idea of bstrat is to ensure the Eval completes before the
+    -- `Just x` constructor is observed when sampling the signal, 
+    -- but prior to observing x. This can be combined with btouch to
+    -- kickstart the computation, and bfmap to provide the `Eval` 
+    -- monad in the first place. 
     --
     -- This is for use in combination with btouch to kickstart the 
     -- computation, and bfmap to get the `Eval` in the first place. 
-    bstrat :: b (S p (Eval a)) (S p a)
+    bstrat :: b (S p (Eval x)) (S p x)
     bstrat = bfmap runEval
 
     -- | btouch annotates that a signal should be computed as it 
@@ -120,7 +125,6 @@ class (Category b) => BFmap b where
 -- according to a provided sequential strategy. Useful idiom:
 --     import Control.DeepSeq (rnf)
 --     bforce rnf
---
 -- This would reduce a signal to normal form before further progress 
 -- in the partition's thread. This can improve data parallelism by
 -- making more efficient use of partition threads, can help control
@@ -132,14 +136,46 @@ bforce f = bfmap seqf >>> bstrat >>> btouch
 
 -- | `bspark` is the similar to `bforce` except that it sparks each
 -- computation rather than running it in the partition thread, and 
--- does not wait for the computation to complete. However, observing
--- the result value will require waiting for the sparked computation
--- to complete. 
+-- does not wait for the computation to complete. 
+--
+-- bspark is predictable but not very compositional. For example, in
+--   > bspark foo >>> bspark bar
+-- The bar reduction will occur in a spark that immediately waits
+-- for the foo reduction to complete. This ensures the bar reduction
+-- doesn't compete with the foo reduction, but limits parallelism.
+-- Consequently, bspark is best used to just perform full reduction.
+--
+-- A lazy variation of bspark would be easy to implement, but would
+-- be problematic due to ad-hoc competition and GC interaction. If
+-- developers desire precise control over parallelism, they should
+-- use bstrat and parallel strategies directly, or bseqap Monad.Par.
+--
 bspark :: (BFmap b) => (x -> ()) -> b (S p x) (S p x)
 bspark f = bfmap sparkf >>> bstrat >>> btouch
     where sparkf x = 
             let d = f x in 
             d `par` return (d `pseq` x)
+
+-- | bstratf - a convenience operation to lift identity functors in
+-- the same form as bstrat. This was motivated mostly for Monad.Par:
+--
+--     import Monad.Par
+--     bunsafePar :: (BFmap b) => b (S p (Par x)) (S p x)
+--     bunsafePar = bstratf runParAsync
+--
+-- Here bunsafePar will initiate computation if `Just x` constructor
+-- is observed when sampling the signal, without waiting on x. Par
+-- is tempting due to work integrating it with GPU computation.
+-- 
+-- CAUTION: Par is unsafe mostly because you can easily share IVars
+-- between independent `runPar` operations. IVars are communication
+-- not reflected in RDP, and could cause deadlocks or be trampled on
+-- by dead code elimination or retroactive correction. Developers 
+-- must use discipline: consume only IVars that you create locally.
+--
+bstratf :: (BFmap b, Functor f) => (forall e . (f e -> e)) 
+        -> b (S p (f x)) (S p x)
+bstratf runF = bfmap (runF . fmap return) >>> bstrat
 
 -- | BProd - data plumbing for asynchronous products. Asynchronous
 -- product (x :&: y) means that both signals are active for the same
