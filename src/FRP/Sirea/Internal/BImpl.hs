@@ -7,15 +7,21 @@
 -- This includes both the symbolic and concrete implementations for
 -- basic behaviors except for `first` and `left`, which need special 
 -- treatment at compilation. 
+--
+-- Exposed behaviors for users will be re-exported elsewhere.
 module FRP.Sirea.Internal.BImpl
     ( fwdB
-    , fstB, firstB, swapB, assoclpB, dupB -- BProd 
-    , inlB, leftB, mirrorB, assoclsB, mergeB -- BSum
-    , disjoinB, zapB, splitB
-    , fmapB, constB, forceB, stratB, adjeqfB -- BFmap
-    , addStabilityB, delayB, synchB, peekB, forceDelayB, tshiftB
+    , fstB, firstB, swapB, assoclpB, dupB, zapB -- BProd 
+    , inlB, leftB, mirrorB, assoclsB, mergeB, splitB -- BSum
+    , disjoinB
+    , fmapB, constB, touchB, stratB, adjeqfB -- BFmap
+    , delayB, synchB, peekB, tshiftB, forceDelayB -- temporal
+
+    -- miscellaneous
+    , unsafeAddStabilityB 
     , unsafeEqShiftB
     , unsafeFullMapB
+    , undeadB, sparkOfLifeB
     ) where
 
 import Prelude hiding (id,(.))
@@ -27,7 +33,8 @@ import FRP.Sirea.Signal
 
 import Control.Category
 import Control.Applicative
-import Control.Parallel.Strategies (Eval, runEval)
+import Control.Parallel (pseq)
+import Control.Parallel.Strategies (Eval, runEval, evalList, rseq)
 import Control.Exception (assert)
 import Data.Function (on)
 import Data.IORef (newIORef, readIORef, writeIORef, IORef)
@@ -391,45 +398,46 @@ constB dt c = mkLnkB tr_fwd constLnk >>> unsafeEqShiftB dt alwaysEq
           lnConst  = ln_lumap . ln_sumap . su_fmap . (<$)
 
 -- | add stability to the signal (used by forceB).
-addStabilityB :: DT -> B (S p x) (S p x)
-addStabilityB dt = if (0 == dt) then fwdB else 
+unsafeAddStabilityB :: DT -> B (S p x) (S p x)
+unsafeAddStabilityB dt = 
+    if (0 == dt) then fwdB else 
     mkLnkB id (mkLnkPure lnAddStability)
     where lnAddStability = ln_lumap $ ln_sumap suAddStability
           suAddStability su =
             let tStable = fmap (flip addTime dt) (su_stable su) in
             su { su_stable = tStable }
 
--- | force evaluation of signal relative to stability. 
+-- | force evaluation of signal relative to stability, up to `Just`. 
 -- This will track the signal over its lifetime in order to ensure
--- every step is evaluated. I.e. after an update in stability, all
--- prior elements will be evaluated with rnf even if there was no
--- other update.
---
--- If stability is infinite (Nothing), then nothing is forced.
-forceB :: DT -> (x -> ()) -> B (S p x) (S p x)
-forceB dt rnf = wrapStability dt $ mkLnkB id $ mkLnkSimp $ buildForceB rnf
-    where wrapStability dt b = addStabilityB dt >>> b >>> addStabilityB (negate dt)
+-- every step is touched. I.e. after an update in stability, all
+-- prior elements will be touched. If stability is infinite, then 
+-- nothing more is touched. 
+touchB :: DT -> B (S p x) (S p x)
+touchB dt = 
+    unsafeAddStabilityB dt >>> 
+    mkLnkB id (mkLnkSimp buildTouchB) >>> 
+    unsafeAddStabilityB (negate dt)
 
--- force up to stability
-buildForceB :: (x -> ()) -> Lnk (S p x) -> IO (Lnk (S p x))
-buildForceB rnf (LnkSig lu) = 
+-- touch up to stability
+buildTouchB :: Lnk (S p x) -> IO (Lnk (S p x))
+buildTouchB (LnkSig lu) = 
     newIORef (s_never, Nothing) >>= \ rf ->
-    let lu' = buildForceB' rnf rf lu in
+    let lu' = buildTouchB' rf lu in
     return (LnkSig lu')
 
--- force signal up to stability.
+-- touch signal up to stability. 
 -- stability may have been adjusted a bit just for this op, so it
 -- does not make stability assumptions (and doesn't use SigSt). 
-buildForceB' :: (x -> ()) -> IORef (Sig x, Maybe T) -> LnkUp x -> LnkUp x
-buildForceB' rnf rf lu = 
+buildTouchB' :: IORef (Sig x, Maybe T) -> LnkUp x -> LnkUp x
+buildTouchB' rf lu = 
     LnkUp { ln_touch = (ln_touch lu), ln_update = onUpdate }
     where onUpdate su = 
             -- update state and cleanup
             readIORef rf >>= \ (s0,t0) ->
             let sf = su_apply su s0 in
             let tf = su_stable su in
-            let scln = maybe s_never (s_trim sf) tf in 
-            scln `seq` 
+            let scln = maybe s_never (s_trim sf) tf in
+            scln `seq`
             writeIORef rf (scln,tf) >>
 
             -- obtain bounds for computing signal sf.
@@ -441,39 +449,32 @@ buildForceB' rnf rf lu =
                     Nothing -> ()
                     Just (tLower,tUpper) -> 
                         if(tLower < tUpper) 
-                        then forceSig rnf tLower tUpper sf
+                        then forceSig tLower tUpper sf
                         else ()
             in
             -- force thunks then forward the update.
-            compute `seq`
+            compute `pseq`
             ln_update lu su
 
--- s_sample_d :: Sig a -> T -> T -> (Maybe (T, Maybe a), Sig a)
-forceSig :: (x -> ()) -> T -> T -> Sig x -> ()
-forceSig rnf tLower tUpper sig =
-    let (sample,sig') = s_sample_d sig tLower tUpper in
-    case sample of
-        Nothing -> ()
-        Just (_,e) -> 
-            maybe () rnf e `seq` 
-            forceSig rnf tLower tUpper sig'
-        
+-- force signal up to Just|Nothing (simpl rseq for Maybe).
+forceSig :: T -> T -> Sig x -> ()
+forceSig tLower tUpper sig =
+    assert (tLower < tUpper) $
+    let updates = sigToList sig tLower tUpper in
+    let values = fmap snd updates in
+    runEval (evalList rseq values >> return ())
+
 
 -- | stratB currently evaluates based on stability, not sampling. It
 -- ensures that evaluation is initialized before the `Just y` signal
 -- value is observed. This should achieve a decent level of parallelism.
-stratB :: DT -> (x -> Eval y) -> B (S p x) (S p y)
-stratB dt r = applyStratB r >>> forceB dt (const ())
+stratB :: B (S p (Eval x)) (S p x)
+stratB = unsafeFullMapB unwrapStrat
 
--- | apply a strategy without forcing it
-applyStratB :: (x -> Eval y) -> B (S p x) (S p y)
-applyStratB = unsafeFullMapB . maybeStrat
-
--- translate a strategy to operate on Maybe types, with observation
--- of the `Just` constructor forcing the evaluation.
-maybeStrat :: (x -> Eval y) -> (Maybe x -> Maybe y)
-maybeStrat _ Nothing = Nothing
-maybeStrat r (Just x) = runEval (Just <$> r x)
+-- apply a 
+unwrapStrat :: Maybe (Eval x) -> Maybe x
+unwrapStrat Nothing = Nothing
+unwrapStrat (Just x) = runEval (Just <$> x)
 
 -- | filter adjacent equal values from a signal (performance), with
 -- some scan-ahead to combine equal values. Useful after fmapB if 
@@ -592,5 +593,35 @@ eqShift eq as bs tLower tUpper =
           activeWhileEq _ _ = Nothing
           sampleActive = (/= Nothing) . snd
 
+
+-- | undeadB is a behavior that emulates an effectful consumer of 
+-- data. It passes the data forward unaltered, but keeps a behavior
+-- `alive` with respect to dead code optimization caused by bfst or
+-- bsnd later on in the behavior. Could be useful for debugging or 
+-- performance analysis, but probably a bad idead.
+--
+-- Like undead in movies, undeadB infects everything it consumes, 
+-- and without a lot of sunlight (eyes on code) it might get left
+-- even in your release application.
+--
+-- I suggest use of `sparkOfLifeB` instead.
+undeadB :: B (S p x) (S p x)
+undeadB = mkLnkB id $ mkLnkPure (LnkSig . ln_lnkup)
+
+-- | sparkOfLifeB will keep the first element alive so long as other
+-- parts of the signal are alive. This should be more robust for
+-- composition and dead-code optimization than `bundead`, but 
+-- provide similar benefits for debugging.
+--
+-- Again, this isn't something to leave in most applications. It may
+-- seem necessary if you're using some sort of unsafePerformIO hacks
+-- to cause effects. But don't do that!
+sparkOfLifeB :: B (S p x :&: y) (S p x :&: y)
+sparkOfLifeB = mkLnkB id $ mkLnkPure lnkMatchLiveness
+    where lnkMatchLiveness xy =
+            if (ln_dead xy) then LnkDead else   
+            let x = (LnkSig . ln_lnkup . ln_fst) xy in
+            let y = ln_snd xy in
+            LnkProd x y
 
 

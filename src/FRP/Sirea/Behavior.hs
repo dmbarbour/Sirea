@@ -11,7 +11,7 @@ module FRP.Sirea.Behavior
     ( (:&:), (:|:), S, B 
     , (>>>) -- from Control.Category
     , bfwd
-    , BFmap(..), bspark, btouch
+    , BFmap(..)
     , BProd(..), bsecond, bsnd, bassocrp, (***), (&&&), bvoid
     , BSum(..), bright, binr, bassocrs, (+++), (|||), bskip 
     , bconjoinl, bconjoinr
@@ -31,7 +31,7 @@ import Control.Parallel.Strategies (Eval, runEval)
 import FRP.Sirea.Internal.STypes ((:&:),(:|:),S)
 import FRP.Sirea.Internal.BTypes (B)
 import FRP.Sirea.Internal.BImpl 
-    ( fmapB, constB, forceB, stratB, adjeqfB
+    ( fmapB, constB, touchB, stratB, adjeqfB
     , firstB, dupB, fstB, assoclpB, swapB
     , leftB, mergeB, inlB, assoclsB, mirrorB
     , disjoinB, zapB, splitB
@@ -75,25 +75,28 @@ class (Category b) => BFmap b where
     bconst :: y -> b (S p x) (S p y)
     bconst = bfmap . const
 
-    -- | bforce informs the implementation that this is a good place
-    -- to force computation of accummulated lazy thunks. Force is 
-    -- applied as the signal is updated, and is applied relative to
-    -- stability of the signal. Developers may provide the function
-    -- to force lazy thunks. Semantically same as bfwd.
-    --
-    -- The cost of bforce is the potential for redundant computation
-    -- when there are many tightly spaced updates.
-    bforce :: (x -> ()) -> b (S p x) (S p x)
-    bforce _ = bfwd -- semantic effect is identity
-
     -- | bstrat helps developers annotate data parallelism by use of
-    -- Control.Parallel.Strategies. The `Eval` monad enables precise
-    -- control of when evaluation occurs or sparks, in particular it
-    -- should assure that the `Eval` completes before the `Just y`
-    -- constructor is observed, without evaluating y. This can be 
-    -- combined with other annotations like `btouch`.
-    bstrat :: (x -> Eval y) -> b (S p x) (S p y)
-    bstrat = bfmap . (runEval .) -- semantically fmap with runEval
+    -- Control.Parallel.Strategies. One may represent sequential
+    -- strategies, too. The `Eval` monad enables precise control of
+    -- when, where, and how much evaluation occurs. `beval` should
+    -- ensure that the `Eval` completes before `Just x` constructor
+    -- is observed whens ampling the signal, without evaluating x.
+    --
+    -- This is meant for use in combination with btouch to kickstart
+    -- the computation, and bfmap to get the `Eval` in the first
+    -- place. 
+    bstrat :: b (S p (Eval a)) (S p a)
+    bstrat = bfmap runEval
+
+    -- | btouch annotates that a signal should be computed as it 
+    -- updates, generally based on stability of the signal's value
+    -- (see FRP.Sirea.Link for more about stability). The signal is
+    -- computed up to `Just x | Nothing`; x is not observed. 
+    --
+    -- This is meant for use in tandem with bstrat to lift desired
+    -- computations to occur prior observing the `Just` constructor.
+    btouch :: b (S p x) (S p x)
+    btouch = bfwd
 
     -- | Types that can be tested for equality can be filtered to
     -- eliminate redundant updates. Redundant updates are common if
@@ -114,28 +117,33 @@ class (Category b) => BFmap b where
     badjeqf :: (Eq x) => b (S p x) (S p x)
     badjeqf = bfwd -- semantic effect is identity
 
--- | btouch will force evaluation of a signal only up to the Just or
--- Nothing stage, i.e. bforce without the force. It could be useful
--- in combination with bstrat.
-btouch :: (BFmap b) => b (S p x) (S p x)
-btouch = bforce (const ())
-
--- | bspark will initiate computation of a signal's values as the
--- signal is updated, but in a different thread. I.e. it is a drop
--- in replacement for bforce if it would cause a thread to run too
--- slow or the parallelism is worth it. This is structured to force
--- a spark for every value, and observations on the response signal 
--- wait for the spark to complete. (This strictness is important to
--- control memory growth of the process.)
+-- | bforce will sequence evaluation when the signal update occurs,
+-- according to a provided sequential strategy. Useful idiom:
+--     import Control.DeepSeq (rnf)
+--     bforce rnf
 --
--- A useful technique might be to spark right before sending a value
--- to another partition, so the value is received in normal form. 
-bspark :: (BFmap b) => (x -> ()) -> b (S p x) (S p x)
-bspark f = bstrat doSpark >>> btouch
-    where doSpark x = 
-            let done = f x in
-            done `par` return (done `pseq` x)
+-- This would reduce a signal to normal form before further progress 
+-- in the partition's thread. This can improve data parallelism by
+-- making more efficient use of partition threads, can help control
+-- memory overheads, and can ensure more predictable performance in
+-- compositions. 
+bforce :: (BFmap b) => (x -> ()) -> b (S p x) (S p x)
+bforce f = bfmap seqf >>> bstrat >>> btouch
+    where seqf x = (f x) `pseq` return x
 
+-- | `bspark` is the similar to `bforce` except that it sparks each
+-- computation rather than running it in the partition thread, and 
+-- does not wait for the computation to complete. This can help with
+-- pipeline parallelism even in a single-partition RDP behavior. Use
+-- of sequential strategies is not best for parallelism, but having
+-- a drop-in replacement for bforce is convenient.
+--
+-- bspark does ensure the evaluation completes before x is observed.
+bspark :: (BFmap b) => (x -> ()) -> b (S p x) (S p x)
+bspark f = bfmap sparkf >>> bstrat >>> btouch
+    where sparkf x = 
+            let d = f x in 
+            d `par` return (d `pseq` x)
 
 -- | BProd - data plumbing for asynchronous products. Asynchronous
 -- product (x :&: y) means that both signals are active for the same
@@ -491,28 +499,18 @@ benvseq bx by = bdup >>> (bfst *** bx) >>> by
 ---------------------------
 -- Concrete Instances: B --
 ---------------------------
-
 -- TUNING
--- dtScanAheadB: default lookahead for constB, adjeqfB. Must limit
---   scan ahead to avoid divergence. A larger lookahead reduces risk
---   of rework down the line but might cause more rework immediately.
---   I'd like this to be tunable in a higher layer for constructing
---   behaviors. (or alternatively define it based on the ln_peek 
---   values in the behavior). I don't want it cluttering the normal
---   interface, though.
--- dtStratB: maximum distance to compute ahead of stability, for the
---   bforce and bstrat behaviors. 
-dtScanAheadB :: DT
+--   dtScanAheadB: default lookahead for constB, adjeqfB.
+--   dtTouchB: compute ahead of stability for btouch.
+dtScanAheadB, dtTouchB :: DT
 dtScanAheadB = 2.0 -- seconds ahead of stability
-
-dtStratB :: DT
-dtStratB = 0.1 -- seconds ahead to potentially sample
+dtTouchB = 0.1 -- seconds ahead of stability
 
 instance BFmap B where 
     bfmap    = fmapB
     bconst   = constB dtScanAheadB
-    bforce   = forceB dtStratB
-    bstrat   = stratB dtStratB
+    bstrat   = stratB 
+    btouch   = touchB dtTouchB
     badjeqf  = adjeqfB dtScanAheadB
 instance BProd B where
     bfirst   = firstB
