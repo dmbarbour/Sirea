@@ -2,7 +2,13 @@
 {-# LANGUAGE TypeOperators, MultiParamTypeClasses, Rank2Types #-}
 
 -- | This module describes the basic RDP behaviors in Sirea. It also
--- exports the concrete behavior type `B` for clients.
+-- exports the concrete behavior type `B` for clients. Behaviors are 
+-- a restricted class of Arrows that transform and orchestrate (but 
+-- neither create nor destroy) signals. 
+--
+-- This module contains behaviors only for data plumbing, pure
+-- functional computation, and simple performance annotations. In
+-- general, RDP behaviors may be effectful. 
 --
 -- Several behaviors are provided in dedicated modules:
 --   see FRP.Sirea.Link for bUnsafeLnk

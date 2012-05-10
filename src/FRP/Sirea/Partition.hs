@@ -1,8 +1,12 @@
-{-# LANGUAGE TypeOperators, EmptyDataDecls #-}
+-- {-# LANGUAGE TypeOperators, EmptyDataDecls #-}
 
+
+-- | 
 module FRP.Sirea.Partition 
     (
     ) where
+
+
 
 import Data.Typeable
 import 

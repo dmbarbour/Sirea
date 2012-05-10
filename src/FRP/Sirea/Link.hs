@@ -4,15 +4,16 @@ module FRP.Sirea.Link
     ( unsafeLnkB
     -- the following are re-exported from LTypes
     , MkLnk(..), LnkUp(..), Lnk, LnkW(..), SigUp(..)
-    , ln_zero, ln_lnkup
-    , ln_left, ln_right, ln_fst, ln_snd, ln_null
-    , ln_sumap, ln_lumap
+    , ln_zero, ln_lnkup, ln_fst, ln_snd, ln_left, ln_right, ln_dead
+    , ln_sumap, ln_lumap, su_fmap
     , su_apply
     ) where
 
 import FRP.Sirea.Internal.LTypes
 import FRP.Sirea.Internal.BTypes
 import FRP.Sirea.Behavior
+
+import Control.Exception (assert)
 
 -- | bUnsafeLnk allows developers to extend Sirea with new primitive 
 -- behaviors. This supports FFI, foreign services, legacy adapters.
@@ -61,12 +62,12 @@ import FRP.Sirea.Behavior
 -- be GC'd if later unused. Primary use of IO is to build caches.
 --
 unsafeLnkB :: MkLnk x y -> B x y
-unsafeLnkB mklnk = bsynch >>> B_tshift xBarrier >>> B_mkLnk tr_unit mklnk
+unsafeLnkB ln = bsynch >>> B_tshift xBarrier >>> B_mkLnk tr_unit ln
     where xBarrier dts =
             assert (ldt_valid dts) $
             assert (ldt_minGoal dts == ldt_maxGoal dts) $ 
             let bNeedBarrier = ldt_minCurr dts /= ldt_maxCurr dts in
-            if ln_tsen mkLnk || bNeedBarrier
+            if ln_tsen ln || bNeedBarrier
                 then flip lnd_fmap dts $ \ x -> x { ldt_curr = (ldt_goal x) }
                 else dts -- no change; all or nothing (for now)
     -- xBarrier actually applies the updates (sets ldt_curr) if necessary.
