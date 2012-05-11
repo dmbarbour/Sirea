@@ -315,7 +315,7 @@ class (BSum b, BProd b) => BDisjoin b where
 
 -- | bdisjoin' preserves the choice signal to support further disjoin.
 bdisjoin' :: (BDisjoin b) => b (S p x :&: ((S p () :&: y) :|: z))
-                               ((S p () :&: S p x :&: y) :|: (S p x :&: z))
+                               ((S p () :&: (S p x :&: y)) :|: (S p x :&: z))
 bdisjoin' = dupChoiceSig >>> bdisjoin >>> rotChoiceSig
     where dupChoiceSig = (bsecond . bleft) $ bfirst bdup >>> bassocrp
           rotChoiceSig = bleft $ bassoclp >>> bfirst bswap >>> bassocrp
