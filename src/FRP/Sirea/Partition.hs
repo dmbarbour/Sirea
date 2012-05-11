@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE EmptyDataDecls #-}
 
 -- | Reactive Demand Programming (RDP) is designed for:
 --
@@ -30,20 +30,6 @@
 -- threads needed for all the bcross behaviors - one per partition
 -- (leveraging Data.Typeable). 
 --
--- LIGHTWEIGHT PARTITIONS
--- ======================
---
--- Sirea can support lightweight partitions called "scopes" within a
--- thread. Scopes may be useful to represent namespaces or objects
--- when resources are identified based on partition types. Movement
--- between scopes is by push and pop operations. 
---     
---     bpushScope :: b (S p x) (S (Scope s p) x)
---     bpopScope  :: b (S (Scope s p) x) (S p x)
---
--- Note: scopes are not partitions. You cannot cross to a particular
--- scope in another partition. 
---
 -- PARTITIONS AS RESOURCE CONTROLLERS
 -- ==================================
 --
@@ -59,9 +45,8 @@
 -- that the Stepper object be called regularly or when updates are
 -- available (set an event!). 
 --
--- Sirea provides simple adapters for communication between threads
--- and the RDP behaviors that observe or influence them. If these
--- are insufficient, more can be created using unsafeLnkB.
+-- Simplistic, variable-based adapters are provided for interface 
+-- between declarative RDP behavior and the imperative IO threads.
 --
 -- COMMUNICATION AND CONSISTENCY
 -- =============================
@@ -124,13 +109,155 @@
 -- contain MVars, IVars, Chans, IORefs, TVars, etc. 
 --
 module FRP.Sirea.Partition 
-    (
+    ( Stepper(..)
+    , Stopper(..)
+    , Partition(..)
     ) where
 
-
+import FRP.Sirea.Behavior
 
 import Data.Typeable
+import Data.IORef
+import Control.Exception (assert)
+import Control.Concurrent (forkIO)
+import Control.Concurrent.MVar
 
+-- | Stepper - incremental processing of RDP updates in Sirea.
+--
+-- In Sirea, each partition has one Haskell thread, and each Sirea
+-- thread has one Stepper object. The stepper is responsible for 
+-- receiving available signal updates, performing RDP processing,
+-- and sending batched updates to other Sirea threads. Between steps
+-- the thread may have other responsibilities.
+--
+-- A step will run quickly if there is nothing to do. There is no 
+-- wait for input. However, running a step may cause a wait on 
+-- output if the target thread is falling behind. Progress for the
+-- application requires every Sirea thread to keep up with available
+-- updates.
+--
+-- When you build the main Sirea behavior for an application, a 
+-- Stepper is returned. The Sirea behavior is not actually started
+-- until the first runSireaStep is executed. 
+--
+-- runStepper: process available updates and outputs. Will return 
+--   very quickly if there is nothing to do; should not be polled.
+--   If a thread has its own fast-paced periodic action (e.g. draw
+--   frames at 30Hz) then a call at start and stop of each frame
+--   should be quite sufficient.
+--
+-- addStepperEvent: add a callback event to notify that stepper has
+--   something useful to do. This event is called once - immediately
+--   or when a batch of RDP updates become available. It should be
+--   safe to call from another thread, and wait-free. Events must be 
+--   reset per step.
+--
+data Stepper = Stepper 
+    { runStepper      :: IO ()
+    , addStepperEvent :: IO () -> IO () 
+    }
+
+-- | Stopper should provide a way to gracefully halt Sirea threads. 
+-- RDP behaviors should be shut down when the control signals become
+-- inactive. However, these operations tell a thread to release any
+-- resources, to perform any final commits for persistence, etc. and
+-- to stop whether or not the signal is still active. 
+--
+-- A potential reason to stop even with active signals is to restart
+-- the partition with a new initialization behavior, i.e. for live
+-- programming. 
+data Stopper = Stopper
+    { runStopper      :: IO () -- ^ asynchronous stop
+    , addStopperEvent :: IO () -> IO () -- ^ notify when stopped
+    }
+
+
+-- | PFactory p - an object that will create a partition.
+-- (Allows Partition class constructor to be overridden in Make.)
+data PFactory p = PFactory 
+    { newPartitionThread :: Stepper -> IO Stopper
+    }
+
+tcPFactory :: TyCon
+tcPFactory = mkTyCon3 "Sirea" "Partition" "PFactory"
+
+instance Typeable1 PFactory where
+    typeOf1 _ = mkTyConApp tcPFactory []
+
+-- | Partition p - indicates a toplevel partition type, and also 
+-- can override the default partition thread constructor.
+--
+-- Note: While partitions may have responsibilities beyond Sirea RDP
+-- updates, they should not cause any significant effects until so
+-- directed by RDP behaviors. 
+-- 
+-- Partition should later support dependency injection via Make.
+-- This would be criticial for most non-trivial partitions, since
+-- otherwise there is no clear way to hook up to behaviors. 
+--
+class (Typeable p) => Partition p where
+    -- | partition factory - creates a new thread for the partition. 
+    partitionFactory :: {- Make -} IO (PFactory p)
+    partitionFactory = return defaultPFactory
+
+-- | partition crossing behavior.
+-- 
+-- If the partition threads do not already exist, they will be
+-- created when the bcross behavior is first used. 
+class BPartition b where
+    bcross :: (Partition p, Partition p')
+           => b (S p x) (S p' x)
+
+-------------------------------------------------
+-- Implementing the default partition behavior --
+-------------------------------------------------
+
+-- ((doStop,isStopped),stopEvents)
+type StopData = ((Bool,Bool),IO()) 
+
+makeStopper :: IORef StopData -> Stopper
+makeStopper rf = Stopper 
+    { runStopper = modifyIORef rf doStop
+    , addStopperEvent = addStopDataEvent rf
+    }
+
+addStopDataEvent :: IORef StopData -> IO () -> IO ()
+addStopDataEvent rf ev = atomicModifyIORef rf addEv >>= id
+    where addEv sd@((_,True),_) = (sd,ev)
+          addEv ((b0,False),e0) = (((b0,False),ev>>e0),return ())
+
+doStop :: StopData -> StopData
+doStop ((_,b),e) = ((True,b),e)
+
+emptyStopData :: StopData
+emptyStopData = ((False,False),return ())
+
+finiStopData :: IORef StopData -> IO ()
+finiStopData rf = atomicModifyIORef rf fini >>= id
+    where fini ((shouldStop,isStopped),runEvents) =
+                assert shouldStop $
+                assert (not isStopped) $
+                (((True,True),return()),runEvents)
+
+defaultNewPartitionThread :: Stepper -> IO Stopper
+defaultNewPartitionThread stepper =
+    newEmptyMVar >>= \ rfWait ->
+    newIORef emptyStopData >>= \ rfStop -> 
+    let event = tryPutMVar rfWait () >> return () in
+    let stop  = finiStopData rfStop in
+    let loop  = addStepperEvent stepper event >>
+                takeMVar rfWait >>
+                runStepper stepper >>
+                readIORef rfStop >>= \ ((shouldStop,_),_) ->
+                if shouldStop then stop else loop
+    in 
+    forkIO loop >>
+    return (makeStopper rfStop)   
+
+defaultPFactory :: PFactory p
+defaultPFactory = PFactory
+    { newPartitionThread = defaultNewPartitionThread 
+    }
 
 
 {-
