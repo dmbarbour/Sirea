@@ -21,7 +21,7 @@ module FRP.Sirea.Internal.BImpl
     , unsafeAddStabilityB 
     , unsafeEqShiftB
     , unsafeFullMapB
-    , undeadB, sparkOfLifeB
+    , keepAliveB
     ) where
 
 import Prelude hiding (id,(.))
@@ -102,17 +102,22 @@ dupB = mkLnkB trDup $ mkLnkPure lnDup
 
 -- deep duplicate signal updates, except for dead output.
 lnDeepDup :: Lnk x -> Lnk x -> Lnk x
-lnDeepDup x LnkDead = x
-lnDeepDup LnkDead y = y
-lnDeepDup (LnkProd x1 y1) (LnkProd x2 y2) =
+lnDeepDup x LnkDead = x -- no dup
+lnDeepDup LnkDead y = y -- no dup
+lnDeepDup (LnkProd x1 y1) xy2 =
+    let x2 = ln_fst xy2 in
+    let y2 = ln_snd xy2 in
     let x = lnDeepDup x1 x2 in
     let y = lnDeepDup y1 y2 in
     LnkProd x y
-lnDeepDup (LnkSum x1 y1) (LnkSum x2 y2) =
+lnDeepDup (LnkSum x1 y1) xy2 =
+    let x2 = ln_left xy2 in
+    let y2 = ln_right xy2 in
     let x = lnDeepDup x1 x2 in
     let y = lnDeepDup y1 y2 in
     LnkSum x y
-lnDeepDup (LnkSig x) (LnkSig y) =
+lnDeepDup (LnkSig x) rhs =
+    let y = ln_lnkup rhs in
     let touch = ln_touch x >> ln_touch y in
     let update su = ln_update x su >> ln_update y su in
     LnkSig $ LnkUp { ln_touch = touch, ln_update = update } 
@@ -420,6 +425,7 @@ touchB dt =
 
 -- touch up to stability
 buildTouchB :: Lnk (S p x) -> IO (Lnk (S p x))
+buildTouchB LnkDead = return LnkDead
 buildTouchB (LnkSig lu) = 
     newIORef (s_never, Nothing) >>= \ rf ->
     let lu' = buildTouchB' rf lu in
@@ -580,9 +586,9 @@ lnEqShift dt eq rf lu = LnkUp { ln_touch = onTouch, ln_update = onUpdate }
 eqShift :: (a -> b -> Bool) -> Sig a -> Sig b -> T -> T -> (Sig b, T)
 eqShift eq as bs tLower tUpper =
     if (tLower >= tUpper) then (bs,tLower) else
-    let seq = s_full_zip activeWhileEq as bs in -- compare signals
-    let seqList = sigToList seq tLower tUpper in 
-    let cutL = L.dropWhile sampleActive seqList in
+    let sigEq = s_full_zip activeWhileEq as bs in -- compare signals
+    let sigEqList = sigToList sigEq tLower tUpper in 
+    let cutL = L.dropWhile sampleActive sigEqList in
     let tChanged = if (L.null cutL) then tUpper else (fst . L.head) cutL in
     let bs' = s_trim bs tChanged in
     (bs', tChanged)
@@ -593,31 +599,12 @@ eqShift eq as bs tLower tUpper =
           activeWhileEq _ _ = Nothing
           sampleActive = (/= Nothing) . snd
 
-
--- | undeadB is a behavior that emulates an effectful consumer of 
--- data. It passes the data forward unaltered, but keeps a behavior
--- `alive` with respect to dead code optimization caused by bfst or
--- bsnd later on in the behavior. Could be useful for debugging or 
--- performance analysis, but probably a bad idead.
---
--- Like undead in movies, undeadB infects everything it consumes, 
--- and without a lot of sunlight (eyes on code) it might get left
--- even in your release application.
---
--- I suggest use of `sparkOfLifeB` instead.
-undeadB :: B (S p x) (S p x)
-undeadB = mkLnkB id $ mkLnkPure (LnkSig . ln_lnkup)
-
--- | sparkOfLifeB will keep the first element alive so long as other
--- parts of the signal are alive. This should be more robust for
--- composition and dead-code optimization than `bundead`, but 
--- provide similar benefits for debugging.
---
--- Again, this isn't something to leave in most applications. It may
--- seem necessary if you're using some sort of unsafePerformIO hacks
--- to cause effects. But don't do that!
-sparkOfLifeB :: B (S p x :&: y) (S p x :&: y)
-sparkOfLifeB = mkLnkB id $ mkLnkPure lnkMatchLiveness
+-- | keepAliveB will keep the first element alive so long as other
+-- parts of the signal are alive. This would only be useful for 
+-- performance debugging, and should probably be performed just
+-- after `bfirst btouch`. 
+keepAliveB  :: B (S p x :&: y) (S p x :&: y)
+keepAliveB  = mkLnkB id $ mkLnkPure lnkMatchLiveness
     where lnkMatchLiveness xy =
             if (ln_dead xy) then LnkDead else   
             let x = (LnkSig . ln_lnkup . ln_fst) xy in

@@ -259,14 +259,7 @@ kp :: Maybe a -> Bool
 kp Nothing  = False
 kp _        = True
 
-
 -- | use second signal to control the activity of the first.
--- The first two inputs are the current values in the signals.
--- Specialized to avoid introducing unnecessary changes.
-ds_mask :: (Ord t) => (Maybe a) -> (Maybe b_) 
-    -> DSeq t (Maybe a) -> DSeq t (Maybe b_) -> DSeq t (Maybe a)
-ds_mask x y xs ys = if kp y then ds_mask1 x xs ys else ds_mask0 x xs ys
-
 -- | ds_mask0 assumes x hidden by y
 ds_mask0 :: (Ord t) => (Maybe a) 
     -> DSeq t (Maybe a) -> DSeq t (Maybe b_) -> DSeq t (Maybe a)

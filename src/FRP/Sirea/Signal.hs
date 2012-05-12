@@ -44,7 +44,6 @@ import FRP.Sirea.Time
 import FRP.Sirea.DiscreteTimedSeq
 import Control.Exception (assert)
 import Control.Applicative
-import Control.Parallel.Strategies (Eval)
 
 -- | Sig is an abstract type for discrete-varying signals in Sirea.
 -- A signal is defined for all times, but in practice the past is

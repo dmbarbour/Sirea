@@ -3,6 +3,7 @@
 -- Behavior types. 
 module FRP.Sirea.Internal.BTypes
     ( B(..)
+    , BC0(..)
 
     -- support for time manipulations
     , TR, TS, LDT(..)
@@ -18,13 +19,13 @@ module FRP.Sirea.Internal.BTypes
     , ldt_maxCurr, ldt_minCurr
     , ldt_anyLive, ldt_valid
     , latentOnTime
+    
     ) where
 
 import FRP.Sirea.Internal.STypes (S,(:&:),(:|:))
 import FRP.Sirea.Internal.LTypes (MkLnk)
 import FRP.Sirea.Time (DT)
 import Control.Exception (assert)
-import Data.Function (on)
 
 import Data.Typeable -- B is typeable
 

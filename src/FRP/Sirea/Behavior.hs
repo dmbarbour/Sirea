@@ -25,6 +25,8 @@ module FRP.Sirea.Behavior
     , BZip(..), bzipWith, bunzip
     , BSplit(..), bsplitWith, bunsplit
     , BTemporal(..), BPeek(..)
+    , BDynamic(..)
+    , BEmbed(..)
     -- , bcross, bscope - see FRP.Sirea.Partition
     -- , bUnsafeLnk - see FRP.Sirea.Link
     ) where
@@ -294,13 +296,11 @@ bconjoinl = bdup >>> (isolateX *** isolateYZ)
 bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
 
 -- | Disjoin will distribute a decision. To achieve disjoin involves 
--- combining a signal representing a split with an external signal.
--- Disjoin is necessary for effective use of `choice` in RDP, i.e.
--- most design patterns using bsplit will use bdisjoin.
+-- combining a signal representing a split with an external signal. 
+-- Both signals must already be entirely in one partition. 
 --
--- Unfortunately, disjoin is neither generic nor dual to conjoin.
--- This seems unavoidable due to potential for partitioning and the
--- need to communicate between partitions. 
+-- Disjoin is necessary for effective use of `choice` in RDP, i.e.
+-- most design patterns using bsplit will also use bdisjoin.
 --
 -- In some cases it may be more convenient to use intermediate state
 -- rather than disjoin. Disjoin is necessary to model lexical scope

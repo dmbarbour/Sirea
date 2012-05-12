@@ -155,8 +155,8 @@ instance Fractional DT where
               c = if (2 * r > nb) then 1 else 0  -- carry
     recip = (1 /) 
     fromRational rat = nanosToDt (q + c)
-        where (q,rem) = (numerator rat * nanosInSec) `divMod` denominator rat
-              c = if (2 * rem > denominator rat) then 1 else 0
+        where (q,r) = (numerator rat * nanosInSec) `divMod` denominator rat
+              c = if (2 * r > denominator rat) then 1 else 0
 
 -- show fixpoint days and seconds
 instance Show T where
@@ -169,19 +169,19 @@ instance Show DT where
 -- represent the rational as a decimal string up to n places.
 -- note that rounding is necessary to restore the data precisely.
 showFrac :: Int -> Rational -> String
-showFrac nPlaces r = 
+showFrac nPlaces rat = 
     assert (nPlaces > 0) $
-    let (sign,posR) = if (r < 0) then ("-",negate r) else ("",r) in
-    let (q,rem) = numerator posR `divMod` denominator posR in
-    let (bcarry,sFrac) = showFrac' (denominator posR) rem nPlaces in
+    let (sign,posR) = if (rat < 0) then ("-",negate rat) else ("",rat) in
+    let (q,r) = numerator posR `divMod` denominator posR in
+    let (bcarry,sFrac) = showFrac' (denominator posR) r nPlaces in
     let c = if bcarry then 1 else 0 in
     sign ++ show (q + c) ++ "." ++ sFrac
 
 showFrac' :: Integer -> Integer -> Int -> (Bool,String)
 showFrac' den num nPlaces =
     if (nPlaces == 0) then ((num*2 > den),"") else
-    let (q,rem) = (num * 10) `divMod` den in
-    let (bc,sRem) = showFrac' den rem (nPlaces - 1) in
+    let (q,r) = (num * 10) `divMod` den in
+    let (bc,sRem) = showFrac' den r (nPlaces - 1) in
     let c = if bc then 1 else 0 in
     let q' = c + fromInteger q in
     if (q' == 10) then (True,  '0' : sRem) 
