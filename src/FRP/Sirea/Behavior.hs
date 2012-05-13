@@ -442,8 +442,8 @@ class (BEmbed b b', Behavior b, Behavior b') => BDynamic b b' where
     -- | bexec is eval but dropping the result, weaker time constraints 
     bexec :: (SigInP p x) => b (S p (b' x y) :&: x) (S p () :|: S p ())
     bexec = prep >>> beval 0
-        where prep = bfirst (bfmap fn &&& bconst ()) >>> bassocrp
-              fn b = bsecond b >>> bfst
+        where prep = bfirst (bfmap f &&& bconst ()) >>> bassocrp
+              f b' = bsecond b' >>> bfst
 
  
 

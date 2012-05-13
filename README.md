@@ -55,7 +55,7 @@ A potential model of RDP signals might be:
 
 Here `Maybe a` represents activity of the signal. The signal is `Nothing` while inactive. 
 
-This is very generic. It allows me to represent continuous, time-varying values such as the position of a thrown baseball over time (including interpolation). It's actually a bit too generic, since it also lets me represent _semantic garbage_ such as instantaneous, discontinuous values. 
+This is very generic. It allows me to represent continuous-varying values such as the position of a thrown baseball over time (including interpolation). It's actually a bit too generic, since it also lets me represent _semantic garbage_ such as instantaneous, discontinuous values. 
 
 Unfortunately, while continuous-varying signals are expressive, they are also expensive, and a lot of algorithms on them are non-deterministic (e.g. Euler method for integrals). 
 
@@ -71,6 +71,16 @@ Here the first value represents the signal state for all history (often `Nothing
     (Just True, \[(t2, Just False), ...\])
 
 But filtering lists is problematic. It can diverge, if there are no False values. Even if I'm guaranteed a False value, the amount of computation to find it is unknown and thus would violate real-time computation properties. The actual Sirea implementation of concrete signal includes structure to support incremental processing of signals, support for filtering included.
+
+### Continuous-Varying Signals?
+
+Continuous-varying signals are valuable for modeling physics, collision detection, and smooth animations (with temporal anti-aliasing and motion blur). Sirea rejects first-class support for continuous-varying signals because they're too difficult to work with in general. But very effective second-class support is feasible.
+
+We could model a continuous signal as: `Sig (T -> a)`. But this is still excessively expressive - we actually only desire *piecewise continuous* signals, i.e. smooth and curvy lines, with potential jumps at discrete steps. Further, we will need *symbolic analysis* for efficient processing, for precise zero-crossing and integrals, and for serialization. Zero crossing is important for collision detection, integrals for continuous state models, and serialization (e.g. send to GPU for tweening, or to remote browser for interpolation). So follow a pattern developed years ago by Conal Elliott for [Compiling Embedded Languages](http://conal.net/papers/jfp-saig/): rather than `T -> a`, use some variation of `Expr T -> Expr a`. 
+
+Once the signals are in place, RDP will require a few dedicated behaviors to split at zero-crossings or support continuous state. Further, specialized variations for `bdelay` and `bpeek` would be necessary to account for the time shift on the contents - i.e. if we delay the outer discrete-varying layer by 100ms, we also need to delay the internal continuous-varying layer by 100ms.
+
+Sirea should eventually provide a simple variation on continuous signals, but it's very low priority.
 
 ### Updating Signals
 
@@ -338,7 +348,7 @@ The holistic, set-based view of simultaneous demands will also force developers 
 
 Traditional state models have been developed for imperative programs - *serializable* updates, mutual exclusion, discrete time. RDP needs state models suitable for control by signals - continuous, concurrent, collaborative, commutative, compositional, and idempotent. Support for speculation and `bpeek` is also very desirable.
 
-Surprisingly, even that broad set of constraints allows plenty design space, and allows for simple and easy designs. Here are a few valid approaches to state with RDP:
+Surprisingly, that broad set of constraints allows a very large design space, which includes many simple, familiar, and usable state models. Here are a few valid approaches to state with RDP:
 
 * simple set manipulation: 
     * signals may add and remove records from a set
@@ -347,8 +357,8 @@ Surprisingly, even that broad set of constraints allows plenty design space, and
     * can augment with clustering (machine learning + indexing)
 * reactive state transition:
     * state is integer
-    * signals add transition opportunities
-    * transition when opportunity exists
+    * signals contribute possible transitions
+    * transition whenever opportunity exists
     * can augment with animation model
 * animated reactive term rewriting:
     * state is (term, time debt)
@@ -359,14 +369,15 @@ Surprisingly, even that broad set of constraints allows plenty design space, and
     * time debt towards zero, linearly over continuous time
     * can augment with built in rules (for performance)
     * can augment with ownership types (for security, control)
+    * can augment with delayed tasks (e.g. to model expiration)
     * can augment with implicit, inferred (max debt, new debt)
     * natural variations: graph rewriting
 
-Since all state models are *external* to RDP (i.e. modeled as external services), it is not difficult to dream up new ones and add them to an application by library or plugin. It is also not difficult to add orthogonal persistence. 
+Since all state models are *external* to RDP (i.e. modeled as external services), it is not difficult to add orthogonal persistence. It is also not difficult to dream up new ones and add them to an application via library or plugin. There are interesting state models one could create for continuous signals (e.g. based on bezier curves, follow the carrot, integrals of forces). 
 
-Sirea shall provide a few simple state models, including the three described above, complete with *persistence by default*. But none have been implemented yet. They won't be part of the core package.
+Sirea shall provide a few simple state models, including the three described above, complete with *persistence by default*. But none have been implemented yet. And they won't be part of the core package.
 
-A related, interesting possibility is to seek stability without *stateful semantics*. By "stateful semantics" I mean the ability to preserve information over time (even for one nanosecond). Stability doesn't require information be preserved, only that avoid changing unnecessarily. Stability is suitable in cases where you don't strongly care *what* the information is so long as it's consistent and stable - such as UI layout, or path planning systems. Constraint logic programming and many machine learning techniques offer [effective approaches](http://awelonblue.wordpress.com/2012/03/14/stability-without-state/) to stability.
+A related, interesting possibility is to seek stability without *stateful semantics*. The "stateful semantics" refers to ability to preserve information over time, from the past into the present (even for one nanosecond). Stability doesn't require information be preserved, only that avoid changing unnecessarily. Stability is suitable in cases where you don't strongly care *what* the information is so long as it's consistent and stable - such as UI layout, or path planning systems. Constraint logic programming and many machine learning techniques offer [effective approaches](http://awelonblue.wordpress.com/2012/03/14/stability-without-state/) to stability.
 
 Stateless stability can help alleviate need for real state, and thus simplify reasoning about systems (especially during partial failure and recover).
 
@@ -396,20 +407,21 @@ Since you can't design feedback entirely out of complex systems, add `bdelay`. T
 
 Animated reactive term rewriting is incredibly expressive. If you are unfamiliar with term rewrite systems, look up Maude and broaden your horizons. The *reactive* variation on term rewriting flips when rules and terms are provided (and who provides them). The *animated* variation models incremental processing and makes the timing of state updates deterministic and declarative. But animated reactive term rewriting has the same amazing expressiveness as the traditional version.
 
-Expressing a Turing machine would be no difficulty at all. 
+Expressing a Turing machine with reactive term rewriting is no challenge at all. 
 
-Add a few well-chosen, built-in rules and the resulting term rewrite application could achieve performance competitive with native applications of the same paradigm. (One possibility is specializations for large vector and matrix ops, plus ability to compile terms of a simple functional language into CG or OpenCL.)
+A few well-chosen, built-in rules and an application expressed within the term rewrite node could achieve performance competitive with native applications of the same paradigm. (Consider specializations for large vector and matrix ops, plus ability to compile terms representing simple functions into OpenCL.)
 
-State also serves as a valid basis for IO and side-effects in open systems. 
+State also serves as a powerful basis for IO and side-effects in open systems. 
 
 To achieve this, use the [blackboard metaphor](http://en.wikipedia.org/wiki/Blackboard_system). Agents use signals to write a task into shared state representing the board, e.g. "print this document". A printer agent could then modify the request to claim it, e.g. adding "agent Orion has accepted this task". Orion would then print the document, and update the term with status information as it runs. When finished, the original writer can remove the term. 
 
-Observing and influencing intermediate declarative state in a reactive paradigm has many advantages over other paradigms (such as message passing, procedure calls):
+Observing and influencing intermediate declarative state in a reactive paradigm has many advantages over shared state in other paradigms (such as message passing, procedure calls):
 
-* allows continuous observation of intermediate status
-* precise job control achievable by modifying state 
-* asynchronous and even offline behavior support
-* ad-hoc and compositional signals (waiting on combination of states)
+* no blind waiting; intermediate status observable
+* no polling, never miss an update
+* precise job control; achievable by modifying state 
+* orthogonal asynchronous and even offline interactions
+* ad-hoc and compositional "conditions" (waiting on combination of states)
 * ad-hoc control-flow and [workflow patterns](http://en.wikipedia.org/wiki/Workflow_patterns)
 * precise timing (for schedulers, simulations) via *animated* state
 
@@ -425,7 +437,8 @@ A "main" behavior is essentially a dynamic behavior activated by an unspecified 
 
 This has advantages:
 
-* For metaprogramming. Dynamic behaviors have all the same features as a main behavior. It is easy to interpret text and a few capabilities into a dynamic behavior, and it won't be second class.
+* For metaprogramming. Much greater consistency and uniformity of code. It is easy to interpret text and a few capabilities into a dynamic behavior, and it won't be second class.
+* For separation of concerns. External state models are easier to persist, and it is easy to try new state models to account for challenges like partitioning.
 * For live programming. The "main" behavior can be upgraded or replaced without disturbing state. An RDP application is one big, active declaration that can be modified at any time. 
 
 Haskell [plugins](http://hackage.haskell.org/package/plugins) could make live programming a reality. But much design work is needed to make it livable (reactive dependency injection and linking; automatic management of threads; switch to fallback plugins for while the one you're editing is broken). This will be pursued in a sirea-plugins package.
