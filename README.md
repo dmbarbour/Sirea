@@ -310,7 +310,7 @@ Sirea clients can add new primitive behaviors via `unsafeLnkB`, but must be caut
 Declarative Effects and Concurrency in RDP
 ------------------------------------------
 
-RDP is effectful, but is limited to *declarative effects* - by which I mean effects that are (at any given logical instant, i.e. *spatially*) commutative and idempotent, and that hold over for a time. Declarative effects offer many of the reasoning and refactoring benefits associated with pure code: expressions can easily be rearranged, duplicate expressions can be eliminated, or duplicates can be introduced so overlapping subprograms can be abstracted. 
+RDP is effectful, but is limited to *declarative effects* - by which I mean effects that are (at any given logical instant, i.e. *spatially*) commutative and idempotent, and that hold over a time. Declarative effects offer many of the reasoning and refactoring benefits associated with pure code: expressions can easily be rearranged, duplicate expressions can be eliminated, or duplicates can be introduced so overlapping subprograms can be abstracted. 
 
 RDP is not the only paradigm with declarative effects. If you are unfamiliar with [Temporal Logic](http://www.eecs.berkeley.edu/Pubs/TechRpts/2009/EECS-2009-173.html), [Event Calculus](http://en.wikipedia.org/wiki/Event_calculus), [Synchronous Programming](http://en.wikipedia.org/wiki/Synchronous_programming_language), or [Concurrent constraint programming](http://en.wikipedia.org/wiki/Concurrent_constraint_logic_programming) then I do recommend researching some of those techniques to broaden your horizons. The [Berkeley Orders Of Magnitude](http://boom.cs.berkeley.edu/) project is making good use of temporal logic for similar reasons that RDP focuses on declarative effects - for scalability to distributed systems, and to simplify reasoning. 
 
@@ -353,33 +353,31 @@ Surprisingly, that broad set of constraints allows a very large design space, wh
 * simple set manipulation: 
     * signals may add and remove records from a set
     * add and remove simultaneously is resolved arbitrarily
-    * can augment with expiration, then can eliminate deletion
-    * can augment with clustering (machine learning + indexing)
 * reactive state transition:
     * state is integer
     * signals contribute possible transitions
     * transition whenever opportunity exists
-    * can augment with animation model
 * animated reactive term rewriting:
     * state is (term, time debt)
-    * signals add term-rewrite rules
+    * signals introduce term-rewrite rules
     * each rule has attributes (max debt, new debt), each > 0.
     * when a rule is applied, new debt is added to time debt.
     * rules are not applied unless max debt >= time debt
-    * time debt towards zero, linearly over continuous time
-    * can augment with built in rules (for performance)
-    * can augment with ownership types (for security, control)
-    * can augment with delayed tasks (e.g. to model expiration)
-    * can augment with implicit, inferred (max debt, new debt)
-    * natural variations: graph rewriting
+    * time debt continuously, linearly reduces towards zero
 
 Since all state models are *external* to RDP (i.e. modeled as external services), it is not difficult to add orthogonal persistence. It is also not difficult to dream up new ones and add them to an application via library or plugin. There are interesting state models one could create for continuous signals (e.g. based on bezier curves, follow the carrot, integrals of forces). 
 
+It's also easy to augment or create variations on existing models, though this tends to trade simplicity for other features (often a dubious tradeoff, but sometimes worth making). For example, animated reactive term rewriting might be modified with built in rules (for performance), delayed rewrites (easier scheduling), key-based ownership types (for security, control), and variation to terms rewriting (such as graph rewriting). Implicit computation of (max debt, new debt) attributes would also be nice.
+
 Sirea shall provide a few simple state models, including the three described above, complete with *persistence by default*. But none have been implemented yet. And they won't be part of the core package.
 
-A related, interesting possibility is to seek stability without *stateful semantics*. The "stateful semantics" refers to ability to preserve information over time, from the past into the present (even for one nanosecond). Stability doesn't require information be preserved, only that avoid changing unnecessarily. Stability is suitable in cases where you don't strongly care *what* the information is so long as it's consistent and stable - such as UI layout, or path planning systems. Constraint logic programming and many machine learning techniques offer [effective approaches](http://awelonblue.wordpress.com/2012/03/14/stability-without-state/) to stability.
+State models may be non-deterministic, but it is highly preferable (for debugging, regression tests, anticipation, replication for fault tolerance, etc.) that they are deterministic. For state transition, when given two transitions the process could favor the lower integer. For term rewriting, the process could impose a simple arbitrary ordering on rules (assuming they aren't opaque).
+
+An interesting possibility is to seek *stability without stateful semantics*. Stateful semantics refers to systematically preserving information from past into present time. Stability doesn't require information be preserved, only that avoid changing unnecessarily - something that can *naturally* be achieved by use of non-deterministic semantics. Stability is suitable in cases where you don't strongly care *what* the information is so long as it's consistent and stable - potential domains would include UI layout, live dependency injection, or a path planning system. Constraint logic programming and many machine learning techniques offer [effective approaches](http://awelonblue.wordpress.com/2012/03/14/stability-without-state/) to stability.
 
 Stateless stability can help alleviate need for real state, and thus simplify reasoning about systems (especially during partial failure and recover).
+
+*NOTE:* Reactive state transition and reactive term rewriting potentially allow for non-determinism. Fortunately these could be resolved arbitrarily. E.g. for ambiguous state transition, choose the lowest available integer. For reactive term rewriting, access to structure of rules would be necessary to impose deterministic ordering on them. Non-determini
 
 *NOTE:* If you need *differences* between past and present values (e.g. to redraw the dirty rectangles), then RDP offers a stateless alternative: use `bpeek` to instead find differences between present and future values. This works up to a small constant time, though can work longer if preceded by `bdelay` to recover stability.
 
@@ -405,42 +403,52 @@ Since you can't design feedback entirely out of complex systems, add `bdelay`. T
 
 ### Bridging Paradigms
 
-Animated reactive term rewriting is incredibly expressive. If you are unfamiliar with term rewrite systems, look up Maude and broaden your horizons. The *reactive* variation on term rewriting flips when rules and terms are provided (and who provides them). The *animated* variation models incremental processing and makes the timing of state updates deterministic and declarative. But animated reactive term rewriting has the same amazing expressiveness as the traditional version.
+Animated reactive term rewriting is incredibly expressive. Expressing a Turing machine with reactive term rewriting is no challenge at all. A few well-chosen built in types and rules could even allow highly competitive performance (i.e. via runtime compilation of terms, simple namespaces within a term, perhaps leveraging OpenCL).
 
-Expressing a Turing machine with reactive term rewriting is no challenge at all. 
+If you are unfamiliar with term rewrite systems, look up Maude and broaden your horizons. The *reactive* variation on term rewriting flips when rules and terms are provided (and who provides them). The *animated* variation enforces incremental processing and makes the timing of state updates deterministic and declarative. But *animated reactive* term rewriting has the same amazing expressiveness as the traditional variation.
 
-A few well-chosen, built-in rules and an application expressed within the term rewrite node could achieve performance competitive with native applications of the same paradigm. (Consider specializations for large vector and matrix ops, plus ability to compile terms representing simple functions into OpenCL.)
+If it were just modifying state locally, that would be sufficient for a closed process. 
 
-State also serves as a powerful basis for IO and side-effects in open systems. 
+But shared state can also serve as a powerful basis for IO and side-effects in open systems. 
 
-To achieve this, use the [blackboard metaphor](http://en.wikipedia.org/wiki/Blackboard_system). Agents use signals to write a task into shared state representing the board, e.g. "print this document". A printer agent could then modify the request to claim it, e.g. adding "agent Orion has accepted this task". Orion would then print the document, and update the term with status information as it runs. When finished, the original writer can remove the term. 
+Shared state is often discouraged in imperative programming because of many issues with concurrency. Developers must reason about *permutations* of observation and influence. But *declarative state*, especially for RDP, is much nicer: commutative, idempotent combinations; holistic processing of updates; precise logical timing; never a missed update; ad-hoc conditions on any combination of observable states. 
 
-Observing and influencing intermediate declarative state in a reactive paradigm has many advantages over shared state in other paradigms (such as message passing, procedure calls):
+Shared state can support a [blackboard metaphor](http://en.wikipedia.org/wiki/Blackboard_system). 
 
-* no blind waiting; intermediate status observable
-* no polling, never miss an update
-* precise job control; achievable by modifying state 
-* orthogonal asynchronous and even offline interactions
-* ad-hoc and compositional "conditions" (waiting on combination of states)
-* ad-hoc control-flow and [workflow patterns](http://en.wikipedia.org/wiki/Workflow_patterns)
-* precise timing (for schedulers, simulations) via *animated* state
+Agents use signals to write a task into shared state representing the board, e.g. "print this document". A printer agent could then modify the request to claim it, e.g. adding "agent Orion has accepted this task". Orion would then print the document, and update the term with status information as it runs. When finished, the original writer can remove the term. 
 
-Use of intermediate state is essential to many design patterns in RDP. RDP is ultimately about open, declarative orchestration of *stateful* systems - sensors, actuators, UI, and databases.
+A blackboard allows rich and robust interaction, far more so than procedure calls or messaging:
+
+* no blind wait; easily observe intermediate and incremental status
+* modify request: pause, abort, prioritize; simple job control
+* weak coupling, ambient programming; no direct reference to agent
+* open extensibility, plugins; easily introduce new agents to board
+* offline, disruption tolerant; agents available at different times
+* collaborative: agents to split big tasks, combine results
+
+For security and performance reasons, it would be a bad idea to have one big blackboard for the world. Instead we would use lots of small blackboards, and a few agents to selectively synchronize between them when conditions are right (observing one board, writing to another).
+
+Between modeling machines with animated state and open interaction between agents, any ad-hoc control flow or [workflow pattern](http://en.wikipedia.org/wiki/Workflow_patterns) can be expressed. And will benefit from the robust, resilient nature of RDP.
+
+But RDP is ultimately about open, declarative orchestration of *stateful* systems - sensors, actuators, UI, and databases. Use of external state is often essential in RDP architectures and design patterns.
 
 *NOTE:* the notion of logically deterministic timeouts initially struck me as terribly odd, as though counter to their purpose. But timeouts still serve a valuable role when modeling incremental computations in shared state, e.g. computing a better move in a game. And deterministic timeouts makes for reproducible errors, easy maintenance, and better reasoning about timing.
 
 ### Metacircular
 
-It's RDP all the way down. That is the *ideal* view an RDP developer should of the system. 
+It's dynamic RDP all the way down. That is the *ideal* view an RDP developer should have of any system. 
 
 A "main" behavior is essentially a dynamic behavior activated by an unspecified lower level RDP behavior. It runs concurrently with other "main" behaviors, and might interact with them via shared services. Dynamic behaviors must be internally stateless because they're logically swapped out at every instant. The "main" behavior must be internally stateless because it is, in essence, a dynamic behavior.
 
-This has advantages:
+This has many advantages:
 
 * For metaprogramming. Much greater consistency and uniformity of code. It is easy to interpret text and a few capabilities into a dynamic behavior, and it won't be second class.
-* For separation of concerns. External state models are easier to persist, and it is easy to try new state models to account for challenges like partitioning.
-* For live programming. The "main" behavior can be upgraded or replaced without disturbing state. An RDP application is one big, active declaration that can be modified at any time. 
+* For orthogonal persistence. External state can manage its own persistence, and nothing within the behavior needs persistence.
+* For distribution. State models can be created that are suitable for distribution and replication. DHTs, LDAP, and content-addressed networks are possibilities.
+* For live programming. The "main" behavior can be modified without disturbing state. An RDP application is one big, active declaration that can be modified at any time. 
 
-Haskell [plugins](http://hackage.haskell.org/package/plugins) could make live programming a reality. But much design work is needed to make it livable (reactive dependency injection and linking; automatic management of threads; switch to fallback plugins for while the one you're editing is broken). This will be pursued in a sirea-plugins package.
+Live programming, distributed upgrade problems, and dependency management with graceful failover (i.e. when a service you were depending on goes down) were my motivating arguments for the metacircular property.
+
+Haskell [plugins](http://hackage.haskell.org/package/plugins) could make live programming a reality. But much design work is needed to make it livable: reactive dependency injection and linking; automatic management of threads; failover to fallback plugins while the preferred one is broken for editing. This will be pursued in a sirea-plugins package.
 
 
