@@ -1,14 +1,11 @@
-{-# LANGUAGE TypeOperators, EmptyDataDecls, TypeFamilies #-}
-{- MultiParamTypeClasses, FlexibleInstances -}
+{-# LANGUAGE TypeOperators, EmptyDataDecls,   
+    MultiParamTypeClasses, FlexibleInstances #-}
 
 module FRP.Sirea.Internal.STypes
     ( (:&:)
     , (:|:)
     , S
-
-    -- type functions (via type families)
     , SigInP
-    , SigToP
     ) where 
 
 import Data.Typeable -- all are typeable
@@ -49,14 +46,17 @@ infixr 2 :|:
 -- extra threads should be constructed when behavior is initiated.
 data S p a
 
-{- Typeclass variation of SigInP - 
-     requires MultiParamTypeClasses, FlexibleInstances
+{- Typeclass variation of SigInP 
+   MultiParamTypeClasses, FlexibleInstances -}
 
--- | SigInP describes signals signals that exist in one partition p.
--- It is not intended for extension by Sirea clients; all the SigInP
--- types are defined by Sirea (using flexible instances).
+-- | (SigInP p x) constrains that complex signal x exists entirely
+-- in partition p. This avoids need for implicit bcross in disjoin
+-- and eval behaviors, while allowing them to be reasonably generic.
+-- 
+-- This already has a complete definition. It is not for extension
+-- by Sirea clients.
 class SigInP p x where
-    proofOfSigInP :: ProofOfSigInP p x -- NOT exported. 
+    proofOfSigInP :: ProofOfSigInP p x 
 
 data ProofOfSigInP p x 
 trivialSigInP :: ProofOfSigInP p x
@@ -70,31 +70,6 @@ instance (SigInP p x, SigInP p y) => SigInP p (x :&: y) where
 
 instance (SigInP p x, SigInP p y) => SigInP p (x :|: y) where
     proofOfSigInP = trivialSigInP
-
--}
-
-{- Type Family version of SigInP -}
-
--- | (SigInP p x) describes a complex signal x in partition p. It is an
--- identity function on signal types, but only for those that exist
--- entirely in one partition. This is necessary to achieve generic
--- behaviors for disjoin and eval.
---
--- Should NOT be extended by Sirea clients.
-type family SigInP p x
-type instance SigInP p (S p x)   = (S p x)
-type instance SigInP p (x :&: y) = (SigInP p x :&: SigInP p y)
-type instance SigInP p (x :|: y) = (SigInP p x :|: SigInP p y)
-
--- | (SigToP p x) describes a complex signal x AFTER crossing into 
--- partition p. That is, every component signal in x is rewritten as
--- existing in p.
---
--- Should NOT be extended by Sirea clients.
-type family SigToP p x
-type instance SigToP p (S p' x)  = (S p x)
-type instance SigToP p (x :&: y) = (SigToP p x :&: SigToP p y)
-type instance SigToP p (x :|: y) = (SigToP p x :|: SigToP p y)
 
 ---------------------------
 -- Data.Typeable Support --

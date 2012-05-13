@@ -14,14 +14,14 @@
 --   see FRP.Sirea.Link for bUnsafeLnk
 --   see FRP.Sirea.Partition for bcross, bscope
 module FRP.Sirea.Behavior  
-    ( (:&:), (:|:), S, B 
+    ( (:&:), (:|:), S, B, SigInP
     , (>>>) -- from Control.Category
     , bfwd
     , BFmap(..), bforce, bspark, bstratf
     , BProd(..), bsecond, bsnd, bassocrp, (***), (&&&), bvoid
     , BSum(..), bright, binr, bassocrs, (+++), (|||), bskip 
     , bconjoinl, bconjoinr
-    , BDisjoin(..), bdisjoin'
+    , BDisjoin(..), bdisjoin1
     , BZip(..), bzipWith, bunzip
     , BSplit(..), bsplitWith, bunsplit
     , BTemporal(..), BPeek(..)
@@ -36,7 +36,7 @@ import Control.Category
 import Control.Parallel (pseq, par)
 import Control.Parallel.Strategies (Eval, runEval)
 
-import FRP.Sirea.Internal.STypes ((:&:),(:|:),S)
+import FRP.Sirea.Internal.STypes ((:&:),(:|:),S,SigInP)
 import FRP.Sirea.Internal.BTypes (B)
 import FRP.Sirea.Internal.BImpl 
     ( fmapB, constB, touchB, stratB, adjeqfB
@@ -136,8 +136,7 @@ class (Category b) => BFmap b where
 -- This would reduce a signal to normal form before further progress 
 -- in the partition's thread. This can improve data parallelism by
 -- making more efficient use of partition threads, can help control
--- memory overheads, and can ensure more predictable performance in
--- compositions. 
+-- memory overheads, and can achieve more predictable performance.
 bforce :: (BFmap b) => (x -> ()) -> b (S p x) (S p x)
 bforce f = bfmap seqf >>> bstrat >>> btouch
     where seqf x = (f x) `pseq` return x
@@ -175,11 +174,8 @@ bspark f = bfmap sparkf >>> bstrat >>> btouch
 -- is observed when sampling the signal, without waiting on x. Par
 -- is tempting due to work integrating it with GPU computation.
 -- 
--- CAUTION: Par is unsafe mostly because you can easily share IVars
--- between independent `runPar` operations. IVars are communication
--- not reflected in RDP, and could cause deadlocks or be trampled on
--- by dead code elimination or retroactive correction. Developers 
--- must use discipline: consume only IVars that you create locally.
+-- NOTE: Monad.Par is unsafe because the current model leaks IVars,
+-- which in Sirea leads easily to deadlock. Par can be used safely.
 --
 bstratf :: (BFmap b, Functor f) => (forall e . (f e -> e)) 
         -> b (S p (f x)) (S p x)
@@ -286,7 +282,6 @@ bskip f = binr >>> bleft f >>> bmerge
 -- staticSwitch :: (BSum b) => Bool -> b x (x :|: x)
 -- staticSwitch choice = if choice then binl else binr
 
-
 -- | bconjoin is a partial merge, extracting from a sum. 
 bconjoinl :: (BSum b, BProd b) => b ((x :&: y) :|: (x :&: z)) (x :&: (y :|: z)) 
 bconjoinr :: (BSum b, BProd b) => b ((x :&: z) :|: (y :&: z)) ((x :|: y) :&: z)
@@ -296,38 +291,28 @@ bconjoinl = bdup >>> (isolateX *** isolateYZ)
 bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
 
 -- | Disjoin will distribute a decision. To achieve disjoin involves 
--- combining a signal representing a split with an external signal. 
--- Both signals must already be entirely in one partition. 
+-- combining a signal representing a split with an external signal.
+-- All signals must be in the same partition for disjoin to occur.
+-- (Unfortunately, disjoin is not quite the dual of conjoin.)
 --
 -- Disjoin is necessary for effective use of `choice` in RDP, i.e.
 -- most design patterns using bsplit will also use bdisjoin.
---
--- In some cases it may be more convenient to use intermediate state
--- rather than disjoin. Disjoin is necessary to model lexical scope
--- without shared state.
 class (BSum b, BProd b) => BDisjoin b where
     -- | bdisjoinl combines a signal representing the current choice
     -- (S p ()) and a signal representing available data (S p x) in
     -- the same partition `p`. This splits the external data.
     -- May perform implicit logical synchronization, if necessary.
-    bdisjoin  :: b (S p x :&: ((S p () :&: y) :|: z) )
-                   ( (S p x :&: y) :|: (S p x :&: z) )
+    bdisjoin  :: (SigInP p x) 
+              => b (x :&: ((S p () :&: (      y)) :|: (      z)) )
+                          ((           (x :&: y)) :|: (x :&: z))
 
--- | bdisjoin' preserves the choice signal to support further disjoin.
-bdisjoin' :: (BDisjoin b) => b (S p x :&: ((S p () :&: y) :|: z))
-                               ((S p () :&: (S p x :&: y)) :|: (S p x :&: z))
-bdisjoin' = dupChoiceSig >>> bdisjoin >>> rotChoiceSig
+-- | bdisjoin1 preserves the choice signal to support further disjoin.
+bdisjoin1     :: (BDisjoin b, SigInP p x) 
+              => b (x :&: ((S p () :&: (      y)) :|: (      z)) )
+                          ((S p () :&: (x :&: y)) :|: (x :&: z))
+bdisjoin1 = dupChoiceSig >>> bdisjoin >>> rotChoiceSig
     where dupChoiceSig = (bsecond . bleft) $ bfirst bdup >>> bassocrp
           rotChoiceSig = bleft $ bassoclp >>> bfirst bswap >>> bassocrp
-
--- now what I need is to systematically split a stack.
--- and maybe a way to split a split?  some distribution mechanic would be nice:
---    ((a :|: b) :&: (c :|: d)) -> 
---       ((a :&: c) :|: (a :&: d) :|: (b :&: c) :|: (b :&: d)) 
---    probably would need conjoin to make that work.
--- I think a language for RDP dataflow between partitions 
--- will need some auto-wiring mechanisms...
-
 
 
 -- | BZip is a behavior for combining elements of an asynchronous 
@@ -397,30 +382,26 @@ class (Category b) => BTemporal b where
 
 
 -- | BPeek - anticipate a signal by studying its projected future.
--- RDP does not provide any support for prediction, but does ensure
--- that predictions are propagated through behavior and potentially
--- even through stateful resources.
+-- RDP does not provide any support for prediction, but any future
+-- for a signal will propagate through an RDP system. Modules can
+-- benefit from predictions by components they don't know about.
+-- This makes it easy to chain prediction systems together, or feed
+-- plans right back into the predictions. 
 --
--- Use of BPeek isn't suitable for long-term predictions. For that,
--- you need a proper predictions model. But it can help compose many 
--- prediction models. It can support detecting changes or `events`
--- (i.e. gesture detection, redraw dirty windows). It can simplify 
--- computing derivatives for smooth interpolation or animation. It 
--- can enable advance preparation or loading of resources. It also
--- separates the concerns of making a prediction and consuming it.
+-- BPeek can also serve as a state alternative if you need diffs or
+-- a small history window. With peek you compare future vs. present
+-- instead of present vs. past. And for buffered history, use delay
+-- with peek to build a small buffer of valid state.
 --
--- Anticipation reduces need for many traditionally stateful idioms.
+-- Peek places strain on a behavior's stability and efficiency. Use
+-- it for small lookaheads only. For far predictions, use a proper
+-- prediction model.
 --
--- Using bpeek can damage stability of the behavior, i.e. if we look
--- four seconds into the future, then an update within four seconds 
--- can upset our predictions. Retroactive correction has limits, so
--- instability can ultimately cause glitches and indeterminism. This
--- can be countered by use of bdelay so we're actually looking at a
--- buffered future (an idiom for short-term memory). Developers must
--- balance the benefits of bpeek against the stability costs. Domain
--- can affect the tradeoff. Low latency can be more important than
--- accuracy (e.g. for dodging in combat), or naturally stable models
--- could allow us to look further without glitches.
+-- Due to peek, signals are observably distinct if they differ in
+-- the future. Developers get abstraction and refactoring benefits
+-- from idempotent expression, but network optimizations (multicast
+-- and proxy cache) are hindered unless we have knowledge of how far
+-- a service uses `bpeek` into signal futures.
 --
 class (BTemporal b) => BPeek b where
     -- | bpeek - anticipate a signal. The Left side is the future
@@ -432,46 +413,66 @@ class (BTemporal b) => BPeek b where
     bpeek :: DT -> b (S p a) (S p (Either a ()))
 
 
-
 -- | Dynamic behaviors are behaviors constructed or discovered at
 -- runtime. They are useful for modeling resources, extensions,
 -- service brokering, live programming, and staged computation 
--- (compilation, linking). They can represent runtime authority 
--- and object capability patterns. Dynamic behaviors continuously
--- expire, so to stop sharing a behavior also revokes it.
+-- (compilation, linking), and capability security patterns. 
 --
--- Like bdisjoin, dynamic behaviors are not first class due to the
--- constraint on partitions. 
+-- Dynamic behaviors provide alternative to large (:|:) structures.
+-- This is analogous to using objects instead of case dispatch. Best
+-- practices will eventually exist for choosing between them.
 --
--- Dynamic behaviors may perform better than use of sum types (:|:)
--- in some cases, especially when there are a lot of rarely selected
--- choices. However, they aren't as composable, may hinder bpeek for
--- anticipation, and certainly hinder dead code elimination. 
+-- RDP is internally stateless, and dynamic behaviors are not stored
+-- anywhere. Logically, RDP continuously expires and revokes dynamic
+-- behaviors. This simplifies security (no grandfather capabilities)
+-- and garbage collection, especially in open, distributed systems.
+-- It also leads to clearer disruption semantics.
 -- 
 -- All arguments for dynamic behaviors are implicitly synchronized.
 class (BEmbed b b', Behavior b, Behavior b') => BDynamic b b' where
-    -- | evaluate a dynamic behavior and obtain the response.
-    -- If the dynamic behavior would take more than DT time, or has
-    -- other static problems, failure is returned immediately via
-    -- the left output signal (failure :|: result).
-    beval :: DT -> b (S p (b' (S p x) (S p y)) :&: (S p x))
-                     (S p () :|: S p y)
+    -- | evaluate a dynamic behavior and obtain the response. The DT
+    -- argument indicates the maximum latency for dynamic behaviors,
+    -- and the latency for beval as a whole. 
+    --
+    -- If there are any problems with the dynamic behavior, e.g. if
+    -- too large for DT, you receive a `bright` error indicator.
+    -- 
+    beval :: (SigInP p x) => DT -> b (S p (b' x y) :&: x) (y :|: S p ())
+
+    -- | bexec is eval but dropping the result, weaker time constraints 
+    bexec :: (SigInP p x) => b (S p (b' x y) :&: x) (S p () :|: S p ())
+    bexec = prep >>> beval 0
+        where prep = bfirst (bfmap fn &&& bconst ()) >>> bassocrp
+              fn b = bsecond b >>> bfst
+
+ 
 
 
-{- I'll eventually want higher arities for asynchronous parameters 
-   to achieve higher stability for the beval operation. 
-    -- | evaluate with two asynchronous arguments, one result.
-    beval2to1 :: DT -> b (S p (b' (S p x :&: S p y) (S p z)) 
-                              :&: (S p x :&: S p y)         )
-                         (S p () :|: S p z)
--}
 
-
-
--- Note: I probably need several more variations of beval:
---  more asynchronous inputs and outputs (how many? 3? 4?)
---  support for sums on inputs and outputs.
--- But these are all performance options. For now, just get it working!
+-- WISHLIST: a behavior-level map operation.
+--
+--  I'd love to have a notion of performing a behavior on every
+--  element in a collection, i.e. 
+--
+--    B (S p x) (S p y) -> B (S p [x]) (S p [y]) 
+--      {- OR -}
+--    B (S p (k,x)) (S p' (k,y)) -> B (S p (Map k x)) (S p' (Map k y))
+--  
+--  Currently this can be achieved with beval, but would not be very 
+--  efficient since it may need to rebuilt whenever an element in a
+--  collection is modified. 
+--
+--  I'm not sure HOW to do much better, except maybe to create types
+--  for collections of behaviors. If SL is a list of complex signals
+--  of a constant type:
+--     map       :: B x y -> B (SL x) (SL y)
+--     singleton :: B x (SL x)
+--     cons      :: B (x :&: SL x) (SL x)
+--     foldl     :: B (y :&: x) y -> B (SL x) y
+--  But I don't want to complicate Sirea with a new signal type, and
+--  it isn't clear that this would help. Might be better to stick
+--  with type-level operators like:  (x :&: (x :&: (x :&: (x ...
+--
 
 -- | BEmbed - embed (or lift) behaviors. 
 class BEmbed b b' where

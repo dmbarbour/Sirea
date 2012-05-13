@@ -5,7 +5,7 @@
 module FRP.Sirea.Internal.LTypes 
     ( MkLnk(..), Lnk, LnkW(..), LnkUp(..)
     , ln_left, ln_right, ln_fst, ln_snd, ln_dead
-    , ln_zero, ln_lnkup, ln_lumap, ln_sumap
+    , ln_zero, ln_lnkup, ln_append, ln_lumap, ln_sumap
     , SigUp(..), su_signal, su_time, su_fmap, su_delay, su_apply
     , SigSt(..), st_zero, st_poke, st_clear, st_sigup
     , SigM(..), sm_zero, sm_update_l, sm_sigup_l, sm_update_r, sm_sigup_r
@@ -84,6 +84,13 @@ ln_zero = LnkUp
     { ln_touch = return ()
     , ln_update = const $ return ()
     }
+
+ln_append :: LnkUp a -> LnkUp a -> LnkUp a
+ln_append x y =
+    let touch = ln_touch x >> ln_touch y in
+    let update su = ln_update x su >> ln_update y su in
+    LnkUp { ln_touch = touch, ln_update = update }
+
 
 -- | ln_lnkup extracts LnkUp (from LnkSig or ln_zero from LnkDead)
 ln_lnkup  :: Lnk (S p a) -> (LnkUp a)

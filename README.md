@@ -249,22 +249,25 @@ The `bpeek` behavior allows developers to peek a small distance into the future,
 
 ### Dynamic Behavior
 
-Behaviors may be defined at runtime then evaluated in context. This is useful for a wide variety of programming patterns, such as modeling plug-ins, service brokering, staged programming, progressive disclosure, mutable views, and capability security patterns. The typical behavior to evaluate dynamic behaviors is `beval`:
+Behaviors may be defined at runtime then evaluated in context. This is useful for a wide variety of programming patterns, such as modeling plug-ins, service brokering, staged programming, progressive disclosure, mutable views, and capability security patterns. The behavior to evaluate dynamic behaviors is:
 
-    beval :: DT -> B (S p x :&: S p (B (S p x) (S p y))) (S p y :|: S p ())
+    beval :: (SigInP p x) => DT -> B (x :&: S p (B x y)) (y :|: S p ())
 
-This is a complicated signature. I'll break it down a bit:
+The essential `beval` is to take complex signal `x` and produce complex signal `y` through the runtime-provided behavior `B x y`.
 
-    type DynBeh p x y = B (S p x) (S p y)
-    type ResErr p y = (S p y :|: S p ())
-    beval :: DT -> B (S p x :&: S p (DynBeh p x y)) (ResErr p y)
+The `SigInP` constraint enforces that every component of `x` starts in the same partition. This is necessary because whenever we receive a new dynamic behavior we'll need to switch all the input signals to that behavior. That can't be done remotely without magic. There is no constraint that all behaviors *end* in the same partition because we're just updating the signals. 
 
-The `DT` argument is the delay value for `beval`. Ideally, it could be inferred from the _type_ for `DynBeh`. Alas, Haskell doesn't support dependent types. Any result from the dynamic behavior will be padded out to `DT`. The error option for output is necessary if the dynamic behavior would have too much latency, or fails for any other reason. 
+In actual implementation, `beval` will maintain *multiple* behaviors at once for different periods of time. Future dynamic behaviors are *anticipated* and speculatively installed. Older dynamic behaviors are uninstalled when they are no longer necessary (which depends on when all the parameter signals stabilize). This use of anticipation smooths transition between dynamic behaviors (they'll be warmed up) and improves anticipation everywhere else.
 
-All arguments are logically synchronized by `beval`. However, they are still represented in an asynchronous product because this allows the signals for `x` and for `DynBeh` to change independently. This can model compilation, for example, if we have a slow-changing dynamic behavior and a fast-changing parameter. (_Note:_ `beval`'s limit of one argument and one response is _not_ essential. Sirea will provide a few more options for performance and flexibility.)
+The `DT` argument to `beval` specifies the maximum latency for the dynamic behavior, and sets the latency for `beval` as a whole. (RDP requires static latency at each dynamic layer.) If the dynamic behavior would have larger latency, or if there are other *static* (compile-time) problems with the dynamic behavior, the error output is provided, potentially with much smaller latency than the `DT` argument. 
 
-Note that everything happens in just one partition. This is a necessary restriction to avoid implicit communication between partitions. This is also the reason I say "dynamic" instead of "first class" - first class connotes that all types are supported. The dynamic behavior itself may cross into other partitions to actually do things.
+Developers should take care: for performance, dynamic behaviors need to be *stable* - change rarely, change with a fair amount of advanced knowledge (e.g. via `bdelay`). This need for stability was the initial reason those *asynchronous signals* were developed. 
 
+*NOTE:* Dynamic behaviors may be recursive. This is valuable for a lot of patterns (e.g. recursive view of an XML file with includes or frames). But, at least in Sirea's implementation, a change in a lower layer requires rebuilding everything above it. Developers must pay attention to stability when building large recursive dynamic reactive structures.
+
+*NOTE:* Dynamic behaviors also hinder dead-code elimination. For Sirea, inputs are assumed live at all times, even if the current dynamic behavior doesn't need that input. 
+
+Better optimizations for stability and performance of dynamic behaviors would be motivating arguments for a dedicated RDP language. Sirea aims to remain simple, so provides only the easiest optimizations.
 
 ### Implementation and Extension of Behaviors
 
@@ -333,19 +336,98 @@ The holistic, set-based view of simultaneous demands will also force developers 
 
 ### Declarative State
 
-### Stability Models
+Traditional state models have been developed for imperative programs - *serializable* updates, mutual exclusion, discrete time. RDP needs state models suitable for control by signals - continuous, concurrent, collaborative, commutative, compositional, and idempotent. Support for speculation and `bpeek` is also very desirable.
 
-### Control Flow and Traditional Asynchrony
+Surprisingly, even that broad set of constraints allows plenty design space, and allows for simple and easy designs. Here are a few valid approaches to state with RDP:
 
-### Incremental and Batch Processing
+* simple set manipulation: 
+    * signals may add and remove records from a set
+    * add and remove simultaneously is resolved arbitrarily
+    * can augment with expiration, then can eliminate deletion
+    * can augment with clustering (machine learning + indexing)
+* reactive state transition:
+    * state is integer
+    * signals add transition opportunities
+    * transition when opportunity exists
+    * can augment with animation model
+* animated reactive term rewriting:
+    * state is (term, time debt)
+    * signals add term-rewrite rules
+    * each rule has attributes (max debt, new debt), each > 0.
+    * when a rule is applied, new debt is added to time debt.
+    * rules are not applied unless max debt >= time debt
+    * time debt towards zero, linearly over continuous time
+    * can augment with built in rules (for performance)
+    * can augment with ownership types (for security, control)
+    * can augment with implicit, inferred (max debt, new debt)
+    * natural variations: graph rewriting
 
-### Anticipation and Idempotence
+Since all state models are *external* to RDP (i.e. modeled as external services), it is not difficult to dream up new ones and add them to an application by library or plugin. It is also not difficult to add orthogonal persistence. 
 
-### Metacircular Dynamic
+Sirea shall provide a few simple state models, including the three described above, complete with *persistence by default*. But none have been implemented yet. They won't be part of the core package.
 
-RDP is designed for a notion of *RDP all the way down.* The application itself be treated as a dynamic behavior, computed in a larger RDP system. 
+A related, interesting possibility is to seek stability without *stateful semantics*. By "stateful semantics" I mean the ability to preserve information over time (even for one nanosecond). Stability doesn't require information be preserved, only that avoid changing unnecessarily. Stability is suitable in cases where you don't strongly care *what* the information is so long as it's consistent and stable - such as UI layout, or path planning systems. Constraint logic programming and many machine learning techniques offer [effective approaches](http://awelonblue.wordpress.com/2012/03/14/stability-without-state/) to stability.
 
+Stateless stability can help alleviate need for real state, and thus simplify reasoning about systems (especially during partial failure and recover).
 
-No floor, no ceiling. RDP applications, including linking of effectful behaviors and linking, can always be understood as dynamic behaviors in yet a lower level RDP application.
+*NOTE:* If you need *differences* between past and present values (e.g. to redraw the dirty rectangles), then RDP offers a stateless alternative: use `bpeek` to instead find differences between present and future values. This works up to a small constant time, though can work longer if preceded by `bdelay` to recover stability.
+
+*NOTE:* Sirea and RDP will automatically remember values where necessary. No state is needed to combine signals with `bzip`, and use of `badjeqf` can help filter updates that would be identical in order to improve stability. If *memoization* is desired, you should either use [lazy Haskell techniques](http://hackage.haskell.org/package/MemoTrie-0.5) (at risk of space leak!) or use a dedicated state model.
+
+*NOTE:* State IS necessary if you want to model choking of updates, e.g. such that you see at most one update each second. Choking uses state to record the selected value. Animated state, such as *animated reactive term rewriting*, can model choking quite elegantly. *Not that choking is elegant.* Be cautious about choking; it can mask feedback issues without solving them (often better to take the hit, *find* the problem, solve it by design).
+
+### Feedback and Delay
+
+A major concern with reactive programming in continuous time is *feedback* - when a signal output affects its own input. This is a natural concern, with physical cause - e.g. if we place a microphone near its associated amplifier, we often get very shrill feedback. Feedback is unstable and can consume a lot of energy very quickly.
+
+In RDP, you cannot directly express a closed loop. (No equivalent to ArrowLoop.) So feedback is impossible for pure RDP behaviors. But feedback is still possible when interacting with external services and state. Consider:
+
+    getState s >>> bfmap fn s >>> writeState s
+
+In this case, we might be trying to writeState at the same *instant* for which we're reading state, and thus `getState` would be modified by the results of `writeState`, creating a feedback loop through s. 
+
+Feedback is RDP's equivalent to divergent computation. 
+
+Symbolic analysis or laziness could potentially eliminate feedback loops in some cases. But RDP is designed for *open systems*, where those techniques are not generally available. Sirea does not assume them. Good state models for RDP will help, both in avoidance and resolution of the problem. For example, animated reactive term rewriting eliminates most need for such loops (rewrite rules include simple functions) and helps stabilize the result (limiting updates via time debt, and not all rewrite rules will apply). But those are of limited scope.
+
+Since you can't design feedback entirely out of complex systems, add `bdelay`. This slows the feedback down, changing instantaneous feedback into a well-defined incremental feedback process. Potentially, a natural one.
+
+### Bridging Paradigms
+
+Animated reactive term rewriting is incredibly expressive. If you are unfamiliar with term rewrite systems, look up Maude and broaden your horizons. The *reactive* variation on term rewriting flips when rules and terms are provided (and who provides them). The *animated* variation models incremental processing and makes the timing of state updates deterministic and declarative. But animated reactive term rewriting has the same amazing expressiveness as the traditional version.
+
+Expressing a Turing machine would be no difficulty at all. 
+
+Add a few well-chosen, built-in rules and the resulting term rewrite application could achieve performance competitive with native applications of the same paradigm. (One possibility is specializations for large vector and matrix ops, plus ability to compile terms of a simple functional language into CG or OpenCL.)
+
+State also serves as a valid basis for IO and side-effects in open systems. 
+
+To achieve this, use the [blackboard metaphor](http://en.wikipedia.org/wiki/Blackboard_system). Agents use signals to write a task into shared state representing the board, e.g. "print this document". A printer agent could then modify the request to claim it, e.g. adding "agent Orion has accepted this task". Orion would then print the document, and update the term with status information as it runs. When finished, the original writer can remove the term. 
+
+Observing and influencing intermediate declarative state in a reactive paradigm has many advantages over other paradigms (such as message passing, procedure calls):
+
+* allows continuous observation of intermediate status
+* precise job control achievable by modifying state 
+* asynchronous and even offline behavior support
+* ad-hoc and compositional signals (waiting on combination of states)
+* ad-hoc control-flow and [workflow patterns](http://en.wikipedia.org/wiki/Workflow_patterns)
+* precise timing (for schedulers, simulations) via *animated* state
+
+Use of intermediate state is essential to many design patterns in RDP. RDP is ultimately about open, declarative orchestration of *stateful* systems - sensors, actuators, UI, and databases.
+
+*NOTE:* the notion of logically deterministic timeouts initially struck me as terribly odd, as though counter to their purpose. But timeouts still serve a valuable role when modeling incremental computations in shared state, e.g. computing a better move in a game. And deterministic timeouts makes for reproducible errors, easy maintenance, and better reasoning about timing.
+
+### Metacircular
+
+It's RDP all the way down. That is the *ideal* view an RDP developer should of the system. 
+
+A "main" behavior is essentially a dynamic behavior activated by an unspecified lower level RDP behavior. It runs concurrently with other "main" behaviors, and might interact with them via shared services. Dynamic behaviors must be internally stateless because they're logically swapped out at every instant. The "main" behavior must be internally stateless because it is, in essence, a dynamic behavior.
+
+This has advantages:
+
+* For metaprogramming. Dynamic behaviors have all the same features as a main behavior. It is easy to interpret text and a few capabilities into a dynamic behavior, and it won't be second class.
+* For live programming. The "main" behavior can be upgraded or replaced without disturbing state. An RDP application is one big, active declaration that can be modified at any time. 
+
+Haskell [plugins](http://hackage.haskell.org/package/plugins) could make live programming a reality. But much design work is needed to make it livable (reactive dependency injection and linking; automatic management of threads; switch to fallback plugins for while the one you're editing is broken). This will be pursued in a sirea-plugins package.
 
 

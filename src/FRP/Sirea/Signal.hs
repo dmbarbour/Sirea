@@ -189,7 +189,7 @@ s_mask sa sb =
 -- | Merge two signals by using the left signal when it is active,
 -- otherwise the right signal.
 --    s_merge = s_full_zip (<|>)
--- But is more optimizable than general zips.
+-- But is much more optimizable than general zips.
 s_merge :: Sig a -> Sig a -> Sig a
 s_merge sl sr =
     let sl0 = s_head sl in

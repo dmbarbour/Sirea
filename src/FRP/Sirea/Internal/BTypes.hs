@@ -83,6 +83,17 @@ data B x y where
   -- B_unique :: !UniqueID -> !(B x y) -> B x y
 
 
+-- POSSIBILITY: Add the UniqueID automatically with unsafeLnkB 
+-- (via unsafePerformIO) and for all the BImpl options. 
+--
+-- REASON: performance with dynamic behaviors? especially in case
+-- where we switch between the same two or three dynamic behaviors.
+-- Could leave the last few behaviors installed and cached.
+--
+-- It could work reasonably well in practice. But no pressing need
+-- for it.
+
+
 tcB :: TyCon
 tcB = mkTyCon3 "Sirea" "Behavior" "B"
 

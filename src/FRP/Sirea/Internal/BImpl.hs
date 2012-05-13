@@ -33,7 +33,6 @@ import FRP.Sirea.Signal
 
 import Control.Category
 import Control.Applicative
-import Control.Parallel (pseq)
 import Control.Parallel.Strategies (Eval, runEval, evalList, rseq)
 import Control.Exception (assert)
 import Data.Function (on)
@@ -116,11 +115,8 @@ lnDeepDup (LnkSum x1 y1) xy2 =
     let x = lnDeepDup x1 x2 in
     let y = lnDeepDup y1 y2 in
     LnkSum x y
-lnDeepDup (LnkSig x) rhs =
-    let y = ln_lnkup rhs in
-    let touch = ln_touch x >> ln_touch y in
-    let update su = ln_update x su >> ln_update y su in
-    LnkSig $ LnkUp { ln_touch = touch, ln_update = update } 
+lnDeepDup (LnkSig x) rhs = 
+    LnkSig (ln_append x (ln_lnkup rhs))
            
 -- if inl, can ignore the right bucket
 inlB :: B x (x :|: y)
@@ -232,91 +228,130 @@ buildMerge_i tl tr (LnkSig lu) =
 -- | disjoin will distribute a decision. This will synchronize the
 -- choice signal with the external signal (a special case for which
 -- B_tshift was heavily revised) then apply the split.
-disjoinB :: B (S p a :&: ((S p () :&: x) :|: y) )
-              ( (S p a :&: x) :|: (S p a :&: y) )
+disjoinB :: (SigInP p x)
+         => B (x :&: ((S p () :&: y) :|: z))
+              ((x :&: y) :|: (x :&: z))
 disjoinB = disjSynchB >>> latentOnTime disjSigsB
 
 -- pre-synch for disjoin operation
-disjSynchB :: B (S p a :&: ((S p () :&: x) :|: y) ) 
-                 (S p a :&: ((S p () :&: x) :|: y) )
+disjSynchB :: B (x :&: ((S p () :&: y) :|: z) ) 
+                (x :&: ((S p () :&: y) :|: z) )
 disjSynchB = B_tshift disjSynchTs
-    where disjSynchTs auxy = 
-            let ux  = (lnd_left . lnd_snd) auxy in
-            let a   = (lnd_fst) auxy in
-            let u   = (lnd_fst) ux in
-            let x   = (lnd_snd) ux in
-            let y   = (lnd_right . lnd_snd) auxy in
-            let inl = not (ldt_anyLive y) in
-            let inr = not (ldt_anyLive ux) in
-            if (inl || inr) then auxy else
-            let dta = (lnd_sig) a in
-            let dtu = (lnd_sig) u in
-            let dts = shallowSynch dta dtu in
-            let a' = LnkDUnit dts in
-            let u' = LnkDUnit dts in
-            (a' `LnkDProd` ((u' `LnkDProd` x) `LnkDSum` y))
+    where disjSynchTs xuyz =
+            let x   = (lnd_fst) xuyz in
+            let uyz = (lnd_snd) xuyz in
+            let uy  = (lnd_left) uyz in
+            let u   = (lnd_fst) uy in
+            let y   = (lnd_snd) uy in
+            let z   = (lnd_right) uyz in
+            let inl = not (ldt_anyLive z) in
+            let inr = not (ldt_anyLive uy) in
+            if (inl || inr) then xuyz else
+            -- simplistic synchronize with x and u
+            let xu' = fullSynch (LnkDProd x u) in
+            let x'  = lnd_fst xu' in
+            let u'  = lnd_snd xu' in
+            (x' `LnkDProd` ((u' `LnkDProd` y) `LnkDSum` z))
+
+fullSynch :: LnkD LDT x -> LnkD LDT x
+fullSynch = synchCurr . synchGoal
+    where synchGoal x =
+            let dt = ldt_maxGoal x in
+            flip lnd_fmap x (\ldt -> ldt {ldt_goal = dt })
+          synchCurr x =
+            if (ldt_minCurr x == ldt_maxCurr x) then x else
+            let dt = ldt_maxGoal x in
+            flip lnd_fmap x (\ldt -> ldt { ldt_curr = dt })
 
 -- primary disjoin behavior, includes latent optimization for dead
 -- code on input (i.e. binl, binr)
-disjSigsB :: LnkD LDT (S p a :&: ((S p () :&: x) :|: y))
-          -> B (S p a :&: ((S p () :&: x) :|: y) )
-               ( (S p a :&: x) :|: (S p a :&: y) )
+disjSigsB :: LnkD LDT (x :&: ((S p () :&: y) :|: z))
+          -> B (x :&: ((S p () :&: y) :|: z))
+                      ((x :&: y) :|: (x :&: z))
 disjSigsB tr = mkLnkB disjTr (mkLnkSimp $ buildDisj tr)
-    where disjTr auxy = 
+    where disjTr xuyz = 
             -- restructure data; maintain liveness of x,y. 
-            let ux   = (lnd_left . lnd_snd) auxy in
-            let x    = (lnd_snd) ux in
-            let y    = (lnd_right . lnd_snd) auxy in
-            let dta  = (lnd_sig . lnd_fst) auxy in
-            let aLiv = ldt_live dta in
-            let lLiv = aLiv && ldt_anyLive ux in
-            let rLiv = aLiv && ldt_anyLive y in
-            let l = LnkDUnit $ dta { ldt_live = lLiv } in
-            let r = LnkDUnit $ dta { ldt_live = rLiv } in
-            ((l `LnkDProd` x) `LnkDSum` (r `LnkDProd` y))
+            assert (ldt_valid xuyz) $
+            let x    = (lnd_fst) xuyz in
+            let uy   = (lnd_left . lnd_snd) xuyz in
+            let y    = (lnd_snd) uy in
+            let z    = (lnd_right . lnd_snd) xuyz in
+            let l    = flip lnd_fmap x (andLive (ldt_anyLive uy)) in
+            let r    = flip lnd_fmap x (andLive (ldt_anyLive  z)) in
+            ((l `LnkDProd` y) `LnkDSum` (r `LnkDProd` z))
+          andLive b x = x { ldt_live = (b && (ldt_live x)) }
 
 -- build disjoin behavior, using some input to decide left/right path.
-buildDisj :: LnkD LDT (S p a :&: ((S p () :&: x) :|: y))
-          -> Lnk ((S p a :&: x) :|: (S p a :&: y)) 
-          -> IO (Lnk (S p a :&:  ((S p () :&: x) :|: y)))
-buildDisj tr = 
-    let ux   = (lnd_left . lnd_snd) tr in
-    let y    = (lnd_right . lnd_snd) tr in
-    let inl  = not (ldt_anyLive y) in
-    let inr  = not (ldt_anyLive ux) in
+buildDisj :: LnkD LDT (x :&: ((S p () :&: y) :|: z))
+          -> Lnk ((x :&: y) :|: (x :&: z)) 
+          -> IO (Lnk (x :&: ((S p () :&: y) :|: z)))
+buildDisj tr =
+    assert (ldt_valid tr) $
+    let uy   = (lnd_left  . lnd_snd) tr in
+    let z    = (lnd_right . lnd_snd) tr in
+    let inl  = not (ldt_anyLive z) in
+    let inr  = not (ldt_anyLive uy) in
     if inl then buildDisjInl else
     if inr then buildDisjInr else
+    let ux   = LnkDProd (lnd_fst uy) (lnd_fst tr) in
+    assert (ldt_maxCurr ux == ldt_minCurr ux) $
+    assert (ldt_maxGoal ux == ldt_minGoal ux) $
     buildDisjFull
 
 -- specializations of buildDisj (based on dead inputs; outputs not
 -- accounted for yet).
-buildDisjInl, buildDisjInr, buildDisjFull :: 
-    Lnk ((S p a :&: x) :|: (S p a :&: y)) ->
-    IO (Lnk (S p a :&:  ((S p () :&: x) :|: y)))
+buildDisjInl, buildDisjInr, buildDisjFull 
+    ::     Lnk ((x :&: y) :|: (x :&: z)) 
+    -> IO (Lnk (x :&: ((S p () :&: y) :|: z)))
 
-buildDisjInl lxry = 
-    -- pipe `S p a` directly to l; don't use `S p ()`
-    let l = (ln_fst . ln_left) lxry in
-    let x = (ln_snd . ln_left) lxry in
-    let y = (ln_snd . ln_right) lxry in
-    return (l `LnkProd` ((LnkDead `LnkProd` x) `LnkSum` y))
+buildDisjInl lyrz = 
+    -- pipe x directly to l; don't use `S p ()`
+    let l = (ln_fst . ln_left)  lyrz in
+    let y = (ln_snd . ln_left)  lyrz in
+    let z = (ln_snd . ln_right) lyrz in
+    return (l `LnkProd` ((LnkDead `LnkProd` y) `LnkSum` z))
 
-buildDisjInr lxry = 
-    -- pipe `S p a` directly to r; cannot use `S p ()`
-    let r = (ln_fst . ln_right) lxry in
-    let x = (ln_snd . ln_left) lxry in
-    let y = (ln_snd . ln_right) lxry in
-    return (r `LnkProd` ((LnkDead `LnkProd` x) `LnkSum` y))
+buildDisjInr lyrz = 
+    -- pipe x directly to r; cannot use `S p ()`
+    let y = (ln_snd . ln_left)  lyrz in
+    let r = (ln_fst . ln_right) lyrz in
+    let z = (ln_snd . ln_right) lyrz in
+    return (r `LnkProd` ((LnkDead `LnkProd` y) `LnkSum` z))
 
-buildDisjFull lxry = 
-    let l = (ln_fst . ln_left) lxry in
-    let x = (ln_snd . ln_left) lxry in
-    let r = (ln_fst . ln_right) lxry in
-    let y = (ln_snd . ln_right) lxry in
-    let bLnkDead = ln_dead l && ln_dead r in -- don't need `S p a`
-    let lnkIfDead = LnkDead `LnkProd` ((LnkDead `LnkProd` x) `LnkSum` y) in
+buildDisjFull lyrz = 
+    let l = (ln_fst . ln_left)  lyrz in
+    let y = (ln_snd . ln_left)  lyrz in
+    let r = (ln_fst . ln_right) lyrz in
+    let z = (ln_snd . ln_right) lyrz in
+    let bLnkDead = ln_dead l && ln_dead r in
+    let lnkIfDead = LnkDead `LnkProd` ((LnkDead `LnkProd` y) `LnkSum` z) in
     if bLnkDead then return lnkIfDead else
-    -- else need to perform masking for left, right, or both
+    buildDisjFull_i l r >>= \ (x,u) -> 
+    return (x `LnkProd` ((LnkSig u `LnkProd` y) `LnkSum` z))
+
+buildDisjFull_i :: Lnk x -> Lnk x -> IO (Lnk x, LnkUp ())
+buildDisjFull_i LnkDead LnkDead   = return (LnkDead, ln_zero)
+buildDisjFull_i l@(LnkSig _) r    = buildDisjFull_sig l r
+buildDisjFull_i l r@(LnkSig _)    = buildDisjFull_sig l r
+buildDisjFull_i l@(LnkProd _ _) r = buildDisjFull_prod l r
+buildDisjFull_i l r@(LnkProd _ _) = buildDisjFull_prod l r
+buildDisjFull_i l@(LnkSum _ _) r  = buildDisjFull_sum l r
+buildDisjFull_i l r@(LnkSum _ _)  = buildDisjFull_sum l r
+
+buildDisjFull_prod :: Lnk (x :&: y) -> Lnk (x :&: y) -> IO (Lnk (x :&: y), LnkUp ())
+buildDisjFull_prod l r =
+    buildDisjFull_i (ln_fst l) (ln_fst r) >>= \ (x,ux) ->
+    buildDisjFull_i (ln_snd l) (ln_snd r) >>= \ (y,uy) ->
+    return (LnkProd x y, ln_append ux uy)
+
+buildDisjFull_sum :: Lnk (x :|: y) -> Lnk (x :|: y) -> IO (Lnk (x :|: y), LnkUp ())
+buildDisjFull_sum l r =
+    buildDisjFull_i (ln_left  l) (ln_left  r) >>= \ (x,ux) ->
+    buildDisjFull_i (ln_right l) (ln_right r) >>= \ (y,uy) ->
+    return (LnkSum x y, ln_append ux uy)
+
+buildDisjFull_sig :: Lnk (S p a) -> Lnk (S p a) -> IO (Lnk (S p a), LnkUp ())
+buildDisjFull_sig l r =
     let lul = ln_lnkup l in
     let lur = ln_lnkup r in
     let onTouch = ln_touch lul >> ln_touch lur in
@@ -326,7 +361,7 @@ buildDisjFull lxry =
             ln_update lul sul >> ln_update lur sur
     in
     ln_withSigM onTouch onEmit >>= \ (a,u) ->
-    return (LnkSig a `LnkProd` ((LnkSig u `LnkProd` x) `LnkSum` y))
+    return (LnkSig a, u)
 
 -- maskLeft and maskRight must take the two original signals and
 -- generate the split signals for the disjoin function. Assume 
@@ -337,7 +372,6 @@ disjMaskRight sa su = s_mask sa su'
     where su' = s_full_map inv su
           inv Nothing = Just ()
           inv _       = Nothing
-
 
 -- | apply pure functions in one signal to values in another
 zapB :: B (S p (a -> b) :&: S p a) (S p b)
@@ -459,7 +493,7 @@ buildTouchB' rf lu =
                         else ()
             in
             -- force thunks then forward the update.
-            compute `pseq`
+            compute `seq`
             ln_update lu su
 
 -- force signal up to Just|Nothing (simpl rseq for Maybe).
