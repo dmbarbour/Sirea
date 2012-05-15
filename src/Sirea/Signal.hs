@@ -31,7 +31,7 @@ module Sirea.Signal
  , s_zip, s_full_zip
  , s_mask
  , s_merge
- , s_switch
+ , s_switch, s_switch'
  , s_is_final
  , s_delay, s_peek
  , s_select
@@ -206,6 +206,13 @@ s_merge sl sr =
 s_switch :: Sig a -> T -> Sig a -> Sig a
 s_switch s0 t sf =
     mkSig (s_head s0) (ds_sigup (s_tail s0) t (s_head sf) (s_tail sf))
+
+-- | Switch but with slightly stricter semantics - ensures that the
+-- spine of the signal up to T is evaluated. Intention to simplify
+-- GC of values that are no longer applicable. 
+s_switch' :: Sig a -> T -> Sig a -> Sig a
+s_switch' s0 t sf =
+    mkSig (s_head s0) (ds_sigup' (s_tail s0) t (s_head sf) (s_tail sf))
 
 -- | Test whether a signal is in its final state from a particular
 -- instant. This is useful for garbage collection and optimizations.

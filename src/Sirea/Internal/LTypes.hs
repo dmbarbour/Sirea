@@ -85,10 +85,12 @@ ln_zero = LnkUp
     , ln_update = const $ return ()
     }
 
+-- duplicate a signal. Note that this will touch the second signal
+-- to indicate an update is coming whenever the first is updated.
 ln_append :: LnkUp a -> LnkUp a -> LnkUp a
 ln_append x y =
     let touch = ln_touch x >> ln_touch y in
-    let update su = ln_update x su >> ln_update y su in
+    let update su = ln_touch y >> ln_update x su >> ln_update y su in
     LnkUp { ln_touch = touch, ln_update = update }
 
 

@@ -391,9 +391,9 @@ A major concern with reactive programming in continuous time is *feedback* - whe
 
 In RDP, you cannot directly express a closed loop. (No equivalent to ArrowLoop.) So feedback is impossible for pure RDP behaviors. But feedback is still possible when interacting with external services and state. Consider:
 
-    getState s >>> bfmap fn s >>> writeState s
+    getState >>> bfmap (+1) >>> writeState
 
-In this case, we might be trying to writeState at the same *instant* for which we're reading state, and thus `getState` would be modified by the results of `writeState`, creating a feedback loop through s. 
+In this case, we might be trying to writeState at the same *instant* for which we're reading state, and thus `getState` would be modified by the results of `writeState`, creating a feedback loop through the state. 
 
 Feedback is RDP's equivalent to divergent computation. 
 
@@ -421,7 +421,7 @@ A blackboard allows rich and robust interaction, far more so than procedure call
 
 * no blind wait; easily observe intermediate and incremental status
 * modify request: pause, abort, prioritize; simple job control
-* weak coupling, ambient programming; no direct reference to agent
+* loose coupling, ambient programming; no direct reference to agent
 * open extensibility, plugins; easily introduce new agents to board
 * offline, disruption tolerant; agents available at different times
 * collaborative: agents to split big tasks, combine results

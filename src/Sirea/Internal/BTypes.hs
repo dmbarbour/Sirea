@@ -166,9 +166,6 @@ tr_unit x =
 tr_fwd :: TR (S p1 x1) (S p2 x2)
 tr_fwd = LnkDUnit . lnd_sig
 
-
-
-
 ----------------------------------------------------------
 -- LnkD is a more generic version of LnkW for metadata.
 -- It allows a single value to represent a group. Usefully
@@ -228,10 +225,6 @@ lnd_zip fn a12 (LnkDProd b1 b2) =
     let c1 = lnd_zip fn (lnd_fst a12) b1 in
     let c2 = lnd_zip fn (lnd_snd a12) b2 in
     LnkDProd c1 c2
-
-
-
-
 
 
 

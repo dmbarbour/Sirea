@@ -22,6 +22,7 @@ module Sirea.Internal.BImpl
     , unsafeEqShiftB
     , unsafeFullMapB
     , keepAliveB
+    , phaseUpdateB
     ) where
 
 import Prelude hiding (id,(.))
@@ -358,6 +359,7 @@ buildDisjFull_sig l r =
     let onEmit sm =
             let sul = sm_emit disjMaskLeft sm in
             let sur = sm_emit disjMaskRight sm in
+            ln_touch lur >>
             ln_update lul sul >> ln_update lur sur
     in
     ln_withSigM onTouch onEmit >>= \ (a,u) ->
@@ -402,8 +404,8 @@ splitB = mkLnkB trSplit $ mkLnkPure lnkSplit
             let update su = 
                     let sul = (su_fmap (s_adjn . s_full_map takeLeft)) su in
                     let sur = (su_fmap (s_adjn . s_full_map takeRight)) su in
-                    ln_update lul sul >>
-                    ln_update lur sur
+                    ln_touch lur >>
+                    ln_update lul sul >> ln_update lur sur
             in
             let lu = LnkUp { ln_touch = touch, ln_update = update } in
             LnkSig lu
@@ -581,7 +583,8 @@ buildTshift t0 tf (LnkSig lu) =
     assert (dtDiff >= 0) $
     if (0 == dtDiff) then LnkSig lu else
     LnkSig (ln_sumap (su_delay dtDiff) lu)
-    
+
+
 
 -- | eqshiftB tries to push updates a bit into the future if they
 -- would otherwise be redundant, with a given limit for how far into
@@ -644,5 +647,63 @@ keepAliveB  = mkLnkB id $ mkLnkPure lnkMatchLiveness
             let x = (LnkSig . ln_lnkup . ln_fst) xy in
             let y = ln_snd xy in
             LnkProd x y
+
+
+-- | phaseUpdateB 
+--
+-- when a partition is receiving batch updates, it receives multiple
+-- updates from multiple in-flight batches. phaseUpdateB combines
+-- these into one big update. Further, most often many signals will
+-- be updated at once. Systematic use of phaseUpdateB can make this
+-- efficient by using the ln_touch system for every updated signal
+-- before processing any of them. 
+--
+-- The (IO () -> IO ()) operation is to enqueue the phase task. It
+-- should be specific to the partition. It is assumed that updates
+-- and the phase queue are handled in the same thread.
+phaseUpdateB :: PhaseQ -> B (S p x) (S p x)
+phaseUpdateB pq = mkLnkB id $ mkLnkSimp lnPhase
+    where lnPhase LnkDead = return LnkDead
+          lnPhase (LnkSig lu) =
+            newIORef (suZero,False) >>= \ rfSu ->
+            let lu' = makePhaseLU rfSu pq lu in 
+            return (LnkSig lu')
+
+type PhaseQ = IO () -> IO () -- receive a phase operation.
+
+makePhaseLU :: IORef (SigUp a,Bool) -> PhaseQ -> LnkUp a -> LnkUp a
+makePhaseLU rf pq lu = LnkUp { ln_touch = touch, ln_update = update }
+    where touch = return ()
+          update su =
+            readIORef rf >>= \ (su0,hasUpdate) ->
+            writeIORef rf (appendSigUp su0 su, True) >>
+            if hasUpdate then return () else
+            ln_touch lu >> pq deliver
+          deliver = -- called later, by PhaseQ
+            readIORef rf >>= \ (su,hasUpdate) ->
+            assert hasUpdate $
+            writeIORef rf (suZero,False) >>
+            ln_update lu su
+
+suZero :: SigUp a
+suZero = SigUp { su_state = Nothing, su_stable = Nothing }
+
+appendSigUp :: SigUp a -> SigUp a -> SigUp a
+appendSigUp su0 su = SigUp { su_state = state', su_stable = stable' }
+    where stable' = su_stable su  -- assume monotonic stability
+          state' = (calcS <$> su_state su0 <*> su_state su)
+                   <|> su_state su  -- su is first state update 
+                   <|> su_state su0 -- su is a stability update
+          calcS (s0,t0) (sf,tf) =
+            if (t0 >= tf) then (sf,tf) else
+            (s_switch' s0 tf sf, t0)
+
+            
+
+
+
+
+
+
 
 
