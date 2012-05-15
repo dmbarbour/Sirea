@@ -9,7 +9,7 @@
 -- treatment at compilation. 
 --
 -- Exposed behaviors for users will be re-exported elsewhere.
-module FRP.Sirea.Internal.BImpl
+module Sirea.Internal.BImpl
     ( fwdB
     , fstB, firstB, swapB, assoclpB, dupB, zapB -- BProd 
     , inlB, leftB, mirrorB, assoclsB, mergeB, splitB -- BSum
@@ -25,11 +25,11 @@ module FRP.Sirea.Internal.BImpl
     ) where
 
 import Prelude hiding (id,(.))
-import FRP.Sirea.Internal.STypes
-import FRP.Sirea.Internal.LTypes
-import FRP.Sirea.Internal.BTypes
-import FRP.Sirea.Time
-import FRP.Sirea.Signal
+import Sirea.Internal.STypes
+import Sirea.Internal.LTypes
+import Sirea.Internal.BTypes
+import Sirea.Time
+import Sirea.Signal
 
 import Control.Category
 import Control.Applicative

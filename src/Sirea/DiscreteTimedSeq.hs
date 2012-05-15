@@ -14,7 +14,7 @@
 -- exposed unnecessarily to `updates` that don't actually change
 -- anything, and thus reduce redundant computation. However, action
 -- to explicitly filter values is necessary (ds_adjeqf)
-module FRP.Sirea.DiscreteTimedSeq
+module Sirea.DiscreteTimedSeq
     ( DStep(..)
     , DSeq(..)
     , ds_done

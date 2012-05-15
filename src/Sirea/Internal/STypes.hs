@@ -1,7 +1,7 @@
 {-# LANGUAGE TypeOperators, EmptyDataDecls,   
     MultiParamTypeClasses, FlexibleInstances #-}
 
-module FRP.Sirea.Internal.STypes
+module Sirea.Internal.STypes
     ( (:&:)
     , (:|:)
     , S

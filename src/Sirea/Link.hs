@@ -1,6 +1,6 @@
 {-# LANGUAGE GADTs, TypeOperators #-}
 
-module FRP.Sirea.Link 
+module Sirea.Link 
     ( unsafeLnkB
     -- the following are re-exported from LTypes
     , MkLnk(..), LnkUp(..), Lnk, LnkW(..), SigUp(..)
@@ -9,9 +9,9 @@ module FRP.Sirea.Link
     , su_apply
     ) where
 
-import FRP.Sirea.Internal.LTypes
-import FRP.Sirea.Internal.BTypes
-import FRP.Sirea.Behavior
+import Sirea.Internal.LTypes
+import Sirea.Internal.BTypes
+import Sirea.Behavior
 
 import Control.Exception (assert)
 

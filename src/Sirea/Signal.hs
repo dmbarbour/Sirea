@@ -20,7 +20,7 @@
 -- adapters, FFI, and similar will need to work with signals. Sirea
 -- users will sometimes be writing those adapters.
 --
-module FRP.Sirea.Signal 
+module Sirea.Signal 
  ( Sig
  , listToSig, sigToList
  , s_sample, s_sample_d, s_trim
@@ -40,8 +40,8 @@ module FRP.Sirea.Signal
  -- instances: functor, applicative, alternative
  ) where
 
-import FRP.Sirea.Time
-import FRP.Sirea.DiscreteTimedSeq
+import Sirea.Time
+import Sirea.DiscreteTimedSeq
 import Control.Exception (assert)
 import Control.Applicative
 

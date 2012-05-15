@@ -65,7 +65,7 @@
 --   FRP.Sirea.Bstack         
 --                            
 {-# LANGUAGE TypeOperators #-} 
-module FRP.Sirea.Bdeep 
+module Sirea.Bdeep 
     ( bxf, bxs, bxff, bxfs, bxsf, bxss
     , bxfff, bxffs, bxfsf, bxfss, bxsff, bxsfs
     , bxssf, bxsss, bxffff, bxfffs, bxffsf, bxffss
@@ -135,7 +135,7 @@ module FRP.Sirea.Bdeep
     , bonrrrf, bonrrrs, bonrrrl, bonrrrr
     ) where 
 import Control.Category ((<<<))
-import FRP.Sirea.Behavior 
+import Sirea.Behavior 
 
 
 bxf :: (BProd b) => b (e  :&: s0) e

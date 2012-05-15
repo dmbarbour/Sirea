@@ -1,5 +1,5 @@
 
-module FRP.Sirea.Time
+module Sirea.Time
   (T
  ,tmDay,tmNanos
  ,mkTime,timeFromDays

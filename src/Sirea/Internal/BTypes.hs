@@ -1,7 +1,7 @@
 {-# LANGUAGE GADTs, TypeOperators, EmptyDataDecls #-}
 
 -- Behavior types. 
-module FRP.Sirea.Internal.BTypes
+module Sirea.Internal.BTypes
     ( B(..)
     , BC0(..)
 
@@ -22,9 +22,9 @@ module FRP.Sirea.Internal.BTypes
     
     ) where
 
-import FRP.Sirea.Internal.STypes (S,(:&:),(:|:))
-import FRP.Sirea.Internal.LTypes (MkLnk)
-import FRP.Sirea.Time (DT)
+import Sirea.Internal.STypes (S,(:&:),(:|:))
+import Sirea.Internal.LTypes (MkLnk)
+import Sirea.Time (DT)
 import Control.Exception (assert)
 
 import Data.Typeable -- B is typeable

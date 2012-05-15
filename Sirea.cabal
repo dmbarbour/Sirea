@@ -2,7 +2,7 @@ Name: Sirea
 Version: 0.1
 Cabal-Version: >= 1.2
 Synopsis: Simply Reactive! Declarative orchestration in Haskell with RDP.
-Category: Reactive
+Category: Reactivity
 Description:
   Reactive Demand Programming is an effectful, declarative paradigm
   for continuous orchestration of open systems. Sirea implements RDP
@@ -52,13 +52,13 @@ Library
     ,time
 
   Exposed-Modules:
-    FRP.Sirea.Behavior
-    FRP.Sirea.Signal
-    FRP.Sirea.Link
-    FRP.Sirea.Partition
+    Sirea.Behavior
+    Sirea.Signal
+    Sirea.Link
+    Sirea.Partition
 
-    FRP.Sirea.Bdeep
-    FRP.Sirea.Time
+    Sirea.Bdeep
+    Sirea.Time
 
   ghc-options: -threaded -Wall -fno-warn-orphans 
 

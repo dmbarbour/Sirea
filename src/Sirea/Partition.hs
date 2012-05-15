@@ -106,14 +106,14 @@
 -- worker thread to perform the blocking IO.) Sirea threads should
 -- use only the RDP mechanisms to communicate.
 --
-module FRP.Sirea.Partition 
+module Sirea.Partition 
     ( Stepper(..)
     , Stopper(..)
     , Partition(..)
     , BPartition(..)
     ) where
 
-import FRP.Sirea.Behavior
+import Sirea.Behavior
 
 import Data.Typeable
 import Data.IORef

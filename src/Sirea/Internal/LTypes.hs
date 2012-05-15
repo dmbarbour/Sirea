@@ -2,7 +2,7 @@
 
 -- Types for FRP.Sirea.Link (here to avoid cyclic dependencies)
 -- plus related utilities
-module FRP.Sirea.Internal.LTypes 
+module Sirea.Internal.LTypes 
     ( MkLnk(..), Lnk, LnkW(..), LnkUp(..)
     , ln_left, ln_right, ln_fst, ln_snd, ln_dead
     , ln_zero, ln_lnkup, ln_append, ln_lumap, ln_sumap
@@ -13,9 +13,9 @@ module FRP.Sirea.Internal.LTypes
     , ln_withSigM
     ) where
 
-import FRP.Sirea.Internal.STypes
-import FRP.Sirea.Time
-import FRP.Sirea.Signal
+import Sirea.Internal.STypes
+import Sirea.Time
+import Sirea.Signal
 import Control.Exception (assert)
 import Control.Monad (unless)
 import Data.IORef

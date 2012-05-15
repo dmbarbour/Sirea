@@ -11,9 +11,9 @@
 -- general, RDP behaviors may be effectful. 
 --
 -- Several behaviors are provided in dedicated modules:
---   see FRP.Sirea.Link for bUnsafeLnk
---   see FRP.Sirea.Partition for bcross, bscope
-module FRP.Sirea.Behavior  
+--   see Sirea.Link for bUnsafeLnk
+--   see Sirea.Partition for bcross, bscope
+module Sirea.Behavior  
     ( (:&:), (:|:), S, B, SigInP
     , (>>>) -- from Control.Category
     , bfwd
@@ -36,16 +36,16 @@ import Control.Category
 import Control.Parallel (pseq, par)
 import Control.Parallel.Strategies (Eval, runEval)
 
-import FRP.Sirea.Internal.STypes ((:&:),(:|:),S,SigInP)
-import FRP.Sirea.Internal.BTypes (B)
-import FRP.Sirea.Internal.BImpl 
+import Sirea.Internal.STypes ((:&:),(:|:),S,SigInP)
+import Sirea.Internal.BTypes (B)
+import Sirea.Internal.BImpl 
     ( fmapB, constB, touchB, stratB, adjeqfB
     , firstB, dupB, fstB, assoclpB, swapB
     , leftB, mergeB, inlB, assoclsB, mirrorB
     , disjoinB, zapB, splitB
     , delayB, synchB, peekB
     )
-import FRP.Sirea.Time (DT)
+import Sirea.Time (DT)
 
 infixr 3 ***
 infixr 3 &&&
