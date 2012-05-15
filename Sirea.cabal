@@ -60,6 +60,6 @@ Library
     Sirea.Bdeep
     Sirea.Time
 
-  ghc-options: -threaded -Wall -fno-warn-orphans 
+  ghc-options: -threaded -Wall 
 
 

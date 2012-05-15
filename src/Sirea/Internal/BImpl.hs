@@ -15,7 +15,7 @@ module Sirea.Internal.BImpl
     , inlB, leftB, mirrorB, assoclsB, mergeB, splitB -- BSum
     , disjoinB
     , fmapB, constB, touchB, stratB, adjeqfB -- BFmap
-    , delayB, synchB, peekB, tshiftB, forceDelayB -- temporal
+    , delayB, synchB, peekB, forceDelayB -- temporal
 
     -- miscellaneous
     , unsafeAddStabilityB 
@@ -122,15 +122,7 @@ lnDeepDup (LnkSig x) rhs =
 -- if inl, can ignore the right bucket
 inlB :: B x (x :|: y)
 inlB = mkLnkB trinl $ mkLnkPure ln_left
-    where trinl tr = LnkDSum tr (tr_dead tr)
-
--- the `time` of the RHS signal is dead when we're `binl`
-tr_dead :: LnkD LDT x -> LnkD LDT y
-tr_dead x = LnkDUnit ldtDead
-    where ldtDead = LDT { ldt_curr = ldt_maxCurr x
-                        , ldt_goal = ldt_maxGoal x
-                        , ldt_live = False 
-                        }
+    where trinl tr = LnkDSum tr (trDead tr)
 
 -- simple rearrangement
 mirrorB :: B (x :|: y) (y :|: x)
@@ -560,30 +552,6 @@ forceDelayB :: B x x
 forceDelayB = B_tshift doBar
     where doBar = lnd_fmap $ \ ldt -> ldt { ldt_curr = (ldt_goal ldt) }
 
--- | tshiftB turns a difference of `tshift` values into a MkLnk behavior.
--- This is used by the compiler to apply delays. 
-tshiftB :: LnkD LDT x -> LnkD LDT x -> B x x
-tshiftB t0 tf = mkLnkB id (mkLnkPure $ buildTshift t0 tf)
-
--- buildTshift will apply delays based on before/after LDT values
-buildTshift :: LnkD LDT x -> LnkD LDT x -> Lnk x -> Lnk x
-buildTshift _ _ LnkDead = LnkDead
-buildTshift t0 tf (LnkProd x y) =
-    let opx = buildTshift (lnd_fst t0) (lnd_fst tf) x in
-    let opy = buildTshift (lnd_snd t0) (lnd_snd tf) y in
-    LnkProd opx opy
-buildTshift t0 tf (LnkSum x y) =
-    let opx = buildTshift (lnd_left  t0) (lnd_left  tf) x in
-    let opy = buildTshift (lnd_right t0) (lnd_right tf) y in
-    LnkSum opx opy
-buildTshift t0 tf (LnkSig lu) = 
-    let dt0 = lnd_sig t0 in
-    let dtf = lnd_sig tf in
-    let dtDiff = (ldt_curr dtf) - (ldt_curr dt0) in
-    assert (dtDiff >= 0) $
-    if (0 == dtDiff) then LnkSig lu else
-    LnkSig (ln_sumap (su_delay dtDiff) lu)
-
 
 
 -- | eqshiftB tries to push updates a bit into the future if they
@@ -700,7 +668,12 @@ appendSigUp su0 su = SigUp { su_state = state', su_stable = stable' }
 
             
 
-
+-- maybe a behavior to report / track liveness?
+--  idea is to report when a signal is dead forever
+--  relative to stability or update time.
+--  to better support graceful shutdown of Sirea behaviors.
+-- but might not be worth it... perhaps better and easier
+-- to simply wait a few seconds at shutdown
 
 
 

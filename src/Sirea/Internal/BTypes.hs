@@ -3,11 +3,10 @@
 -- Behavior types. 
 module Sirea.Internal.BTypes
     ( B(..)
-    , BC0(..)
 
     -- support for time manipulations
     , TR, TS, LDT(..)
-    , tr_unit, tr_fwd
+    , tr_unit, tr_fwd, tr_dead
     , LnkD(..)
     , lnd_fst -- :: LnkD d (x :&: y) -> LnkD d x
     , lnd_snd -- :: LnkD d (x :&: y) -> LnkD d y
@@ -19,7 +18,7 @@ module Sirea.Internal.BTypes
     , ldt_maxCurr, ldt_minCurr
     , ldt_anyLive, ldt_valid
     , latentOnTime
-    
+   
     ) where
 
 import Sirea.Internal.STypes (S,(:&:),(:|:))
@@ -78,7 +77,7 @@ data B x y where
   -- bmerge needed some extra info to perform critical
   -- dead code elimination. Basically, it needs compile
   -- data from the forward pass.
-  B_latent  :: !(BC0 x -> B x y) -> B x y
+  B_latent  :: !(LnkD LDT x -> B x y) -> B x y
 
   -- B_unique :: !UniqueID -> !(B x y) -> B x y
 
@@ -100,19 +99,10 @@ tcB = mkTyCon3 "Sirea" "Behavior" "B"
 instance Typeable2 B where
     typeOf2 _ = mkTyConApp tcB []
 
----------------------------------------------------------
--- B is designed for a simple two-pass compilation model.
--- In the first pass, delays are aggregated and latent
--- behaviors are completed; this occurs from start to end.
--- The second pass is end to start, and actually constructs
--- the elements. Dead code elimination happens in both 
--- directions.
-data BC0 x = BC0 
-    { bc_time :: LnkD LDT x
-    }
 
+-- | delay computation of B x y until timing info is available
 latentOnTime :: (LnkD LDT x -> B x y) -> B x y
-latentOnTime fn = B_latent (fn . bc_time)
+latentOnTime fn = B_latent fn
 
 
 ---------------------------------------------------------
@@ -165,6 +155,14 @@ tr_unit x =
 
 tr_fwd :: TR (S p1 x1) (S p2 x2)
 tr_fwd = LnkDUnit . lnd_sig
+
+tr_dead :: LnkD LDT x -> LnkD LDT y
+tr_dead x = LnkDUnit ldtDead
+    where ldtDead = LDT { ldt_curr = ldt_maxCurr x
+                        , ldt_goal = ldt_maxGoal x
+                        , ldt_live = False 
+                        }
+
 
 ----------------------------------------------------------
 -- LnkD is a more generic version of LnkW for metadata.
