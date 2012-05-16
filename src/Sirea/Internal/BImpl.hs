@@ -122,7 +122,7 @@ lnDeepDup (LnkSig x) rhs =
 -- if inl, can ignore the right bucket
 inlB :: B x (x :|: y)
 inlB = mkLnkB trinl $ mkLnkPure ln_left
-    where trinl tr = LnkDSum tr (trDead tr)
+    where trinl tr = LnkDSum tr (tr_dead tr)
 
 -- simple rearrangement
 mirrorB :: B (x :|: y) (y :|: x)
