@@ -111,6 +111,7 @@ module Sirea.Partition
     , Stopper(..)
     , Partition(..)
     , BPartition(..)
+    , Pt
     ) where
 
 import Sirea.Behavior
@@ -238,6 +239,25 @@ defaultNewPartitionThread stepper =
     in 
     forkIO loop >>
     return (makeStopper rfStop)   
+
+
+-- () is the main partition. It doesn't actually create a thread.
+instance Partition () where
+    newPartitionThread = error "cannot create the main thread!"
+
+
+-- | Pt is simply a default class of partitions:
+--     `Pt x` is a Partition if x is Typeable.
+--     default implementation - Sirea forever loops.
+data Pt x
+
+tyConPt :: TyCon
+tyConPt = mkTyCon3 "Sirea" "Partition" "Pt"
+
+instance Typeable1 Pt where
+    typeOf1 _ = mkTyConApp tyConPt []
+
+instance (Typeable x) => Partition (Pt x)
 
 
 {- TODO:

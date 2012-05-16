@@ -33,6 +33,9 @@ Here are some features I aim to have by version 1.0:
 
 * _Extensible and Live Programming._ Sirea (via separate library, `sirea-plugin`) provides a runtime plugin framework. Plugins primarily provide service modules. Service modules can fulfill dependencies for _declarative linking_. Plugins may also provide application behavior modules, allowing multiple _main_ behaviors to run concurrently and interact through shared services. Plugins can be recompiled on the fly and hot-swapped, ensuring application behavior is consistent with code in the editor. Live programming with plugins provides a beautiful alternative to REPL loops, and also a viable route for live DSL programming (by live compilation to a Sirea plugin). Sirea as an application platform can run as a thin wrapper for the live plugin programming framework.
 
+Examples
+--------
+
 
 Reactive Demand Programming (in Sirea)
 ======================================
@@ -57,30 +60,37 @@ Here `Maybe a` represents activity of the signal. The signal is `Nothing` while 
 
 This is very generic. It allows me to represent continuous-varying values such as the position of a thrown baseball over time (including interpolation). It's actually a bit too generic, since it also lets me represent _semantic garbage_ such as instantaneous, discontinuous values. 
 
-Unfortunately, while continuous-varying signals are expressive, they are also expensive, and a lot of algorithms on them are non-deterministic (e.g. Euler method for integrals). 
+Unfortunately, while continuous varying signals are expressive, they are also difficult to work with. It takes symbolic analysis to perform precise computations on curved values. A lot of algorithms are non-deterministic or arbitrary on general signals (e.g. Euler method for integrals).
 
-Sirea, being _simply_ reactive, sticks with discrete-varying signals. The actual signal model in Sirea is conceptually closer to:
+To avoid this complication in the normal case, Sirea favors discrete varying signals as the primary signal model. A well behaved discrete varying signal will only change at specific times, and will hold each value for a rational period of time. 
+
+The representation in Sirea looks close to:
 
     type Sig a = (Maybe a, \[(T,Maybe a)\]) -- not actually used
 
-Here the first value represents the signal state for all history (often `Nothing`), and the list describes (in monotonic time order) a sequence of discrete updates. This model is much less expressive, but also much more efficient. But it is still problematic. In practice, signals will contain redundant values (e.g. we map lossy functions to them, like `a -> Bool`), and we will want to filter those values to avoid redundant computation down the line:
+Here the `fst` value represents the initial signal state for all history (which always starts as `Nothing` for a new RDP behavior, to indicate inactivity), and the list describes (in monotonic time order) a sequence of discrete updates. 
 
-    -- pre filter
-    (Just True, \[(t0, Just True), (t1, Just True), (t2, Just False), ...\])
-    -- post filter
-    (Just True, \[(t2, Just False), ...\])
+This model is much simpler to work with.
 
-But filtering lists is problematic. It can diverge, if there are no False values. Even if I'm guaranteed a False value, the amount of computation to find it is unknown and thus would violate real-time computation properties. The actual Sirea implementation of concrete signal includes structure to support incremental processing of signals, support for filtering included.
+But it is still problematic. Signals might contain redundant updates, i.e.:
 
-### Continuous-Varying Signals?
+    \[(T0,Just True), (T1, Just True), (T3, Just True)\]
 
-Continuous-varying signals are valuable for modeling physics, collision detection, and smooth animations (with temporal anti-aliasing and motion blur). Sirea rejects first-class support for continuous-varying signals because they're too difficult to work with in general. But very effective second-class support is feasible.
+In practice, we'd want to filter these redundant updates to avoid unnecessary recomputing of signals. But filtering a list for the next non-True value could diverge (e.g. if the signal is always True) or just take a long time. The Sirea implementation uses an alternative structure to support filtering, requiring an explicit time query to guide the amount of computation performed.
 
-We could model a continuous signal as: `Sig (T -> a)`. But this is still excessively expressive - we actually only desire *piecewise continuous* signals, i.e. smooth and curvy lines, with potential jumps at discrete steps. Further, we will need *symbolic analysis* for efficient processing, for precise zero-crossing and integrals, and for serialization. Zero crossing is important for collision detection, integrals for continuous state models, and serialization (e.g. send to GPU for tweening, or to remote browser for interpolation). So follow a pattern developed years ago by Conal Elliott for [Compiling Embedded Languages](http://conal.net/papers/jfp-saig/): rather than `T -> a`, use some variation of `Expr T -> Expr a`. 
+### Continuous Varying Signals
 
-Once the signals are in place, RDP will require a few dedicated behaviors to split at zero-crossings or support continuous state. Further, specialized variations for `bdelay` and `bpeek` would be necessary to account for the time shift on the contents - i.e. if we delay the outer discrete-varying layer by 100ms, we also need to delay the internal continuous-varying layer by 100ms.
+Continuous varying signals are valuable for modeling motion, sound, animations, charting, collision detection, physics. 
 
-Sirea should eventually provide a simple variation on continuous signals, but it's very low priority.
+Sirea's signal type `Sig a` is discrete varying. Sirea won't provide *first-class* support for continuous varying signals, but shall provide effective second-class support. The idea is to have *piecewise continuous* signals - the discrete updates providing boundaries between the pieces. This is similar to `Sig (T -> a)`, except that opaque Haskell functions would still cause too many problems. 
+
+Sirea requires a *transparent, symbolic* model for continuous signals, leveraging GADTs. Expressiveness is reduced compared to generic Haskell functions (simple polynomials, vectors, matrices). But the resulting continuous signals model should be expressive enough for a majority of physics and animation purposes, especially with a *piecewise continuous* aspect to provide corrections. And it will certainly be sufficient to approximate a model from sensor inputs within an error boundary.
+
+By sacrificing expressiveness, Sirea's continuous signals can support symbolic analysis - integrals, derivatives, zero-crossings - and potentially support serialization, distribution, compilation to CG or OpenCL, etc.. 
+
+*NOTE:* A minor difficulty is that developers need to be careful about delay or peek with piecewise continuous signals: every time the `Sig (T -> a)` is delayed, the `T -> a` element must also be delayed or the two fall out of synch. The necessary discipline can be aided by a behavior transformer.
+
+Support for continuous signals doesn't exist yet, but will be a medium-priority (since it's so valuable for user-facing apps that might show off the power of RDP and Sirea). 
 
 ### Updating Signals
 
