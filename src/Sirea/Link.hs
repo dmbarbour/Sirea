@@ -73,3 +73,7 @@ unsafeLnkB ln = bsynch >>> B_tshift xBarrier >>> B_mkLnk tr_unit ln
     -- xBarrier actually applies the updates (sets ldt_curr) if necessary.
 
 
+-- Could I benefit from a lazy variation of unsafeLnkB?
+-- idea is: link is active only if its output is necessary or its
+
+

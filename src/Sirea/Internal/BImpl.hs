@@ -21,7 +21,6 @@ module Sirea.Internal.BImpl
     , unsafeAddStabilityB 
     , unsafeEqShiftB
     , unsafeFullMapB
-    , keepAliveB
     , phaseUpdateB
     ) where
 
@@ -603,19 +602,6 @@ eqShift eq as bs tLower tUpper =
           activeWhileEq Nothing Nothing = Just ()
           activeWhileEq _ _ = Nothing
           sampleActive = (/= Nothing) . snd
-
--- | keepAliveB will keep the first element alive so long as other
--- parts of the signal are alive. This would only be useful for 
--- performance debugging, and should probably be performed just
--- after `bfirst btouch`. 
-keepAliveB  :: B (S p x :&: y) (S p x :&: y)
-keepAliveB  = mkLnkB id $ mkLnkPure lnkMatchLiveness
-    where lnkMatchLiveness xy =
-            if (ln_dead xy) then LnkDead else   
-            let x = (LnkSig . ln_lnkup . ln_fst) xy in
-            let y = ln_snd xy in
-            LnkProd x y
-
 
 -- | phaseUpdateB 
 --
