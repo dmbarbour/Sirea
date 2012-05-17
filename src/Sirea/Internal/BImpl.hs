@@ -22,6 +22,7 @@ module Sirea.Internal.BImpl
     , unsafeEqShiftB
     , unsafeFullMapB
     , phaseUpdateB
+    , undeadB, keepAliveB
     ) where
 
 import Prelude hiding (id,(.))
@@ -652,7 +653,25 @@ appendSigUp su0 su = SigUp { su_state = state', su_stable = stable' }
             if (t0 >= tf) then (sf,tf) else
             (s_switch' s0 tf sf, t0)
 
-            
+
+
+
+-- | keepAliveB will keep the first element alive so long as other
+-- parts of the signal are alive. This would only be useful for 
+-- performance debugging, and should probably be performed just
+-- after `bfirst btouch`. (used by LinkUnsafeIO)
+keepAliveB :: B (S p x :&: y) (S p x :&: y)
+keepAliveB = mkLnkB id $ mkLnkPure lnkMatchLiveness
+    where lnkMatchLiveness xy =
+            if (ln_dead xy) then LnkDead else   
+            let x = (LnkSig . ln_lnkup . ln_fst) xy in
+            let y = ln_snd xy in
+            LnkProd x y
+
+-- | undeadB will keep a signal alive no matter what. Like undead in
+-- any horror film, undeadB will infect everything it consumes...
+undeadB :: B (S p x) (S p x)
+undeadB = mkLnkB id $ mkLnkPure (LnkSig . ln_lnkup)
 
 -- maybe a behavior to report / track liveness?
 --  idea is to report when a signal is dead forever
