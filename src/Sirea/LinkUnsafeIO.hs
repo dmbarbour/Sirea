@@ -57,12 +57,12 @@ dtFinal = 3.0 -- seconds
 unsafeOnUpdateB :: (Eq a) => (T -> Maybe a -> IO ()) -> B (S p a) (S p a)
 unsafeOnUpdateB op = unsafeOnUpdateBL op >>> undeadB
 
--- | unsafeOnUpdateBL - a very "lazy" variation of unsafeOnUpdateB.
+-- | unsafeOnUpdateBL - a very lazy variation of unsafeOnUpdateB.
 -- This variation allows dead-code elimination of the behavior when
--- the tapped signal is not used later in the pipeline. 
+-- the tapped signal is not used later in the pipeline.
 --
--- This makes unsafeOnUpdateBL suitable for `tapping` a signal you
--- will need for other reasons.
+-- Only suitable for signals you'll need for other reasons.
+--
 unsafeOnUpdateBL :: (Eq a) => (T -> Maybe a -> IO ()) -> B (S p a) (S p a)
 unsafeOnUpdateBL op = unsafeLnkB blLnk
     where blLnk = MkLnk { ln_build = build
@@ -111,16 +111,15 @@ runToStability rfSig rfA op su =
             mapM_ action lsigs
 
 -- | unsafeOnUpdateBLN - perform IO effects if any of many signals
--- are used later in the pipeline. A Goldilocks solution.
+-- are used later in the pipeline. A Goldilocks solution:
 --      
---      unsafeOnUpdateB - too strict!
+--      unsafeOnUpdateB - too eager!
 --      unsafeOnUpdateBL - too lazy!
 --      unsafeOnUpdateBLN - just right.
 --
--- Often we'll want to "tap" a signal in our environment that isn't
--- being used later on, but do so only if some other volume of code 
--- will execute. Thus, we need a middle ground between the prior two
--- behaviors.
+-- This allows tapping a signal for debugging that would otherwise
+-- be dropped by the behavior, but allows dead code elimination to
+-- remove the behavior - based on whether nearby signals are dead.
 --
 -- In addition to the processed signal, BLN forwards an arbitrary 
 -- complex signal without processing it (not even synchronizing it)
