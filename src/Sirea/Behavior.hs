@@ -14,7 +14,7 @@
 --   see Sirea.Link for bUnsafeLnk
 --   see Sirea.Partition for bcross, bscope
 module Sirea.Behavior  
-    ( (:&:), (:|:), S, B, SigInP
+    ( (:&:), (:|:), S, SigInP, B
     , (>>>) -- from Control.Category
     , bfwd
     , BFmap(..), bforce, bspark, bstratf

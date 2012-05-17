@@ -109,6 +109,7 @@
 module Sirea.Partition 
     ( Stepper(..)
     , Stopper(..)
+    , PCX (..)
     , Partition(..)
     , BPartition(..)
     , Pt
@@ -160,10 +161,14 @@ data Stepper = Stepper
 -- inactive. However, these operations tell a thread to release any
 -- resources, to perform any final commits for persistence, etc. and
 -- to stop whether or not the signal is still active.
+--
+-- Note that you can set stopper events before running the stopper.
+-- If activity halts for any reason, the stopper events will fire.
 data Stopper = Stopper
     { runStopper      :: IO () -- ^ asynchronous stop
     , addStopperEvent :: IO () -> IO () -- ^ notify when stopped
     }
+
 
 -- | Partition p - indicates a toplevel partition type, and also 
 -- can override the default partition thread constructor.
@@ -181,18 +186,20 @@ class (Typeable p) => Partition p where
     -- creates a thread with forkIO that will simply run RDP events
     -- until stopped. 
     -- 
-    -- The first parameter should be ignored; it just selects the 
-    -- typeclass, and is generally undefined.
-    newPartitionThread :: p -> Stepper -> IO Stopper
-    newPartitionThread _ = defaultNewPartitionThread
+    -- The PCX parameter provides an alternative to global state for
+    -- connecting resources to the partitions that control them. The
+    -- PCX 
+    --   * create resources when the partition is created.
+    --   * access resources created by other behaviors.
+    newPartition :: PCX p -> Stepper -> IO Stopper
+    newPartition _ = defaultNewPartitionThread
 
--- | partition crossing behavior.
--- 
--- If the partition threads do not already exist, they will be
--- created when the bcross behavior is first used. 
+-- | partition crossing behavior. 
+--
+-- This particular interface would rely on the type `b` to carry the
+-- PCX elements around. 
 class BPartition b where
-    bcross :: (Partition p, Partition p')
-           => b (S p x) (S p' x)
+    bcross :: ( Partition p, Partition p') => b (S p x) (S p' x)
 
 -------------------------------------------------
 -- Implementing the default partition behavior --
