@@ -14,6 +14,7 @@ module Sirea.Internal.BTypes
     , lnd_right -- :: LnkD d (x :|: y) -> LnkD d y
     , lnd_sig -- :: LnkD d (S p x) -> d
     , lnd_fmap, lnd_aggr, lnd_zip
+    , ldt_zero
     , ldt_maxGoal, ldt_minGoal
     , ldt_maxCurr, ldt_minCurr
     , ldt_anyLive, ldt_valid
@@ -120,6 +121,14 @@ data LDT = LDT
     { ldt_curr :: !DT   -- actual delay from start of behavior
     , ldt_goal :: !DT   -- aggregated but unapplied logical delay
     , ldt_live :: !Bool -- is this a live branch (not binl or binr?)
+    }
+
+-- ldt_zero: an LDT suitable for starting a compilation.
+ldt_zero :: LDT
+ldt_zero = LDT 
+    { ldt_curr = 0
+    , ldt_goal = 0
+    , ldt_live = True 
     }
 
 ldt_maxGoal, ldt_minGoal, ldt_maxCurr, ldt_minCurr :: LnkD LDT x -> DT

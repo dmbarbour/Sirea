@@ -1,29 +1,27 @@
 {-# LANGUAGE TypeOperators, GADTs #-}
 
--- | LinkUnsafeIO is a simple behavior that executes IO from a Link
--- as an RDP behavior stabilizes. The IO action will be executed for
--- every unique value observed in the signal, and executes once 
--- there are no more takebacks. The motivation for LinkUnsafeIO is 
--- easy support for debugging, HUnit tests - stuff that is intended 
--- for easy removal. The signal itself is passed along untouched 
--- after performing the IO.
+-- | LinkUnsafeIO provides quick and dirty behaviors to integrate 
+-- IO. Such behaviors can support quick debugging or prototyping of
+-- resources. They in some cases will be sufficient for integration
+-- of effects. Though, there are `cleaner` ways to integrate effects
+-- with RDP (blackboard metaphor, shared services).
 --
--- In terms of RDP semantics, LinkUnsafeIO is unsafe because IO is
--- not spatially idempotent or commutative. The IO actions might be
--- duplicated if developers take advantage of RDP's semantics for
--- refactoring and abstraction. (The proper way to integrate IO will
--- leverage external services, e.g.  a blackboard metaphor to enable
--- RDP agents and IO agents to collaborate declaratively.)
+-- The onUpdate operations are unsafe because they are not generally
+-- idempotent or commutative. Sirea won't replicate behaviors, but
+-- developers should feel free to duplicate behaviors to abstract or
+-- refactor code, leveraging RDP's spatial idempotence properties. 
 --
--- In practice, developers can generally ensure that the unsafe IO 
--- won't be duplicated (uniqueness), or that it would be safe enough
--- to do so (idempotence), and that collectively such operations are 
--- insensitive to order (commutative, or close enough). So this can 
--- be used safely, with careful discipline. 
+-- In practice, developers can ensure that unsafe IO is used in safe 
+-- ways. It just takes a little discipline. 
 --
--- The IO is not used to load input back into the behavior; doing so
--- would interfere with anticipation. Also, the IO should be locally
--- stateless. 
+-- LinkUnsafeIO does not actually provide a way to pipe input back 
+-- into the RDP behavior, at least not directly. 
+--
+-- On the input side, I am still designing a behavior - perhaps to
+-- inject a signal into RDP from IO, which would then be masked by
+-- the demand signal. For thread-safety, such a signal would first
+-- go through an intermediate, dedicated partition. It should be
+-- feasible to combine these updates into batches (using a monoid).
 --
 module Sirea.LinkUnsafeIO 
     ( unsafeOnUpdateB
@@ -49,7 +47,14 @@ dtFinal = 3.0 -- seconds
 
 -- | unsafeOnUpdateB - perform an IO action for every unique value
 -- in a signal as it becomes stable, then forward the update (after
--- performing the IO). 
+-- performing the IO). The IO action is executed when the value is
+-- fully stable, i.e. so you won't receive two updates for the same
+-- time. The motivation for unsafeOnUpdateB is easy support for 
+-- debugging, unit tests, 
+-- easy support for debugging, HUnit tests - stuff that is intended 
+-- for easy removal. The signal itself is passed along untouched 
+-- after performing the IO.
+
 -- 
 -- unsafeOnUpdateB qualifies as an effectful sink, i.e. it will keep
 -- a behavior alive. This will interfere with dead code elimination,
@@ -128,5 +133,13 @@ runToStability rfSig rfA op su =
 unsafeOnUpdateBLN :: (Eq a) => (T -> Maybe a -> IO ()) 
                     -> B (S p a :&: x) (S p a :&: x)
 unsafeOnUpdateBLN op = bfirst (unsafeOnUpdateBL op) >>> keepAliveB
+
+
+
+-- TODO:
+--
+-- A simple mechanism will also be provided to inject updates into a
+-- behavior. For thread safety, this channels the updates through a
+-- dedicated partition. 
 
 

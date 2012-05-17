@@ -6,6 +6,8 @@ module Sirea.Build
     , Main, MainB
     ) where
 
+import Sirea.Internal.BTypes
+import Sirea.Internal.LTypes
 import Sirea.Internal.BCompile
 import Sirea.Behavior
 import Sirea.Partition
@@ -20,12 +22,10 @@ type Main = ()
 --     type MainB = B (S Main ()) (S Main ())
 --
 -- Such a behavior obviously is for its side-effects rather than for
--- its response. It takes a unit signal and generates a unit signal.
--- (It may be convenient to use `bvoid` to just pipe the input to
--- the output.)
+-- its response. Indeed, the response is dropped. 
 --
 -- RDP is very composable. Even main behaviors can be composed:
---   * products main behaviors represent independent agents active
+--   * products - main behaviors represent independent agents active
 --     in parallel. They interact through shared state and services. 
 --   * sums or dynamic behavior can model staging, cycles, modality,
 --     switching based on state - e.g. do X then Y then Z, loop.
@@ -34,6 +34,10 @@ type Main = ()
 -- 
 -- Consider use of blackboard metaphors for collaboration between
 -- multiple agents, each represented as a Main Behavior.
+--
+-- If you need a quick and dirty way to integrate effects, e.g. for
+-- simple unit tests or debugging, use LinkUnsafeIO.
+-- 
 --
 type MainB = B (S Main ()) (S Main ())
 
@@ -53,7 +57,12 @@ type MainB = B (S Main ()) (S Main ())
 -- Sirea behaviors in one Haskell process.
 -- 
 buildSireaB :: MainB -> IO (Stepper, Stopper)
-buildSireaB mainB = undefined mainB
+buildSireaB mainB = 
+    let (_, mkLn) = compileB mainB ldt_zero LnkDead in
+    mkLn >>= \ lnk0 ->
+    case lnk0 of 
+        LnkDead -> return (
+    buildSireaB' (ln
 
 
 -- | If you don't need to control the main event loop, i.e. if the

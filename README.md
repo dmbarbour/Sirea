@@ -81,7 +81,7 @@ Sirea requires a *transparent, symbolic* model for continuous signals - sacrific
 
 Both of these admit an efficient representation as a vector of coefficients, and precise addition, negation, integral, derivative, and multiplication operations. Precise zero crossings are achievable. To support most domains, vectors and matrices of these signals would also be supported (e.g. to model a surface, position, or orientation that varies over time). Both are potentially suitable for use in video shaders or parallelism with OpenCL.
 
-This feature isn't critical to Sirea, and will be provided by a separate library. It is still of some importance since it would be valuable for a lot of user-facing applications.
+This feature isn't critical to Sirea, and will be provided by a separate library. It is still of some importance since it would be valuable for a lot of user-facing applications (and a few interesting state models). 
 
 *NOTE:* A minor difficulty is that developers need to be careful about delay or peek with piecewise continuous signals: every time the `Sig (T -> a)` is delayed, the `T -> a` values must also be delayed or the two fall out of synch. The necessary discipline can be aided by a behavior transformer. 
 
