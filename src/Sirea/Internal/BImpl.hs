@@ -424,10 +424,9 @@ unsafeFullMapB = mkLnkB tr_fwd . mkLnkPure . lnFullMap
     where lnFullMap = ln_lumap . ln_sumap . su_fmap . s_full_map
 
 -- | map a constant to a signal. 
-constB :: DT -> c -> B (S p a) (S p c)
-constB dt c = mkLnkB tr_fwd constLnk >>> unsafeEqShiftB dt alwaysEq
+constB :: c -> B (S p a) (S p c)
+constB c = mkLnkB tr_fwd constLnk
     where constLnk = mkLnkPure $ lnConst c
-          alwaysEq = (const . const) True
           lnConst  = ln_lumap . ln_sumap . su_fmap . (<$)
 
 -- | add stability to the signal (used by forceB).
@@ -513,10 +512,9 @@ unwrapStrat (Just x) = runEval (Just <$> x)
 -- | filter adjacent equal values from a signal (performance), with
 -- some scan-ahead to combine equal values. Useful after fmapB if 
 -- it results in far fewer values. 
-adjeqfB :: (Eq x) => DT -> B (S p x) (S p x)
-adjeqfB dt = adjeqfSig >>> unsafeEqShiftB dt (==)
-    where adjeqfSig = mkLnkB id $ mkLnkPure lnAdjeqf
-          lnAdjeqf = ln_lumap $ ln_sumap $ su_fmap $ s_adjeqf (==)
+adjeqfB :: (Eq x) => B (S p x) (S p x)
+adjeqfB = mkLnkB id $ mkLnkPure lnAdjeqf
+    where lnAdjeqf = ln_lumap $ ln_sumap $ su_fmap $ s_adjeqf (==)
 
 -- | delay a signal (logically)
 delayB :: DT -> B x x
@@ -668,7 +666,7 @@ keepAliveB = mkLnkB id $ mkLnkPure lnkMatchLiveness
             let y = ln_snd xy in
             LnkProd x y
 
--- | undeadB will keep a signal alive no matter what. Like undead in
+-- | undeadB will keep a signal alive on output. Like undead in
 -- any horror film, undeadB will infect everything it consumes...
 undeadB :: B (S p x) (S p x)
 undeadB = mkLnkB id $ mkLnkPure (LnkSig . ln_lnkup)

@@ -44,6 +44,7 @@ import Sirea.Internal.BImpl
     , leftB, mergeB, inlB, assoclsB, mirrorB
     , disjoinB, zapB, splitB
     , delayB, synchB, peekB
+    , unsafeEqShiftB -- for constB, adjeqfB
     )
 import Sirea.Time (DT)
 
@@ -545,12 +546,15 @@ dtScanAheadB, dtTouchB :: DT
 dtScanAheadB = 2.0 -- seconds ahead of stability
 dtTouchB = 0.1 -- seconds ahead of stability
 
+eqfB :: (x -> x -> Bool) -> B (S p x) (S p x)
+eqfB eq = unsafeEqShiftB dtScanAheadB eq
+
 instance BFmap B where 
     bfmap    = fmapB
-    bconst   = constB dtScanAheadB
+    bconst c = constB c >>> eqfB (const $ const True)
     bstrat   = stratB 
     btouch   = touchB dtTouchB
-    badjeqf  = adjeqfB dtScanAheadB
+    badjeqf  = adjeqfB >>> eqfB (==)
 instance BProd B where
     bfirst   = firstB
     bdup     = dupB
