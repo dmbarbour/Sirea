@@ -109,13 +109,13 @@
 module Sirea.Partition 
     ( Stepper(..)
     , Stopper(..)
-    , PCX (..)
     , Partition(..)
     , BPartition(..)
     , Pt
     ) where
 
 import Sirea.Behavior
+import Sirea.PCX
 
 import Data.Typeable
 import Data.IORef
@@ -191,8 +191,8 @@ class (Typeable p) => Partition p where
     -- PCX 
     --   * create resources when the partition is created.
     --   * access resources created by other behaviors.
-    newPartition :: PCX p -> Stepper -> IO Stopper
-    newPartition _ = defaultNewPartitionThread
+    newPartitionThread :: PCX p -> Stepper -> IO Stopper
+    newPartitionThread _ = defaultNewPartitionThread
 
 -- | partition crossing behavior. 
 --
@@ -246,11 +246,6 @@ defaultNewPartitionThread stepper =
     in 
     forkIO loop >>
     return (makeStopper rfStop)   
-
-
--- () is the main partition. It doesn't actually create a thread.
-instance Partition () where
-    newPartitionThread = error "cannot create the main thread!"
 
 
 -- | Pt is simply a default class of partitions:

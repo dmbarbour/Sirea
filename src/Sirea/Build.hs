@@ -1,3 +1,4 @@
+{-# LANGUAGE GADTs #-}
 
 -- | "Build" the main behavior for embedding in an external loop.
 --
@@ -7,7 +8,6 @@
 -- the PCX arguments implicitly. 
 module Sirea.Build
     ( buildSireaB
-    , runSireaApp
     , Main, MainB
     ) where
 
@@ -16,11 +16,16 @@ import Sirea.Internal.LTypes
 import Sirea.Internal.BCompile
 import Sirea.Behavior
 import Sirea.Partition
+import Sirea.PCX
 
 -- | The Main partition corresponds to whichever thread will be
 -- responsible for the Stepper from buildSireaBehavior (usually
 -- the main thread in Haskell).
 type Main = ()
+
+instance Partition () where
+    newPartitionThread = error "cannot create the Main partition."
+
 
 -- | The main behavior is what an application looks like in Sirea:
 --
@@ -46,15 +51,8 @@ type Main = ()
 type MainB = B (S Main ()) (S Main ())
 
 -- | Build the "main" Sirea behavior, generating a Stepper for use
--- in a user-controlled event loop (or runSireaApp, if you don't
--- need an event loop). 
+-- in a user-controlled event loop. This is the primary 
 --
--- The `PCX Main` argument provides resources related to the event
--- loop - it must be the same PCX as passed to crossB. The best way
--- to achieve this is actually to skip 
---
--- 
-Constructing the Main behavior
 -- requires a few resources that might have been used elsewhere in
 -- the behavior (in particular, anything that crosses back into the
 -- main partition). Nothing starts until the Stepper is called, so
@@ -73,11 +71,12 @@ Constructing the Main behavior
 -- 
 buildSireaB :: PCX Main -> MainB -> IO (Stepper, Stopper)
 buildSireaB mcx mainB = 
-    let (_, mkLn) = compileB mainB ldt_zero LnkDead in
+    let dt0 = LnkDUnit ldt_zero in
+    let (_, mkLn) = compileB mainB dt0 LnkDead in
     mkLn >>= \ lnk0 ->
     case lnk0 of 
         LnkDead -> return (zeroStepper, zeroStopper)
-        (LnkSig lu) -> buildSireaBLU lu
+        (LnkSig lu) -> buildSireaBLU mcx lu
 
 zeroStepper :: Stepper 
 zeroStepper = Stepper 
@@ -90,31 +89,9 @@ zeroStopper = Stopper
     , addStopperEvent = id -- run stopper event immediately
     } 
 
--- hmm. At the moment this is a bit ugly, mostly with regards to
--- integrating `bcross` into Main. Some resources must be shared
--- based on the type parameters - in particular, the thread's 
--- input queue. 
-
-This is a bit difficult, I currently don't have any
--- way to obtain 
-buildSireaBLU :: LnkUp () -> IO (Stepper, Stopper)
-buildSireaBLU lu =
+buildSireaBLU :: PCX Main -> LnkUp () -> IO (Stepper, Stopper)
+buildSireaBLU mcx lu = undefined
     
-
--- | If you don't need to control the main event loop, i.e. if the
--- entire application is written for Sirea, use runSireaApp. It is
--- just a convenient way to provide a simple loop. 
--- (It will eventually provide a few nice features like handling a
--- kill signal properly.)
---
--- Example usage::
---    mainB :: MainB
---    mainB = bvoid $ ...
---
---    main :: IO ()
---    main = buildSireaB >>= 
---           runSireaApp
--- 
 
 
 

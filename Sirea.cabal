@@ -54,12 +54,14 @@ Library
   Exposed-Modules:
     Sirea.Behavior
     Sirea.Signal
-    Sirea.Partition
     Sirea.Link
-    Sirea.LinkUnsafeIO
     Sirea.Build
+    Sirea.PCX
+    Sirea.Partition
 
+    Sirea.LinkUnsafeIO
     Sirea.Bdeep
+
     Sirea.Time
 
   ghc-options: -threaded -Wall -fno-warn-orphans
