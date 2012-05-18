@@ -1,14 +1,9 @@
-{-# LANGUAGE GADTs #-}
+{-# LANGUAGE GADTs, EmptyDataDecls #-}
 
--- | "Build" the main behavior for embedding in an external loop.
---
--- This is a rather `raw` form, since developers must thread the PCX
--- argument directly. Sirea should eventually provide an alternative
--- interface to support type-driven programming, which will thread 
--- the PCX arguments implicitly. 
+-- | "Build" a Sirea behavior for embedding in an external loop.
 module Sirea.Build
-    ( buildSireaB
-    , Main, MainB
+    ( buildSireaApp
+    , SireaApp
     ) where
 
 import Sirea.Internal.BTypes
@@ -17,41 +12,36 @@ import Sirea.Internal.BCompile
 import Sirea.Behavior
 import Sirea.Partition
 import Sirea.PCX
-
--- | The Main partition corresponds to whichever thread will be
--- responsible for the Stepper from buildSireaBehavior (usually
--- the main thread in Haskell).
-type Main = ()
-
-instance Partition () where
-    newPartitionThread = error "cannot create the Main partition."
+import Data.Typeable
 
 
--- | The main behavior is what an application looks like in Sirea:
+-- | This is what an RDP application looks like in Sirea:
 --
---     type MainB = B (S Main ()) (S Main ())
+--     type SireaApp = BCX (S P0 ()) (S P0 ())
 --
--- Such a behavior obviously is for its side-effects rather than for
--- its response. Indeed, the response is dropped. 
+-- Such a behavior is obviously intended for side-effects, since the
+-- response signal is useless. The use of `BCX` allows the behavior
+-- to be parameterized by a partition context (PCX), which acts as a
+-- fresh global space for application state and resources.
 --
--- RDP is very composable. Even main behaviors can be composed:
+-- RDP is very composable. Even SireaApp behaviors are composable:
 --   * products - main behaviors represent independent agents active
 --     in parallel. They interact through shared state and services. 
 --   * sums or dynamic behavior can model staging, cycles, modality,
 --     switching based on state - e.g. do X then Y then Z, loop.
 --   * by publishing dynamic behaviors to a shared registry, apps
 --     can also act as non-invasive `plugins` or `extensions`.
--- 
--- Consider use of blackboard metaphors for collaboration between
--- multiple agents, each represented as a Main Behavior.
 --
--- If you need a quick and dirty way to integrate effects, e.g. for
--- simple unit tests or debugging, use LinkUnsafeIO.
+-- Shared state and blackboard architecture supports collaboration
+-- between independent agents in RDP.
 --
-type MainB = B (S Main ()) (S Main ())
+type SireaApp = B (S P0 ()) (S P0 ())
 
 -- | Build the "main" Sirea behavior, generating a Stepper for use
--- in a user-controlled event loop. This is the primary 
+-- in a user-controlled event loop. 
+--
+-- This requires some resources from the root PCX (the one just
+-- above the partitions). 
 --
 -- requires a few resources that might have been used elsewhere in
 -- the behavior (in particular, anything that crosses back into the
@@ -69,10 +59,10 @@ type MainB = B (S Main ()) (S Main ())
 -- runtime, create a dynamic behavior! Don't build and halt multiple
 -- Sirea behaviors in one Haskell process.
 -- 
-buildSireaB :: PCX Main -> MainB -> IO (Stepper, Stopper)
-buildSireaB mcx mainB = 
+buildSireaApp :: PCX () -> SireaApp -> IO (Stepper, Stopper)
+buildSireaApp mcx b = 
     let dt0 = LnkDUnit ldt_zero in
-    let (_, mkLn) = compileB mainB dt0 LnkDead in
+    let (_, mkLn) = compileB b dt0 LnkDead in
     mkLn >>= \ lnk0 ->
     case lnk0 of 
         LnkDead -> return (zeroStepper, zeroStopper)
@@ -89,7 +79,7 @@ zeroStopper = Stopper
     , addStopperEvent = id -- run stopper event immediately
     } 
 
-buildSireaBLU :: PCX Main -> LnkUp () -> IO (Stepper, Stopper)
+buildSireaBLU :: PCX () -> LnkUp () -> IO (Stepper, Stopper)
 buildSireaBLU mcx lu = undefined
     
 

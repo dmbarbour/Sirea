@@ -9,32 +9,16 @@ Description:
   in Haskell. This particular module is the `core` of Sirea, just
   the basic behaviors and implementation. Domain specific resources
   will be provided by external libraries.
-  .
+  
   RDP is similar to arrowized FRP, excepting how it manages effects
   and state. RDP behaviors can encapsulate access to resources and
   services, observing and influencing them through signals. State is
-  modeled as an external service. RDP expressions cannot internally
-  accumulate information; all state is external. 
-  .
-  RDP is effectful, but not imperative. The constrains on effects
+  modeled as an external service. 
+  
+  RDP is effectful, but not imperative. The constraints on effects
   ensure RDP expressions are commutative, idempotent, continuous,
-  collaborative, concurrent, and internally stateless. RDP achieves
-  most of the reasoning, refactoring, and abstraction benefits of
-  pure functional code. 
-  .
-  Sirea supports concurrency via a partitions model. Each partition
-  has one Haskell thread, created declaratively when the behavior is
-  built. Partitioning sacrifices consistency and determinism, though
-  developers still have: snapshot consistency, eventual consistency,
-  and ability to use delay to mask inconsistency.
-  .
-  Sirea also provides support for deterministic data parallelism, in
-  particular to trigger parallel computation at certain locations in
-  the behavior and to sequence certain elements (bstrat, btouch). 
-  .
-  Sirea can be embedded in any application that uses an event loop.
-  It compiles a behaviors to an incremental stepper procedures to be
-  called in an external loop.
+  concurrent, and internally stateless. RDP achieves most reasoning, 
+  refactoring, and abstraction benefits of pure functional code. 
 
 Author: David Barbour
 Maintainer: dmbarbour@gmail.com
@@ -49,20 +33,26 @@ Library
   hs-Source-Dirs: src
   Build-Depends: base>4.5
     ,parallel>3
+    ,containers
     ,time
 
   Exposed-Modules:
-    Sirea.Behavior
+    Sirea.Time
     Sirea.Signal
-    Sirea.Link
+    Sirea.Behavior
+    Sirea.Bdeep
     Sirea.Build
     Sirea.PCX
     Sirea.Partition
 
+    Sirea.B
+    Sirea.BCX
+    Sirea.Link
     Sirea.LinkUnsafeIO
-    Sirea.Bdeep
 
-    Sirea.Time
+    Sirea.Trans.Static
+
+
 
   ghc-options: -threaded -Wall -fno-warn-orphans
 

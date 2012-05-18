@@ -1,7 +1,7 @@
 {-# LANGUAGE TypeOperators, GADTs #-}
 
 -- | LinkUnsafeIO provides quick and dirty behaviors to integrate 
--- IO. Such behaviors can support quick debugging or prototyping of
+-- IO. Such behaviors can support easy debugging or prototyping of
 -- resources. They in some cases will be sufficient for integration
 -- of effects. Though, there are `cleaner` ways to integrate effects
 -- with RDP (blackboard metaphor, shared services).
@@ -31,10 +31,11 @@ module Sirea.LinkUnsafeIO
 
 import Data.IORef
 import Control.Applicative
-import Sirea.Behavior
 import Sirea.Link
 import Sirea.Signal
 import Sirea.Time
+import Sirea.Behavior
+import Sirea.B
 import Sirea.Internal.BImpl (undeadB, keepAliveB)
 
 import Control.Exception (assert)

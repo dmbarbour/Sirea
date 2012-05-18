@@ -1,6 +1,6 @@
 {-# LANGUAGE EmptyDataDecls, Rank2Types #-}
 
--- | PCX - declarative resource linking mechanism for Haskell.
+-- | Declarative resource linking mechanism for Haskell.
 --
 -- RDP has a conservative notion of resources: services, resources,
 -- shared state, etc. are external to behaviors; nothing is created,
@@ -15,28 +15,31 @@
 -- Every RDP application can thus have its own, infinite corner of 
 -- the universe. This is compatible with the perspective that it is 
 -- RDP "all the way down" - an RDP application is a dynamic behavior
--- that manipulates resources in a dedicated partition.
+-- that manipulates resources in a local partition.
 --
--- Sirea models this by use of the PCX type.
+-- Sirea also uses this conservative notion of resources to achieve
+-- a more declarative programming experience. This is expressed in
+-- PCX, and is *type driven* - developers may find any resource of
+-- class Resource.
 --
 -- The idea with PCX is to present resources as though they already
--- exist, as though PCX is just a very large namespace. Thus, PCX 
--- provides a pure interface - all you can do is look up resources.
--- (But it makes extensive use of unsafePerformIO under the hood.)
+-- exist, as though PCX is an infinite namespace, and resources are
+-- accessible if only we can name them. The naming in PCX is based
+-- on Data.Typeable, though developers are free to extend this by
+-- naming resources that represent spaces of resources with another
+-- naming conventions.
 --
 -- PCX is most useful for volatile resources, which will not survive
 -- destruction of the Haskell process. Persistent resources benefit
 -- by use of volatile proxies, e.g. to cache a value. PCX is used in
 -- Sirea core for threads and hooking up communication between them.
---
--- But it could also support creating a GLUT thread, and hooking it
--- up to RDP behaviors so they can demand a window, add contents to
--- a window, observe framerate, etc.
+-- It will be more heavily used for FFI adapters, e.g. to represent
+-- control over a GLUT window.
 --
 -- NOTE: Threading PCX through an application would grow irritating.
 -- However, a simple behavior transformer can make it a lot nicer.
 -- Another module in Sirea will provide the BCX type to carry an
--- initial PCX to every element in a behavior.
+-- initial PCX to every element in a behavior that might want it.
 -- 
 module Sirea.PCX
     ( PCX    -- abstract
@@ -45,23 +48,23 @@ module Sirea.PCX
     , Resource(..)
     ) where
 
+import Data.IORef
 import Data.Typeable
+import Data.Dynamic
 
--- | PCX p - Partition Context. Abstract.
+-- | PCX p - Partition Resource Context. Abstract.
 --
 -- A Partition context is an infinite space of resources, but holds
 -- only one resource of each type. For more resources of a given 
 -- type, consider using:
---   * find a child PCX, then look for the same resource there
+--   * a child PCX; look for the same resource there
 --   * a newtype with a phantom type (per instance)
 --   * a resource representing a mutable collection
 --
-data PCX p = PCX { inPCX :: (Resource r) => r }
-
-{-
-    pcx_ident :: [TypeRep]
-    , pcx_store :: IORef (
--}
+data PCX p = PCX 
+    { pcx_ident :: [TypeRep]
+    , pcx_store :: IORef [Dynamic]
+    }
 
 -- | Resource - found inside a PCX. 
 --
@@ -69,22 +72,25 @@ data PCX p = PCX { inPCX :: (Resource r) => r }
 -- illusion that resources existed prior the locator operation, i.e.
 -- we are locating resources, not creating them. This requires there
 -- be no observable side-effects in the locator, and that resources 
--- are passive at least until another operation is called on them.
+-- are passive, at least an IO operation is invoked on them.
 --
 -- The locator has recursive access to other resources, and to an
 -- argument representing the unique ID of that resource (up to the
 -- newPCX, anyway).
+--
+-- Resources are named by a path of [TypeReps], which includes the
 class (Typeable r) => Resource r where
     locateResource :: [TypeRep] -> PCX p -> IO r
 
--- | findIn pcx - obtain any Resource.
-findIn :: (Resource r) => PCX p -> r
-findIn = inPCX
+-- | findIn pcx - Each PCX contains one of each Resource.
+findIn :: (Resource r) => PCX p -> IO r
+findIn = undefined
 
--- | newPCX - a `new` PCX space, unique and fresh. 
--- 
--- While developers could create more than one, one is sufficient.
-newPCX :: IO (PCX p)
+-- | newPCX - a `new` PCX space, unique and fresh. An initial name
+-- may be provided based on the root type. While developers could 
+-- create more than one PCX, one is sufficient, since PCX is itself
+-- a resource.
+newPCX :: IO (PCX ())
 newPCX = undefined
 
 

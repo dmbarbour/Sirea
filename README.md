@@ -31,10 +31,7 @@ Here are some features I aim to have by version 1.0:
 
 * _Embeddable, Extension Language._ Sirea doesn't take over the main loop. Instead, Sirea supplies a step function for starting and maintaining the behavior. These properties also apply partition threads created by Sirea. They can do useful work, such as managing state, network, or display in addition to processing RDP communication. Sirea supplies some simple mechanisms for communicating between threads and RDP, providing a frozen snapshot view of other threads (only updated between steps). Developers also have power to create new behavior primitives to attach new resources with `unsafeLnkB`.
 
-* _Extensible and Live Programming._ Sirea (via separate library, `sirea-plugin`) provides a runtime plugin framework. Plugins can provide both _main_ behaviors (multiple behaviors would run in parallel) and potential dependencies (services, resources). Plugins and be recompiled on the fly and hot-swapped, ensuring application behavior is always consistent with code in the editor. Live programming with plugins provides a beautiful alternative to REPL loops. With this, Sirea becomes an application platform.
-
-Examples
---------
+* _Extensible and Live Programming._ Sirea (via separate library, `sirea-plugin`) provides a runtime plugin framework via Haskell plugins. Plugins support _main_ behaviors (multiple behaviors run in parallel) and potential dependencies (services, resources). Plugins and their dependencies are recompiled and hot-swapped on the fly so runtime behavior is consistent with the most recently saved version of source code. Live programming provides a beautiful, more declarative alternative to REPL loops. Support for multiple _main_ behaviors supports traditional plugin patterns (e.g. extend a pipeline by publishing a dynamic behavior), and allows Sirea to serve as a full application platform. (I envision some _main_ plugins loading code of different types - DSLs, XML application specifications, etc. - and compiling them to new plugins as necessary.)
 
 
 Reactive Demand Programming (in Sirea)

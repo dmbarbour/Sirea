@@ -1,20 +1,18 @@
 
 {-# LANGUAGE TypeOperators, MultiParamTypeClasses, Rank2Types #-}
 
--- | This module describes the basic RDP behaviors in Sirea. It also
--- exports the concrete behavior type `B` for clients. Behaviors are 
--- a restricted class of Arrows that transform and orchestrate (but 
--- neither create nor destroy) signals. 
+-- | This module describes RDP behaviors classes in Sirea. Behaviors 
+-- are a restricted class of Arrows that transform and orchestrate 
+-- (but neither create nor destroy) signals. 
 --
 -- This module contains behaviors only for data plumbing, pure
 -- functional computation, and simple performance annotations. In
 -- general, RDP behaviors may be effectful. 
 --
--- Several behaviors are provided in dedicated modules:
---   see Sirea.Link for bUnsafeLnk
---   see Sirea.Partition for bcross, bscope
+-- For concrete behavior types, see Sirea.B or Sirea.BCX. 
+-- For partition management behaviors, see Sirea.Partition.
 module Sirea.Behavior  
-    ( (:&:), (:|:), S, SigInP, B
+    ( (:&:), (:|:), S, SigInP
     , (>>>) -- from Control.Category
     , bfwd
     , BFmap(..), bforce, bspark, bstratf
@@ -27,8 +25,7 @@ module Sirea.Behavior
     , BTemporal(..), BPeek(..)
     , BDynamic(..)
     , BEmbed(..)
-    -- , bcross, bscope - see FRP.Sirea.Partition
-    -- , bUnsafeLnk - see FRP.Sirea.Link
+    , Behavior
     ) where
 
 import Prelude hiding (id,(.))
@@ -37,22 +34,12 @@ import Control.Parallel (pseq, par)
 import Control.Parallel.Strategies (Eval, runEval)
 
 import Sirea.Internal.STypes ((:&:),(:|:),S,SigInP)
-import Sirea.Internal.BTypes (B)
-import Sirea.Internal.BImpl 
-    ( fmapB, constB, touchB, stratB, adjeqfB
-    , firstB, dupB, fstB, assoclpB, swapB
-    , leftB, mergeB, inlB, assoclsB, mirrorB
-    , disjoinB, zapB, splitB
-    , delayB, synchB, peekB
-    , unsafeEqShiftB -- for constB, adjeqfB
-    )
 import Sirea.Time (DT)
 
 infixr 3 ***
 infixr 3 &&&
 infixr 2 +++
 infixr 2 |||
-
 
 -- | Behavior is a grouping of all basic behavior classes.
 class ( Category b
@@ -430,7 +417,7 @@ class (BTemporal b) => BPeek b where
 -- It also leads to clearer disruption semantics.
 -- 
 -- All arguments for dynamic behaviors are implicitly synchronized.
-class (BEmbed b b', Behavior b, Behavior b') => BDynamic b b' where
+class (BEmbed b' b, Behavior b, Behavior b') => BDynamic b b' where
     -- | evaluate a dynamic behavior and obtain the response. The DT
     -- argument indicates the maximum latency for dynamic behaviors,
     -- and the latency for beval as a whole. 
@@ -445,9 +432,6 @@ class (BEmbed b b', Behavior b, Behavior b') => BDynamic b b' where
     bexec = prep >>> beval 0
         where prep = bfirst (bfmap f &&& bconst ()) >>> bassocrp
               f b' = bsecond b' >>> bfst
-
- 
-
 
 
 -- WISHLIST: a behavior-level map operation.
@@ -475,9 +459,10 @@ class (BEmbed b b', Behavior b, Behavior b') => BDynamic b b' where
 --  with type-level operators like:  (x :&: (x :&: (x :&: (x ...
 --
 
--- | BEmbed - embed (or lift) behaviors. 
-class BEmbed b b' where
+-- | BEmbed b' b - embeds b' in b
+class BEmbed b' b where
     bembed :: b' x y -> b x y
+
 
 -- TODO: convenience operators?
 --  I've added Bdeep - eqvs. of bcadadr and setf bcadadr from Lisp
@@ -536,49 +521,6 @@ benvseq bx by = bdup >>> (bfst *** bx) >>> by
 
 
 
----------------------------
--- Concrete Instances: B --
----------------------------
--- TUNING
---   dtScanAheadB: default lookahead for constB, adjeqfB.
---   dtTouchB: compute ahead of stability for btouch.
-dtScanAheadB, dtTouchB :: DT
-dtScanAheadB = 2.0 -- seconds ahead of stability
-dtTouchB = 0.1 -- seconds ahead of stability
-
-eqfB :: (x -> x -> Bool) -> B (S p x) (S p x)
-eqfB eq = unsafeEqShiftB dtScanAheadB eq
-
-instance BFmap B where 
-    bfmap    = fmapB
-    bconst c = constB c >>> eqfB (const $ const True)
-    bstrat   = stratB 
-    btouch   = touchB dtTouchB
-    badjeqf  = adjeqfB >>> eqfB (==)
-instance BProd B where
-    bfirst   = firstB
-    bdup     = dupB
-    bfst     = fstB
-    bswap    = swapB
-    bassoclp = assoclpB
-instance BSum B where
-    bleft    = leftB
-    bmirror  = mirrorB
-    bmerge   = mergeB
-    binl     = inlB
-    bassocls = assoclsB
-instance BZip B where
-    bzap     = zapB
-instance BSplit B where
-    bsplit   = splitB
-instance BDisjoin B where 
-    bdisjoin = disjoinB
-instance BTemporal B where
-    bdelay   = delayB
-    bsynch   = synchB
-instance BPeek B where
-    bpeek    = peekB
-instance Behavior B
 
 
 

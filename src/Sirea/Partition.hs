@@ -19,7 +19,7 @@
 -- Signals in Sirea behaviors are typed (S p a). This corresponds to
 -- a concrete signal value of type (Sig a). The `p` type represents
 -- partition, where the signal's value is hosted. Signals must be in
--- the same partition to be combined, e.g. by bzip.
+-- the same partition to be combined, e.g. by bzip or bdisjoin.
 --
 -- To move signals between partitions, developers may use `bcross`.
 --
@@ -29,6 +29,9 @@
 -- a lightweight Haskell thread. Conveniently, Sirea will create the
 -- threads needed for all the bcross behaviors - one per partition
 -- (leveraging Data.Typeable). 
+--
+-- Lightweight partitions are also accessible as scopes - partitions
+-- within a single thread. Scopes are popped or pushed like a stack.
 --
 -- PARTITIONS AS RESOURCE CONTROLLERS
 -- ==================================
@@ -107,11 +110,13 @@
 -- use only the RDP mechanisms to communicate.
 --
 module Sirea.Partition 
-    ( Stepper(..)
+    ( Partition(..)
+    , BCross(..)
+    , BScope(..)
+    , Scope
+    , Pt, P0
+    , Stepper(..)
     , Stopper(..)
-    , Partition(..)
-    , BPartition(..)
-    , Pt
     ) where
 
 import Sirea.Behavior
@@ -122,6 +127,85 @@ import Data.IORef
 import Control.Exception (assert)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar
+
+
+-- | Partition p - indicates a toplevel partition type, and also 
+-- can override the default partition thread constructor.
+--
+-- Note: While partitions may have responsibilities beyond Sirea RDP
+-- updates, they should not cause any significant effects until so
+-- directed by RDP behaviors. 
+-- 
+-- Partition should later support dependency injection via Make.
+-- This would be criticial for most non-trivial partitions, since
+-- otherwise there is no clear way to hook up to behaviors. 
+--
+class (Typeable p) => Partition p where
+    -- | create a new partition thread. The default implementation
+    -- creates a thread with forkIO that will simply run RDP events
+    -- until stopped. 
+    -- 
+    -- The PCX parameter provides an alternative to global state for
+    -- connecting resources to the partitions that control them. The
+    -- PCX 
+    --   * create resources when the partition is created.
+    --   * access resources created by other behaviors.
+    --
+    -- In general, a thread should only access a small, static set
+    -- of PCX resources, corresponding to a set of object methods.
+    -- Use collections to track multiple demands.
+    --
+    newPartitionThread :: PCX p -> Stepper -> IO Stopper
+
+-- | Pt is simply a default class of partitions, named by typeables.
+-- A Pt partition runs in a forever loop, processing RDP updates.  
+--
+-- This can be useful for pipeline parallelism, but the concurrency
+-- properties mean you weaken consistency. (Sirea provides snapshot
+-- consistency by batch-updates between partitions.) The concurrency
+-- would be better justified if the thread had some IO role, e.g. to
+-- watch the filesystem or manage a GLUT window.
+--
+-- (If you just want parallelism, use bspark, or bstrat and btouch.)
+--
+-- Mostly, Pt serves as an example partition type, and takes care of
+-- the obvious, trivial case so that other people don't need to. 
+--   
+data Pt x
+
+instance Typeable1 Pt where
+    typeOf1 _ = mkTyConApp tyConPt []
+        where tyConPt = mkTyCon3 "Sirea" "Partition" "Pt"
+
+instance (Typeable x) => Partition (Pt x) where
+    newPartitionThread _ = newPartitionThreadPt
+
+-- | P0 = Pt () - a special partition representing the
+-- main RDP behavior. (The crossB behavior has special
+-- code for the main parititon.)
+type P0 = Pt ()
+
+-- | Cross between partitions (without syntactic hassle). 
+class BCross b where
+    bcross :: ( Partition p, Partition p') => b (S p x) (S p' x)
+
+-- | Scopes are lightweight partitions, all within a single thread.
+-- Scopes may have sub-scopes, simply push or pop like a stack. The
+-- data plumbing between scopes should be free (after compile).
+--
+-- Scopes may be useful to represent distinct resource instances or
+-- to constrain against accidental communication between parts of a
+-- behavior.
+--
+class BScope b where
+    bpushScope :: b (S p x) (S (Scope s p) x)
+    bpopScope  :: b (S (Scope s p) x) (S p x)
+
+data Scope s p
+instance Typeable2 Scope where
+    typeOf2 _ = mkTyConApp tycScope []
+        where tycScope = mkTyCon3 "Sirea" "Partition" "Scope"
+
 
 -- | Stepper - incremental processing of RDP updates in Sirea.
 --
@@ -169,38 +253,6 @@ data Stopper = Stopper
     , addStopperEvent :: IO () -> IO () -- ^ notify when stopped
     }
 
-
--- | Partition p - indicates a toplevel partition type, and also 
--- can override the default partition thread constructor.
---
--- Note: While partitions may have responsibilities beyond Sirea RDP
--- updates, they should not cause any significant effects until so
--- directed by RDP behaviors. 
--- 
--- Partition should later support dependency injection via Make.
--- This would be criticial for most non-trivial partitions, since
--- otherwise there is no clear way to hook up to behaviors. 
---
-class (Typeable p) => Partition p where
-    -- | create a new partition thread. The default implementation
-    -- creates a thread with forkIO that will simply run RDP events
-    -- until stopped. 
-    -- 
-    -- The PCX parameter provides an alternative to global state for
-    -- connecting resources to the partitions that control them. The
-    -- PCX 
-    --   * create resources when the partition is created.
-    --   * access resources created by other behaviors.
-    newPartitionThread :: PCX p -> Stepper -> IO Stopper
-    newPartitionThread _ = defaultNewPartitionThread
-
--- | partition crossing behavior. 
---
--- This particular interface would rely on the type `b` to carry the
--- PCX elements around. 
-class BPartition b where
-    bcross :: ( Partition p, Partition p') => b (S p x) (S p' x)
-
 -------------------------------------------------
 -- Implementing the default partition behavior --
 -------------------------------------------------
@@ -232,8 +284,8 @@ finiStopData rf = atomicModifyIORef rf fini >>= id
                 assert (not isStopped) $
                 (((True,True),return()),runEvents)
 
-defaultNewPartitionThread :: Stepper -> IO Stopper
-defaultNewPartitionThread stepper =
+newPartitionThreadPt :: Stepper -> IO Stopper
+newPartitionThreadPt stepper =
     newEmptyMVar >>= \ rfWait ->
     newIORef emptyStopData >>= \ rfStop -> 
     let event = tryPutMVar rfWait () >> return () in
@@ -247,28 +299,4 @@ defaultNewPartitionThread stepper =
     forkIO loop >>
     return (makeStopper rfStop)   
 
-
--- | Pt is simply a default class of partitions:
---     `Pt x` is a Partition if x is Typeable.
---     default implementation - Sirea forever loops.
-data Pt x
-
-tyConPt :: TyCon
-tyConPt = mkTyCon3 "Sirea" "Partition" "Pt"
-
-instance Typeable1 Pt where
-    typeOf1 _ = mkTyConApp tyConPt []
-
-instance (Typeable x) => Partition (Pt x)
-
-
-{- TODO:
-
-TWO TYPES OF PARTITION:
-  bscope - between thread-local partitions. (name? scope, level, frame)
-     bscopePush, bscopePop
-  Maybe add this AFTER I have the basic Make system working.
-
-  partition-specific variables, observable in RDP.
--}
 
