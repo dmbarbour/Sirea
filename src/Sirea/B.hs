@@ -1,5 +1,7 @@
 
--- | `B` is a raw, primitive behavior type in Sirea. While flexible,
+-- | `B w x y` is a raw, primitive behavior type in Sirea. 
+--
+-- While flexible,
 -- hooking `B` behaviors to resources is inconvenient. Non-trivial 
 -- RDP behaviors requires a shared namespace of resources, and using
 -- global Haskell state should be discouraged.

@@ -417,7 +417,7 @@ class (BTemporal b) => BPeek b where
 -- It also leads to clearer disruption semantics.
 -- 
 -- All arguments for dynamic behaviors are implicitly synchronized.
-class (BEmbed b' b, Behavior b, Behavior b') => BDynamic b b' where
+class (Behavior b, Behavior b' {-, BEmbed b' b -}) => BDynamic b b' where
     -- | evaluate a dynamic behavior and obtain the response. The DT
     -- argument indicates the maximum latency for dynamic behaviors,
     -- and the latency for beval as a whole. 

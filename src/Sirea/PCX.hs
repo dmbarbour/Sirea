@@ -1,4 +1,4 @@
-{-# LANGUAGE EmptyDataDecls, Rank2Types #-}
+{-# LANGUAGE EmptyDataDecls #-}
 
 -- | Declarative resource linking mechanism for Haskell.
 --
@@ -43,55 +43,90 @@
 -- 
 module Sirea.PCX
     ( PCX    -- abstract
+    , pcxid  -- the current path in the PCX. 
     , newPCX -- a new toplevel
     , findIn -- the lookup function
     , Resource(..)
     ) where
 
 import Data.IORef
+import Control.Concurrent.MVar
 import Data.Typeable
 import Data.Dynamic
 
 -- | PCX p - Partition Resource Context. Abstract.
 --
--- A Partition context is an infinite space of resources, but holds
--- only one resource of each type. For more resources of a given 
--- type, consider using:
+-- A partition context is an infinite, uniform space of resources.
+-- It holds one resource of each type. Though, it is easy to model
+-- multiple instances:
 --   * a child PCX; look for the same resource there
 --   * a newtype with a phantom type (per instance)
 --   * a resource representing a mutable collection
 --
+-- PCX uses dynamic types, decoupling its interface from particulars
+-- of the behaviors being implemented. 
+-- PCX is potentially infinite to deal with unknown cases, but is 
+-- designed for the common case where only a small, static set of
+-- resources is looked up *once* (at build time) then used for a
+-- long time.
 data PCX p = PCX 
     { pcx_ident :: [TypeRep]
     , pcx_store :: IORef [Dynamic]
+    , pcx_mutex :: MVar ()
     }
+
+pcxid :: PCX p -> [TypeRep]
+pcxid = pcx_ident
 
 -- | Resource - found inside a PCX. 
 --
 -- Resources are constructed in IO, but developers should protect an
 -- illusion that resources existed prior the locator operation, i.e.
--- we are locating resources, not creating them. This requires there
--- be no observable side-effects in the locator, and that resources 
--- are passive, at least an IO operation is invoked on them.
+-- we are locating resources, not creating them. This requires:
+--
+--   * no observable side-effects in the locator
+--   * resources are passive until operations invoked on them
 --
 -- The locator has recursive access to other resources, and to an
--- argument representing the unique ID of that resource (up to the
--- newPCX, anyway).
---
--- Resources are named by a path of [TypeReps], which includes the
+-- argument representing the unique ID of that resource up to the 
+-- newPCX.
 class (Typeable r) => Resource r where
-    locateResource :: [TypeRep] -> PCX p -> IO r
+    locateResource :: PCX p -> IO r
 
 -- | findIn pcx - Each PCX contains one of each Resource.
+--
+-- This operation is idempotent. The same resource will be found
+-- every time.
 findIn :: (Resource r) => PCX p -> IO r
-findIn = undefined
+findIn pcx = 
+    takeMVar (pcx_mutex pcx) >>
+    readIORef (pcx_store pcx) >>= \ lDyns ->
+    case fromDynList lDyns of
+        Just r -> 
+            putMVar (pcx_mutex pcx) () >> 
+            return r
+        Nothing ->
+            locateResource  pcx >>= \ r ->
+            writeIORef (pcx_store pcx) ((toDyn r):lDyns) >> 
+            putMVar (pcx_mutex pcx) () >>
+            return r
+
+fromDynList :: (Typeable r) => [Dynamic] -> Maybe r
+fromDynList [] = Nothing
+fromDynList (x:xs) = maybe (fromDynList xs) Just (fromDynamic x) 
 
 -- | newPCX - a `new` PCX space, unique and fresh. An initial name
 -- may be provided based on the root type. While developers could 
 -- create more than one PCX, one is sufficient, since PCX is itself
 -- a resource.
 newPCX :: IO (PCX ())
-newPCX = undefined
+newPCX = 
+    newIORef [] >>= \ rf ->
+    newMVar () >>= \ mx ->
+    let pcx = PCX { pcx_ident = []
+                  , pcx_store = rf 
+                  , pcx_mutex = mx } in
+    return pcx
 
 
 

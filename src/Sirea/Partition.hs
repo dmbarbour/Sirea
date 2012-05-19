@@ -145,16 +145,7 @@ class (Typeable p) => Partition p where
     -- creates a thread with forkIO that will simply run RDP events
     -- until stopped. 
     -- 
-    -- The PCX parameter provides an alternative to global state for
-    -- connecting resources to the partitions that control them. The
-    -- PCX 
-    --   * create resources when the partition is created.
-    --   * access resources created by other behaviors.
-    --
-    -- In general, a thread should only access a small, static set
-    -- of PCX resources, corresponding to a set of object methods.
-    -- Use collections to track multiple demands.
-    --
+    -- PCX supports communication between threads and RDP behaviors. 
     newPartitionThread :: PCX p -> Stepper -> IO Stopper
 
 -- | Pt is simply a default class of partitions, named by typeables.
