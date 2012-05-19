@@ -18,6 +18,7 @@ module Sirea.Internal.BImpl
     , delayB, synchB, peekB, forceDelayB -- temporal
 
     -- miscellaneous
+    , unsafeChangeScopeB 
     , unsafeAddStabilityB 
     , unsafeEqShiftB
     , unsafeFullMapB
@@ -411,7 +412,6 @@ takeRight :: Maybe (Either x y) -> Maybe y
 takeRight (Just (Right x)) = Just x
 takeRight _ = Nothing
 
-
 -- | map an arbitrary Haskell function across an input signal.
 fmapB :: (a -> b) -> B w (S p a) (S p b)
 fmapB = mkLnkB tr_fwd . mkLnkPure . lnFmap
@@ -543,6 +543,14 @@ peekB dt = mkLnkB tr_fwd peekLnk
                           , ln_peek  = dt -- to track anticipation.
                           , ln_build = return . lnPeek
                           }
+
+-- | scopes are trivial variations on id
+unsafeChangeScopeB :: B w (S p1 x) (S p2 x)
+unsafeChangeScopeB = mkLnkB tr_fwd $ mkLnkPure lnkFwd
+
+lnkFwd :: Lnk (S p1 x) -> Lnk (S p2 x)
+lnkFwd LnkDead = LnkDead
+lnkFwd (LnkSig lu) = LnkSig lu
 
 -- | force aggregated lazy delays to apply at this location.
 -- (unnecessary in most cases)

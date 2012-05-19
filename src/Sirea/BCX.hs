@@ -32,6 +32,16 @@ module Sirea.BCX
     (
     ) where
 
+import Sirea.Trans.Static 
 
 
 
+-- Possibility:
+--  support "sub-context" behaviors
+--  sort of like running a separate application
+--  (except you can provide some capabilities via 
+--   dynamic behaviors).
+--
+-- Possibility:
+--  need a way to get `values` in the current context?
+--   i.e. build a BCX as a value to provide capability.

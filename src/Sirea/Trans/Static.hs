@@ -11,6 +11,7 @@ import Prelude hiding (id,(.))
 import Control.Category
 import Control.Applicative
 import Sirea.Behavior
+import Sirea.Partition
 
 newtype StaticB f b x y = SB (f (b x y))
 
@@ -20,10 +21,11 @@ toStatic = SB
 runStatic :: StaticB f b x y -> f (b x y)
 runStatic (SB fbxy) = fbxy
 
+-- from Sirea.Behavior
 instance (Applicative f) => BEmbed b (StaticB f b) where
     bembed = SB . pure
 instance (Category b, Applicative f) => Category (StaticB f b) where
-    id = SB $ pure id
+    id = (SB . pure) id
     (SB f) . (SB g) = SB $ (.) <$> f <*> g
 instance (BFmap b, Applicative f) => BFmap (StaticB f b) where
     bfmap   = (SB . pure) . bfmap
@@ -59,5 +61,14 @@ instance (BDynamic b b', Applicative f) => BDynamic (StaticB f b) b' where
     beval   = (SB . pure) . beval
     bexec   = (SB . pure) bexec
 instance (Behavior b, Applicative f) => Behavior (StaticB f b)
+
+-- from Sirea.Partition
+instance (BCross b, Applicative f) => BCross (StaticB f b) where
+    bcross  = (SB . pure) bcross
+instance (BScope b, Applicative f) => BScope (StaticB f b) where
+    bpushScope = (SB . pure) bpushScope
+    bpopScope  = (SB . pure) bpopScope
+
+
 
 

@@ -17,6 +17,7 @@ module Sirea.B (B) where
 
 import Sirea.Time
 import Sirea.Behavior
+import Sirea.Partition
 import Sirea.Internal.BTypes
 import Sirea.Internal.BImpl
 
@@ -63,6 +64,24 @@ instance BTemporal (B w) where
 instance BPeek (B w) where
     bpeek    = peekB
 instance Behavior (B w)
+
+{-
+instance BDynamic (B w) where
+    beval    = evalB
+    bexec    = execB
+-}
+
+-- note: B does not support `bcross`, since B cannot 
+-- track which partitions are in use. Need BCX for
+-- bcross.
+
+instance BScope (B w) where
+    bpushScope = unsafeChangeScopeB
+    bpopScope  = unsafeChangeScopeB
+
+
+
+
 
 
 

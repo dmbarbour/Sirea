@@ -128,6 +128,22 @@ import Control.Exception (assert)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar
 
+-- | Cross between partitions. Note that this behavior requires the
+-- `b` class itself to encapsulate knowledge of how the partitions
+-- are accessed to avoid syntactic hassles.
+class BCross b where
+    bcross :: ( Partition p, Partition p') => b (S p x) (S p' x)
+
+-- | Scopes are lightweight partitions, all within a single thread.
+-- Scopes may have sub-scopes, simply push or pop like a stack. The
+-- data plumbing between scopes should be free (after compile).
+--
+-- Scopes may be useful to modularize resources in a partition and
+-- prevent accidental communication.
+class BScope b where
+    bpushScope :: b (S p x) (S (Scope s p) x)
+    bpopScope  :: b (S (Scope s p) x) (S p x)
+
 
 -- | Partition p - indicates a toplevel partition type, and also 
 -- can override the default partition thread constructor.
@@ -176,21 +192,6 @@ instance (Typeable x) => Partition (Pt x) where
 -- this case in the primitive cross behavior.
 type P0 = Pt ()
 
--- | Cross between partitions (without syntactic hassle). 
-class BCross b where
-    bcross :: ( Partition p, Partition p') => b (S p x) (S p' x)
-
--- | Scopes are lightweight partitions, all within a single thread.
--- Scopes may have sub-scopes, simply push or pop like a stack. The
--- data plumbing between scopes should be free (after compile).
---
--- Scopes may be useful to represent distinct resource instances or
--- to constrain against accidental communication between parts of a
--- behavior.
---
-class BScope b where
-    bpushScope :: b (S p x) (S (Scope s p) x)
-    bpopScope  :: b (S (Scope s p) x) (S p x)
 
 data Scope s p
 instance Typeable2 Scope where

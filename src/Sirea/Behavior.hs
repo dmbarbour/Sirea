@@ -427,11 +427,15 @@ class (Behavior b, Behavior b' {-, BEmbed b' b -}) => BDynamic b b' where
     -- 
     beval :: (SigInP p x) => DT -> b (S p (b' x y) :&: x) (y :|: S p ())
 
-    -- | bexec is eval but dropping the result, weaker time constraints 
+    -- | bexec will eval dropping the result. The success signal is 
+    -- a simple reduction of the behavior signal. 
+    --
+    -- The default implementation is in terms of beval; override for
+    -- performance if necessary.
     bexec :: (SigInP p x) => b (S p (b' x y) :&: x) (S p () :|: S p ())
     bexec = prep >>> beval 0
         where prep = bfirst (bfmap f &&& bconst ()) >>> bassocrp
-              f b' = bsecond b' >>> bfst
+              f b' = bsecond b' >>> bfst -- modifies b'
 
 
 -- WISHLIST: a behavior-level map operation.
