@@ -51,8 +51,6 @@ module Sirea.PCX
 import Data.Typeable
 import Data.Dynamic
 import Data.IORef
-import Control.Concurrent.MVar
-import Data.HashTable (hashString)
 import Control.Monad.Fix (mfix)
 import System.IO.Unsafe (unsafePerformIO, unsafeInterleaveIO)
 
@@ -99,6 +97,7 @@ instance Typeable1 PCX where
 --
 --   * no observable side-effects in the locator
 --   * no observable effects for mere existence of resource
+--   * not sensitive to thread in which construction occurs
 --
 -- That is, we shouldn't see anything unless we agitate resources by
 -- further IO operations.
@@ -117,19 +116,15 @@ instance (Typeable p) => Resource (PCX p) where
         return (PCX { pcx_ident = ident', pcx_store = store' })
 
 -- Some utility instances.
-instance Resource () where
-    locateResource _ = return ()
 instance Resource [TypeRep] where
     locateResource = return . pcx_ident
 instance Resource [Char] where
-    locateResource = return . concatMap tyrToPathStr . pcx_ident
-        where tyrToPathStr ty = '/':(show ty)
-instance Resource Int where
-    locateResource = return . fromIntegral . hashString . findInPCX 
-instance (Resource x) => Resource (IORef x) where
-    locateResource pcx = newIORef (findInPCX pcx)
-instance (Typeable x) => Resource (MVar x) where
-    locateResource _   = newEmptyMVar
+    locateResource = return . concatMap tyrepToPathStr . pcx_ident
+        where tyrepToPathStr ty = '/':(show ty)
+instance (Typeable a) => Resource (IORef (Maybe a)) where
+    locateResource _ = newIORef Nothing
+instance (Typeable a) => Resource (IORef [a]) where
+    locateResource _ = newIORef []
 instance (Resource x, Resource y) => Resource (x,y) where
     locateResource pcx = return (findInPCX pcx, findInPCX pcx)
 instance (Resource x, Resource y, Resource z) => Resource (x,y,z) where
@@ -152,7 +147,14 @@ instance (Resource t, Resource u, Resource v, Resource w, Resource x
                 , findInPCX pcx, findInPCX pcx, findInPCX pcx, findInPCX pcx)
    
 
--- | findInPCX pcx - find a resource in the pcx (based on its type).
+-- | Find a resource in the partition context based on its type.
+--
+-- This provides a pure interface to represent that the resource
+-- already exists (according to the abstraction) and we're just
+-- searching for it. Resources are initialized lazily. Since 
+-- lookups are idempotent, there are no issues of unsafe IO being
+-- duplicated.
+--
 findInPCX :: (Resource r) => PCX p -> r
 findInPCX = unsafePerformIO . findInPCX_IO
 

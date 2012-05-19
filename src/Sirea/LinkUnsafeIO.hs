@@ -55,7 +55,6 @@ dtFinal = 3.0 -- seconds
 -- easy support for debugging, HUnit tests - stuff that is intended 
 -- for easy removal. The signal itself is passed along untouched 
 -- after performing the IO.
-
 -- 
 -- unsafeOnUpdateB qualifies as an effectful sink, i.e. it will keep
 -- a behavior alive. This will interfere with dead code elimination,

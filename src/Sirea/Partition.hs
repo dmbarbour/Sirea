@@ -171,9 +171,9 @@ instance Typeable1 Pt where
 instance (Typeable x) => Partition (Pt x) where
     newPartitionThread _ = newPartitionThreadPt
 
--- | P0 = Pt () - a special partition representing the
--- main RDP behavior. (The crossB behavior has special
--- code for the main parititon.)
+-- | P0 = Pt () - special meaning, representing the main partition,
+-- the user-controlled thread. Some dedicated code exists to handle
+-- this case in the primitive cross behavior.
 type P0 = Pt ()
 
 -- | Cross between partitions (without syntactic hassle). 

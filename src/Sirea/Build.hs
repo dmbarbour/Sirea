@@ -18,24 +18,26 @@ import Sirea.BCX
 
 -- | This is what an RDP application looks like in Sirea:
 --
---     type SireaApp = forall w . B w (S P0 ()) (S P0 ())
+--     type SireaApp = BCX (S P0 ()) (S P0 ())
 --
 -- Such a behavior is intended for side-effects. The response signal
 -- is not used. Effects are achieved by signals to partitions that
 -- integrate with real-world resources - user interfaces, sensors,
--- actuators, and databases.
+-- actuators, and databases. BCX effectively provides a global space
+-- per SireaApp to maintain local proxies and adapters to arbitrary
+-- resources.
 --
 -- Even though the response signal is useless, Sirea behaviors are
 -- still very composable. Compose in parallel with (&&&). Use choice
 -- ((:|:) or dynamic behaviors) to model switching and modes based
--- on state.
--- can be compobe usefully composed in
--- parallel (&&&), or with choice (using beval or (:|:)). Parallel
--- behaviors may interact via shared services and state. Publishing
--- dynamic behaviors to a shared registry allows plugins.
+-- on a stateful element. Use shared state and blackboard metaphor
+-- for collaboration. Publish dynamic behaviors to common registries
+-- to represent plugins, extensions, and icon-like applications. 
 --
+-- Most Sirea clients should just create one, big SireaApp, perhaps
+-- leveraging dynamic behaviors, rather than a bunch of small ones.
 --
-type SireaApp w = B w (S P0 ()) (S P0 ())
+type SireaApp = forall w . B w (S P0 ()) (S P0 ())
 
 -- | Build the "main" Sirea behavior, generating a Stepper for use
 -- in a user-controlled event loop. The application receives a fresh
@@ -53,7 +55,7 @@ type SireaApp w = B w (S P0 ()) (S P0 ())
 -- passive behavior. Result is better anticipation and more control
 -- over logical shutdown time. 
 --
-buildSireaApp :: SireaApp w -> IO (Stepper, Stopper)
+buildSireaApp :: SireaApp -> IO (Stepper, Stopper)
 buildSireaApp b = 
     newPCX >>= \ appCX -> 
     let dt0 = LnkDUnit ldt_zero in
@@ -82,7 +84,7 @@ buildSireaBLU mcx lu = undefined
 -- runSireaApp. It will build the application and run it until the
 -- thread receives a kill signal, at which point it will gracefully
 -- shut down (unless killed again).
-runSireaApp :: SireaApp w -> IO ()
+runSireaApp :: SireaApp -> IO ()
 runSireaApp b = buildSireaApp b >>= basicSireaAppLoop
 
 basicSireaAppLoop :: (Stepper, Stopper) -> IO ()

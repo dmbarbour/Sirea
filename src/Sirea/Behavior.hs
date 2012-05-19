@@ -174,8 +174,8 @@ bstratf runF = bfmap (runF . fmap return) >>> bstrat
 -- durations and approximately for the same times (modulo variations
 -- in delay). This can be understood as modeling parallel pipelines. 
 --
---     bfirst - operate on just one signal (the first one)
---     bdup - duplicate any signal and process both pipelines.
+--     bfirst - operate on the first signal
+--     bdup - duplicate any signal, new parallel pipeline
 --     bfst - keep the first signal, drop the second.
 --     bswap - products are commutative
 --     bassoclp - products are associative (move parens left)
@@ -183,7 +183,7 @@ bstratf runF = bfmap (runF . fmap return) >>> bstrat
 -- The above operations should be free at runtime. A few operations 
 -- are defined based on the above. 
 --
---     bsecond - operate on second signal
+--     bsecond - operate on the second signal
 --     bsnd - keep second signal, drop first
 --     bassocrp - products are associative (move parens right)
 --     (***) - operate on first and second in parallel
