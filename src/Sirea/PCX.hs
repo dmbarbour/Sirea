@@ -5,17 +5,14 @@
 -- RDP has a conservative notion of resources: services, resources,
 -- shared state, etc. are external to behaviors; nothing is created,
 -- nothing is destroyed. Developers will use discovery idioms, paths
--- and names. RDP is effectful, so there is no semantic concern with
--- initializing resources after they are discovered. 
---
--- A useful idiom: abstract infinite spaces of resources, and lazily
--- initialize resources (if necessary) as they are discovered.
---
+-- and names. A useful idiom: abstract infinite spaces of resources,
+-- and lazily initialize resources as they are discovered or used.
 -- It is easy to partition infinite space into more infinite spaces.
 -- Every RDP application can thus have its own, infinite corner of 
 -- the universe. This is compatible with the perspective that it is 
 -- RDP "all the way down" - an RDP application is a dynamic behavior
--- that manipulates resources in a local partition.
+-- that manipulates resources in a local partition, provided by the
+-- lower layer RDP behavior.
 --
 -- Sirea also uses this conservative notion of resources to achieve
 -- a more declarative programming experience. This is expressed in
@@ -27,19 +24,25 @@
 -- accessible if only we can name them. The naming in PCX is based
 -- on Data.Typeable, though developers are free to extend this by
 -- naming resources that represent spaces of resources with another
--- naming conventions.
+-- naming convention.
 --
 -- PCX is most useful for volatile resources, which will not survive
 -- destruction of the Haskell process. Persistent resources benefit
--- by use of volatile proxies, e.g. to cache a value. PCX is used in
--- Sirea core for threads and hooking up communication between them.
--- It will be more heavily used for FFI adapters, e.g. to represent
--- control over a GLUT window.
+-- by use of volatile proxies, e.g. to maintain connections, process
+-- updates, cache values. PCX is used in Sirea core for threads and 
+-- hooking up communication between them. It will be heavily used by 
+-- FFI adapters, e.g. to represent control over a GLUT window.
 --
 -- NOTE: Threading PCX through an application would grow irritating.
 -- However, a simple behavior transformer can make it a lot nicer.
 -- Another module in Sirea will provide the BCX type to carry an
 -- initial PCX to every element in a behavior that might want it.
+--
+-- NOTE: PCX is very simple and does not handle larger concerns such
+-- as configurations, policies, and dependency injection. Don't try
+-- to force it; configuration via mutable variables is just awkward.
+-- I'll tackle those concerns at a higher layer (along with plugins,
+-- live programming and configuration).
 -- 
 module Sirea.PCX
     ( PCX    -- abstract
@@ -118,9 +121,6 @@ instance (Typeable p) => Resource (PCX p) where
 -- Some utility instances.
 instance Resource [TypeRep] where
     locateResource = return . pcx_ident
-instance Resource [Char] where
-    locateResource = return . concatMap tyrepToPathStr . pcx_ident
-        where tyrepToPathStr ty = '/':(show ty)
 instance (Typeable a) => Resource (IORef (Maybe a)) where
     locateResource _ = newIORef Nothing
 instance (Typeable a) => Resource (IORef [a]) where
@@ -167,13 +167,14 @@ loadOrAdd :: (Typeable r) => r -> [Dynamic] -> ([Dynamic],r)
 loadOrAdd newR dynL =
     case fromDynList dynL of
         Just oldR -> (dynL, oldR)
-        Nothing   -> 
-            let dynL' = (toDyn newR):dynL in
-            (dynL' , newR)
+        Nothing ->
+            let dynR = toDyn newR in
+            dynTypeRep dynR `seq` -- for consistency
+            (dynR:dynL, newR)
 
 fromDynList :: (Typeable r) => [Dynamic] -> Maybe r
 fromDynList [] = Nothing
-fromDynList (x:xs) = maybe (fromDynList xs) Just (fromDynamic x) 
+fromDynList (x:xs) = maybe (fromDynList xs) Just (fromDynamic x)
 
 -- | newPCX - a `new` PCX space, unique and fresh.
 -- You can find any number of child PCX spaces.
@@ -181,9 +182,5 @@ newPCX :: IO (PCX w)
 newPCX = 
     newIORef [] >>= \ rf ->
     return $ PCX { pcx_ident = [], pcx_store = rf  }
-
-
-
-
 
 
