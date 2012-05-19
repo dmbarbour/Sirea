@@ -30,39 +30,39 @@ dtScanAheadB, dtTouchB :: DT
 dtScanAheadB = 2.0 -- seconds ahead of stability
 dtTouchB = 0.1 -- seconds ahead of stability
 
-eqfB :: (x -> x -> Bool) -> B (S p x) (S p x)
+eqfB :: (x -> x -> Bool) -> B w (S p x) (S p x)
 eqfB eq = unsafeEqShiftB dtScanAheadB eq
 
-instance BFmap B where 
+instance BFmap (B w) where 
     bfmap    = fmapB
     bconst c = constB c >>> eqfB (const $ const True)
     bstrat   = stratB 
     btouch   = touchB dtTouchB
     badjeqf  = adjeqfB >>> eqfB (==)
-instance BProd B where
+instance BProd (B w) where
     bfirst   = firstB
     bdup     = dupB
     bfst     = fstB
     bswap    = swapB
     bassoclp = assoclpB
-instance BSum B where
+instance BSum (B w) where
     bleft    = leftB
     bmirror  = mirrorB
     bmerge   = mergeB
     binl     = inlB
     bassocls = assoclsB
-instance BZip B where
+instance BZip (B w) where
     bzap     = zapB
-instance BSplit B where
+instance BSplit (B w) where
     bsplit   = splitB
-instance BDisjoin B where 
+instance BDisjoin (B w) where 
     bdisjoin = disjoinB
-instance BTemporal B where
+instance BTemporal (B w) where
     bdelay   = delayB
     bsynch   = synchB
-instance BPeek B where
+instance BPeek (B w) where
     bpeek    = peekB
-instance Behavior B
+instance Behavior (B w)
 
 
 

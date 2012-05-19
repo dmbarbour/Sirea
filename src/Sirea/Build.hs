@@ -1,4 +1,4 @@
-{-# LANGUAGE GADTs, EmptyDataDecls #-}
+{-# LANGUAGE GADTs, EmptyDataDecls, Rank2Types #-}
 
 -- | "Build" a Sirea behavior for embedding in an external loop.
 module Sirea.Build
@@ -35,7 +35,7 @@ import Sirea.BCX
 -- dynamic behaviors to a shared registry allows plugins.
 --
 --
-type SireaApp = B (S P0 ()) (S P0 ())
+type SireaApp w = B w (S P0 ()) (S P0 ())
 
 -- | Build the "main" Sirea behavior, generating a Stepper for use
 -- in a user-controlled event loop. The application receives a fresh
@@ -53,7 +53,7 @@ type SireaApp = B (S P0 ()) (S P0 ())
 -- passive behavior. Result is better anticipation and more control
 -- over logical shutdown time. 
 --
-buildSireaApp :: SireaApp -> IO (Stepper, Stopper)
+buildSireaApp :: SireaApp w -> IO (Stepper, Stopper)
 buildSireaApp b = 
     newPCX >>= \ appCX -> 
     let dt0 = LnkDUnit ldt_zero in
@@ -74,7 +74,7 @@ zeroStopper = Stopper
     , addStopperEvent = id -- run stopper event immediately
     } 
 
-buildSireaBLU :: PCX () -> LnkUp () -> IO (Stepper, Stopper)
+buildSireaBLU :: PCX w -> LnkUp () -> IO (Stepper, Stopper)
 buildSireaBLU mcx lu = undefined
     
 
@@ -82,7 +82,7 @@ buildSireaBLU mcx lu = undefined
 -- runSireaApp. It will build the application and run it until the
 -- thread receives a kill signal, at which point it will gracefully
 -- shut down (unless killed again).
-runSireaApp :: SireaApp -> IO ()
+runSireaApp :: SireaApp w -> IO ()
 runSireaApp b = buildSireaApp b >>= basicSireaAppLoop
 
 basicSireaAppLoop :: (Stepper, Stopper) -> IO ()

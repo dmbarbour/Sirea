@@ -58,7 +58,7 @@ import Control.Exception (assert)
 -- effects should wait for an active input signal. IO to build links
 -- is intended for building local resources: caches, resource hooks.
 --
-unsafeLnkB :: MkLnk x y -> B x y
+unsafeLnkB :: MkLnk w x y -> B w x y
 unsafeLnkB ln = bsynch >>> B_tshift xBarrier >>> B_mkLnk tr_unit ln
     where xBarrier dts =
             assert (ldt_valid dts) $

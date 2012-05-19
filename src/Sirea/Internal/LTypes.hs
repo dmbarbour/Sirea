@@ -42,7 +42,15 @@ import Data.IORef
 --   peek - how much the link might peek into the future to. May
 --     influence choked updates and other optimizations.
 --
-data MkLnk x y = MkLnk 
+-- Many MkLnk structures need a `PCX` argument to access resources
+-- without using global state. In that case, developers should use:
+--
+--    PCX w () -> MkLnk w x y
+--
+-- This leverages phantom types to enforce that PCX values do not
+-- cross between separate SireaApp instances. 
+--
+data MkLnk w x y = MkLnk 
     { ln_build  :: !(Lnk y -> IO (Lnk x))
     , ln_tsen   :: !Bool 
     , ln_peek   :: !DT

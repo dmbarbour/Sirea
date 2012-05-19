@@ -60,7 +60,7 @@ dtFinal = 3.0 -- seconds
 -- unsafeOnUpdateB qualifies as an effectful sink, i.e. it will keep
 -- a behavior alive. This will interfere with dead code elimination,
 -- and so may be unsuitable for debugging purposes.
-unsafeOnUpdateB :: (Eq a) => (T -> Maybe a -> IO ()) -> B (S p a) (S p a)
+unsafeOnUpdateB :: (Eq a) => (T -> Maybe a -> IO ()) -> B w (S p a) (S p a)
 unsafeOnUpdateB op = unsafeOnUpdateBL op >>> undeadB
 
 -- | unsafeOnUpdateBL - a very lazy variation of unsafeOnUpdateB.
@@ -69,7 +69,7 @@ unsafeOnUpdateB op = unsafeOnUpdateBL op >>> undeadB
 --
 -- Only suitable for signals you'll need for other reasons.
 --
-unsafeOnUpdateBL :: (Eq a) => (T -> Maybe a -> IO ()) -> B (S p a) (S p a)
+unsafeOnUpdateBL :: (Eq a) => (T -> Maybe a -> IO ()) -> B w (S p a) (S p a)
 unsafeOnUpdateBL op = unsafeLnkB blLnk
     where blLnk = MkLnk { ln_build = build
                         , ln_tsen = True
@@ -132,7 +132,7 @@ runToStability rfSig rfA op su =
 -- but will check to see whether it's all dead code. If not, the 
 -- IO effect is activated.
 unsafeOnUpdateBLN :: (Eq a) => (T -> Maybe a -> IO ()) 
-                    -> B (S p a :&: x) (S p a :&: x)
+                    -> B w (S p a :&: x) (S p a :&: x)
 unsafeOnUpdateBLN op = bfirst (unsafeOnUpdateBL op) >>> keepAliveB
 
 

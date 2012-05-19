@@ -22,7 +22,7 @@ import Control.Exception (assert)
 -- Note: there is no integration with the Stepper at this point. Any
 -- behaviors that need staging via the Stepper should have achieved 
 -- it via MkLnk.
-compileB :: B x y -> LnkD LDT x -> Lnk y -> (LnkD LDT y, IO (Lnk x))
+compileB :: B w x y -> LnkD LDT x -> Lnk y -> (LnkD LDT y, IO (Lnk x))
 compileB bxy dtx lny =
     assert (ldt_valid dtx) $
     let (bxy', dty) = compileBC0 bxy dtx in
@@ -33,7 +33,7 @@ compileB bxy dtx lny =
 -- | This is an initial left-to-right compile within a behavior. It
 -- computes the timing properties of the resulting signal, applies 
 -- latent updates, and eliminates dead code on input. 
-compileBC0 :: B x z -> LnkD LDT x -> (B x z, LnkD LDT z)
+compileBC0 :: B w x z -> LnkD LDT x -> (B w x z, LnkD LDT z)
 compileBC0 (B_pipe bxy byz) dtx =
     let (bxy', dty) = compileBC0 bxy dtx in
     let (byz', dtz) = compileBC0 byz dty in
@@ -61,7 +61,7 @@ compileBC0 bxz@(B_mkLnk fn _) dtx =
 
 -- | This is the right-to-left pass to build the behavior. It assumes
 -- that B_latent and B_tshift have been handled by compileBC0.
-compileBC1 :: B x z -> Lnk z -> IO (Lnk x)
+compileBC1 :: B w x z -> Lnk z -> IO (Lnk x)
 compileBC1 (B_pipe bxy byz) lnz = 
     compileBC1 byz lnz >>= compileBC1 bxy 
 compileBC1 (B_first bef) lnz =
@@ -79,7 +79,7 @@ compileBC1 (B_mkLnk _ mkLnk) lnz =
 
 -- | tshiftB turns a difference of `tshift` values into a MkLnk behavior.
 -- This is used by the compiler to apply delays. 
-tshiftB :: LnkD LDT x -> LnkD LDT x -> B x x
+tshiftB :: LnkD LDT x -> LnkD LDT x -> B w x x
 tshiftB t0 tf = B_mkLnk id lnk
     where build = buildTshift t0 tf
           lnk = MkLnk { ln_build = return . build 

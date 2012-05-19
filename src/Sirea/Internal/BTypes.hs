@@ -30,10 +30,12 @@ import Control.Exception (assert)
 import Data.Typeable -- B is typeable
 
 
--- | (B x y) describes an RDP behavior - a signal transformer with
+-- | (B w x y) describes an RDP behavior - a signal transformer with
 -- potential for declarative `demand effects`. Signal x is called
 -- the demand, and y the response. Behaviors may be composed, so the
 -- response from one behavior easily becomes demand on another.
+--
+-- Type `w` for the signal regards the scope of side-effects. 
 --
 -- A common effect on demand is to acquire resources, e.g. to power
 -- up a sensor only while there is code interested in observing it.
@@ -61,26 +63,26 @@ import Data.Typeable -- B is typeable
 -- Behaviors compose much like arrows (from Control.Arrow), but are
 -- more constrained due to partitioning, asynchrony, and duration
 -- coupling. 
-data B x y where
+data B w x y where
   -- most operations
-  B_mkLnk   :: !(TR x y) -> !(MkLnk x y) -> B x y
+  B_mkLnk   :: !(TR x y) -> !(MkLnk w x y) -> B w x y
 
   -- time modeling, logical delay, concrete delay
-  B_tshift  :: !(TS x) -> B x x
+  B_tshift  :: !(TS x) -> B w x x
 
   -- category
-  B_pipe    :: !(B x y) -> !(B y z) -> B x z
+  B_pipe    :: !(B w x y) -> !(B w y z) -> B w x z
 
   -- arrows
-  B_first   :: !(B x x') -> B (x :&: y) (x' :&: y)
-  B_left    :: !(B x x') -> B (x :|: y) (x' :|: y)
+  B_first   :: !(B w x x') -> B w (x :&: y) (x' :&: y)
+  B_left    :: !(B w x x') -> B w (x :|: y) (x' :|: y)
 
   -- bmerge needed some extra info to perform critical
   -- dead code elimination. Basically, it needs compile
   -- data from the forward pass.
-  B_latent  :: !(LnkD LDT x -> B x y) -> B x y
+  B_latent  :: !(LnkD LDT x -> B w x y) -> B w x y
 
-  -- B_unique :: !UniqueID -> !(B x y) -> B x y
+  -- B_unique :: !UniqueID -> !(B w x y) -> B w x y
 
 
 -- POSSIBILITY: Add the UniqueID automatically with unsafeLnkB 
@@ -97,12 +99,12 @@ data B x y where
 tcB :: TyCon
 tcB = mkTyCon3 "Sirea" "Behavior" "B"
 
-instance Typeable2 B where
+instance Typeable2 (B w) where
     typeOf2 _ = mkTyConApp tcB []
 
 
 -- | delay computation of B x y until timing info is available
-latentOnTime :: (LnkD LDT x -> B x y) -> B x y
+latentOnTime :: (LnkD LDT x -> B w x y) -> B w x y
 latentOnTime fn = B_latent fn
 
 
