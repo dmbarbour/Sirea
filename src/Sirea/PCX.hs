@@ -1,4 +1,4 @@
-{-# LANGUAGE EmptyDataDecls #-}
+{-# LANGUAGE EmptyDataDecls, FlexibleInstances #-}
 
 -- | Declarative resource linking mechanism for Haskell.
 --
@@ -43,40 +43,53 @@
 -- 
 module Sirea.PCX
     ( PCX    -- abstract
-    , pcxid  -- the current path in the PCX. 
     , newPCX -- a new toplevel
-    , findIn -- the lookup function
+    , findInPCX -- the lookup function
     , Resource(..)
     ) where
 
-import Data.IORef
-import Control.Concurrent.MVar
 import Data.Typeable
 import Data.Dynamic
+import Data.IORef
+import Control.Concurrent.MVar
+import Data.HashTable (hashString)
+import Control.Monad.Fix (mfix)
+import System.IO.Unsafe (unsafePerformIO, unsafeInterleaveIO)
 
 -- | PCX p - Partition Resource Context. Abstract.
 --
 -- A partition context is an infinite, uniform space of resources.
--- It holds one resource of each type. Though, it is easy to model
--- multiple instances:
---   * a child PCX; look for the same resource there
---   * a newtype with a phantom type (per instance)
---   * a resource representing a mutable collection
+-- It holds one resource of each type. Conceptually, it is already
+-- holding those resources, and we just need to look for them. So
+-- access to any particular resource is idempotent and offers a
+-- pretense of purity.
 --
--- PCX uses dynamic types, decoupling its interface from particulars
--- of the behaviors being implemented. 
--- PCX is potentially infinite to deal with unknown cases, but is 
--- designed for the common case where only a small, static set of
--- resources is looked up *once* (at build time) then used for a
--- long time.
+-- Multiple instances of one type are easily achieved by modeling
+-- another resource space as a resource. E.g. if you want a space
+-- with integers mapped to state, you can do that - just write the
+-- type and add a Resource instance for it. Child PCX contexts are
+-- also accessible as resources.
+--
+-- NOTE: `PCX w` has connotations that `w` is the full world, i.e.
+-- the root partition created by `newPCX`. It is also used in type
+-- matching to provide a little extra protection against accidental
+-- connections between SireaApp applications. `PCX p` refers to a
+-- child PCX for a specific thread or partition. Partitions do not
+-- directly share resources, but behaviors orchestrate communication
+-- between partitions to allow indirect sharing.
+--
+-- Assume finding resources in PCX is moderately expensive. Rather
+-- than looking for the resources you need each time you need them,
+-- take them all up front.
+--
 data PCX p = PCX 
     { pcx_ident :: [TypeRep]
     , pcx_store :: IORef [Dynamic]
-    , pcx_mutex :: MVar ()
     }
 
-pcxid :: PCX p -> [TypeRep]
-pcxid = pcx_ident
+instance Typeable1 PCX where
+    typeOf1 _ = mkTyConApp tycPCX []
+        where tycPCX = mkTyCon3 "Sirea" "PCX" "PCX"
 
 -- | Resource - found inside a PCX. 
 --
@@ -85,48 +98,87 @@ pcxid = pcx_ident
 -- we are locating resources, not creating them. This requires:
 --
 --   * no observable side-effects in the locator
---   * resources are passive until operations invoked on them
+--   * no observable effects for mere existence of resource
 --
--- The locator has recursive access to other resources, and to an
--- argument representing the unique ID of that resource up to the 
--- newPCX.
+-- That is, we shouldn't see anything unless we agitate resources by
+-- further IO operations.
+--
+-- NOTE: Resource dependencies probably need to be acyclic. A degree
+-- of evaluation is forced by comparing TypeReps.
 class (Typeable r) => Resource r where
     locateResource :: PCX p -> IO r
 
--- | findIn pcx - Each PCX contains one of each Resource.
---
--- This operation is idempotent. The same resource will be found
--- every time.
-findIn :: (Resource r) => PCX p -> IO r
-findIn pcx = 
-    takeMVar (pcx_mutex pcx) >>
-    readIORef (pcx_store pcx) >>= \ lDyns ->
-    case fromDynList lDyns of
-        Just r -> 
-            putMVar (pcx_mutex pcx) () >> 
-            return r
-        Nothing ->
-            locateResource  pcx >>= \ r ->
-            writeIORef (pcx_store pcx) ((toDyn r):lDyns) >> 
-            putMVar (pcx_mutex pcx) () >>
-            return r
+instance (Typeable p) => Resource (PCX p) where
+    locateResource pcx =
+        mfix $ \ pcx' ->
+        newIORef [] >>= \ store' ->
+        let typ  = (head . typeRepArgs . typeOf) pcx' in
+        let ident' = typ:(pcx_ident pcx) in
+        return (PCX { pcx_ident = ident', pcx_store = store' })
+
+-- Some utility instances.
+instance Resource () where
+    locateResource _ = return ()
+instance Resource [TypeRep] where
+    locateResource = return . pcx_ident
+instance Resource [Char] where
+    locateResource = return . concatMap tyrToPathStr . pcx_ident
+        where tyrToPathStr ty = '/':(show ty)
+instance Resource Int where
+    locateResource = return . fromIntegral . hashString . findInPCX 
+instance (Resource x) => Resource (IORef x) where
+    locateResource pcx = newIORef (findInPCX pcx)
+instance (Typeable x) => Resource (MVar x) where
+    locateResource _   = newEmptyMVar
+instance (Resource x, Resource y) => Resource (x,y) where
+    locateResource pcx = return (findInPCX pcx, findInPCX pcx)
+instance (Resource x, Resource y, Resource z) => Resource (x,y,z) where
+    locateResource pcx = return (findInPCX pcx, findInPCX pcx, findInPCX pcx)
+instance (Resource w, Resource x, Resource y, Resource z) 
+    => Resource (w,x,y,z) where
+    locateResource pcx = return (findInPCX pcx, findInPCX pcx
+                                ,findInPCX pcx, findInPCX pcx)
+instance (Resource v, Resource w, Resource x, Resource y, Resource z) 
+    => Resource (v,w,x,y,z) where
+    locateResource pcx = return (findInPCX pcx, findInPCX pcx, findInPCX pcx
+                                ,findInPCX pcx, findInPCX pcx)
+instance (Resource u, Resource v, Resource w, Resource x
+         ,Resource y, Resource z) => Resource (u,v,w,x,y,z) where
+    locateResource pcx = return (findInPCX pcx, findInPCX pcx, findInPCX pcx
+                                ,findInPCX pcx, findInPCX pcx, findInPCX pcx)
+instance (Resource t, Resource u, Resource v, Resource w, Resource x
+         ,Resource y, Resource z) => Resource (t,u,v,w,x,y,z) where
+    locateResource pcx = return (findInPCX pcx, findInPCX pcx, findInPCX pcx
+                , findInPCX pcx, findInPCX pcx, findInPCX pcx, findInPCX pcx)
+   
+
+-- | findInPCX pcx - find a resource in the pcx (based on its type).
+findInPCX :: (Resource r) => PCX p -> r
+findInPCX = unsafePerformIO . findInPCX_IO
+
+findInPCX_IO :: (Resource r) => PCX p -> IO r 
+findInPCX_IO pcx =  
+    unsafeInterleaveIO (locateResource pcx) >>= \ newR ->
+    atomicModifyIORef (pcx_store pcx) (loadOrAdd newR)
+
+loadOrAdd :: (Typeable r) => r -> [Dynamic] -> ([Dynamic],r)
+loadOrAdd newR dynL =
+    case fromDynList dynL of
+        Just oldR -> (dynL, oldR)
+        Nothing   -> 
+            let dynL' = (toDyn newR):dynL in
+            (dynL' , newR)
 
 fromDynList :: (Typeable r) => [Dynamic] -> Maybe r
 fromDynList [] = Nothing
 fromDynList (x:xs) = maybe (fromDynList xs) Just (fromDynamic x) 
 
--- | newPCX - a `new` PCX space, unique and fresh. An initial name
--- may be provided based on the root type. While developers could 
--- create more than one PCX, one is sufficient, since PCX is itself
--- a resource.
-newPCX :: IO (PCX ())
+-- | newPCX - a `new` PCX space, unique and fresh.
+-- You can find any number of child PCX spaces.
+newPCX :: IO (PCX w)
 newPCX = 
     newIORef [] >>= \ rf ->
-    newMVar () >>= \ mx ->
-    let pcx = PCX { pcx_ident = []
-                  , pcx_store = rf 
-                  , pcx_mutex = mx } in
-    return pcx
+    return $ PCX { pcx_ident = [], pcx_store = rf  }
 
 
 
