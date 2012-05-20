@@ -4,7 +4,7 @@
 -- applicative when building the behavior.  
 module Sirea.Trans.Static
     ( StaticB
-    , toStatic, runStatic
+    , wrapStatic, unwrapStatic
     ) where
 
 import Prelude hiding (id,(.))
@@ -15,11 +15,11 @@ import Sirea.Partition
 
 newtype StaticB f b x y = SB (f (b x y))
 
-toStatic :: f (b x y) -> StaticB f b x y
-toStatic = SB
+wrapStatic :: f (b x y) -> StaticB f b x y
+wrapStatic = SB
 
-runStatic :: StaticB f b x y -> f (b x y)
-runStatic (SB fbxy) = fbxy
+unwrapStatic :: StaticB f b x y -> f (b x y)
+unwrapStatic (SB fbxy) = fbxy
 
 -- from Sirea.Behavior
 instance (Applicative f) => BEmbed b (StaticB f b) where

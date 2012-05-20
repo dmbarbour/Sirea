@@ -74,10 +74,10 @@ data LnkW s a where
 --
 --   ln_touch - call this if an update is guaranteed in the near
 --      future but not immediately. Allows later stages in the pipe
---      to wait for the update.
+--      to wait for the update. Can prevent redundant computations.
+--
 --   ln_update - updates the entire future of a signal (see SigUp).
---      Note that shutdown is also modeled as an update (using the 
---      signal s_never).
+--      Shutdown is also modeled as an update, using s_never.
 -- 
 -- Dead code is better represented by LnkDead than by trivial LnkUp.
 data LnkUp a = LnkUp

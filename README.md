@@ -76,7 +76,7 @@ Sirea requires a *transparent, symbolic* model for continuous signals - sacrific
 * [trigonometric polynomials](http://en.wikipedia.org/wiki/Trigonometric_polynomial)
 * plain old [polynomials](http://en.wikipedia.org/wiki/Polynomial)
 
-Both of these admit an efficient representation as a vector of coefficients, and precise addition, negation, integral, derivative, and multiplication operations. Precise zero crossings are achievable. To support most domains, vectors and matrices of these signals would also be supported (e.g. to model a surface, position, or orientation that varies over time). Both are potentially suitable for use in video shaders or parallelism with OpenCL.
+Both of these admit an efficient representation as a vector of coefficients, and precise addition, negation, integral, derivative, and multiplication operations. Precise zero crossings are achievable. Both are potentially suitable for use in video shaders or parallelism with OpenCL. To support most domains, vectors and matrices of these signals would also be supported (e.g. to model a surface, position, or orientation that varies over time). 
 
 This feature isn't critical to Sirea, and will be provided by a separate library. It is still of some importance since it would be valuable for a lot of user-facing applications (and a few interesting state models). 
 

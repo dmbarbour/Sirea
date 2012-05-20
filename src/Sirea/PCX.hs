@@ -104,9 +104,6 @@ instance Typeable1 PCX where
 --
 -- That is, we shouldn't see anything unless we agitate resources by
 -- further IO operations.
---
--- NOTE: Resource dependencies probably need to be acyclic. A degree
--- of evaluation is forced by comparing TypeReps.
 class (Typeable r) => Resource r where
     locateResource :: PCX p -> IO r
 

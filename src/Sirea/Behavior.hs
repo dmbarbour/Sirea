@@ -1,5 +1,5 @@
 
-{-# LANGUAGE TypeOperators, MultiParamTypeClasses, Rank2Types #-}
+{-# LANGUAGE TypeOperators, MultiParamTypeClasses, FlexibleInstances, Rank2Types #-}
 
 -- | This module describes RDP behaviors classes in Sirea. Behaviors 
 -- are a restricted class of Arrows that transform and orchestrate 
@@ -467,6 +467,8 @@ class (Behavior b, Behavior b' {-, BEmbed b' b -}) => BDynamic b b' where
 class BEmbed b' b where
     bembed :: b' x y -> b x y
 
+instance BEmbed b b where
+    bembed = id
 
 -- TODO: convenience operators?
 --  I've added Bdeep - eqvs. of bcadadr and setf bcadadr from Lisp
