@@ -224,11 +224,12 @@ newPartitionThreadPt stepper =
     newIORef emptyStopData >>= \ rfStop -> 
     let event = tryPutMVar rfWait () >> return () in
     let stop  = finiStopData rfStop in
-    let loop  = addStepperEvent stepper event >>
+    let loop  = readIORef rfStop >>= \ sd ->
+                if shouldStop sd then stop else
+                addStepperEvent stepper event >>
                 takeMVar rfWait >>
                 runStepper stepper >>
-                readIORef rfStop >>= \ sd ->
-                if shouldStop sd then stop else loop
+                loop
     in 
     forkIO loop >>
     return (makeStopper rfStop)   

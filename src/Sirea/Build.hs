@@ -3,15 +3,21 @@
 -- | "Build" a Sirea behavior for embedding in an external loop.
 module Sirea.Build
     ( buildSireaApp
+    , SireaApp
     , runSireaApp
-    , SireaApp, P0
+    , unsafeKillP0
     ) where
 
+import Data.IORef
+import Control.Concurrent.MVar
+import Control.Exception (finally, mask_)
+import Control.Concurrent (myThreadId, forkIO, killThread)
 import Sirea.Internal.BTypes
 import Sirea.Internal.LTypes
 import Sirea.Internal.BCompile
 import Sirea.Behavior
 import Sirea.Partition
+import Sirea.LinkUnsafeIO
 import Sirea.PCX
 import Sirea.BCX
 
@@ -70,6 +76,8 @@ buildSireaApp app =
         LnkDead -> return (zeroStepper, zeroStopper)
         (LnkSig lu) -> buildSireaBLU cx lu
 
+-- zeroStepper and zeroStopper are used if the dead-code
+-- elimination happens to kill the whole application.
 zeroStepper :: Stepper 
 zeroStepper = Stepper 
     { runStepper = return ()
@@ -83,19 +91,54 @@ zeroStopper = Stopper
 
 buildSireaBLU :: PCX w -> LnkUp () -> IO (Stepper, Stopper)
 buildSireaBLU = undefined
-    
 
 -- | If you don't need to run the stepper yourself, consider use of
--- runSireaApp. It will build the application and run it until the
--- thread receives a kill signal, at which point it will gracefully
--- shut down (unless killed again).
+-- runSireaApp. This will simply run the application until the main
+-- thread receives a killThread signal, at which point it will try
+-- to shutdown gracefully. The signal can be delivered internally by
+-- use of unsafeKillP0. 
 runSireaApp :: SireaApp -> IO ()
-runSireaApp b = buildSireaApp b >>= basicSireaAppLoop
+runSireaApp app = buildSireaApp app >>= beginSireaApp
 
-basicSireaAppLoop :: (Stepper, Stopper) -> IO ()
-basicSireaAppLoop = undefined
+beginSireaApp :: (Stepper, Stopper) -> IO ()
+beginSireaApp (stepper,stopper) = 
+    newIORef True >>= \ rfContinue ->
+    addStopperEvent stopper (writeIORef rfContinue False) >>
+    let loop = basicSireaAppLoop rfContinue stepper in
+    loop `finally` (runStopper stopper >> loop)
+
+basicSireaAppLoop :: IORef Bool -> Stepper -> IO ()
+basicSireaAppLoop rfContinue stepper = 
+    readIORef rfContinue >>= \ bContinue ->
+    if (not bContinue) then return () else
+    newEmptyMVar >>= \ mvWait  ->
+    addStepperEvent stepper (putMVar mvWait ()) >>
+    takeMVar mvWait >>
+    mask_ (runStepper stepper) >>
+    basicSireaAppLoop rfContinue stepper 
     
 
+-- | unsafeKillP0 - use with runSireaApp. The first time the signal 
+-- stabilizes as active, unsafeKillP0 causes asynchronous killThread
+-- on the main (P0) thread. For runSireaApp, this causes a graceful 
+-- shutdown, but unsafeKillP0 should be unique in the app.
+--
+-- Note: even after kill, it may take a couple seconds to shut down.
+-- If that is too long, consider modeling shutdown properly as stage
+-- of RDP application - i.e. dynamic switching to shutdown behavior.
+--
+unsafeKillP0 :: BCX w (S P0 ()) (S P0 ())
+unsafeKillP0 = (wrapBCX . const) $ unsafeOnUpdateB $
+    newIORef False >>= \ rfKilled ->
+    let kill = readIORef rfKilled >>= \ bBlooded ->
+               if bBlooded then return () else
+               writeIORef rfKilled True >>
+               myThreadId >>= \ tidP0 ->
+               forkIO (killThread tidP0) >>
+               return () 
+    in
+    let op _ = maybe (return ()) (const kill) in
+    return op
 
 
 
