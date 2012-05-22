@@ -76,8 +76,6 @@ instance BCross (BCX w) where
 
 -- Special Cases:
 --   BDynamic - need BCX B, BCX BCX
---   BCross - initial instance
---   BEmbed
 
 --
 -- To consider and maybe do: something like

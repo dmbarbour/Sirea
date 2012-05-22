@@ -133,7 +133,6 @@ unsafeKillP0 = (wrapBCX . const) $ unsafeOnUpdateB $
     let kill = readIORef rfKilled >>= \ bBlooded ->
                if bBlooded then return () else
                writeIORef rfKilled True >>
-               -- fork (waits for mask to be removed)
                myThreadId >>= \ tidP0 ->
                forkIO (killThread tidP0) >>
                return () 

@@ -71,23 +71,19 @@ instance (SigInP p x, SigInP p y) => SigInP p (x :&: y) where
 instance (SigInP p x, SigInP p y) => SigInP p (x :|: y) where
     proofOfSigInP = trivialSigInP
 
----------------------------
--- Data.Typeable Support --
----------------------------
-
-tcSig, tcSum, tcProd :: TyCon
-tcSig  = mkTyCon3 "Sirea" "Behavior" "S"
-tcSum  = mkTyCon3 "Sirea" "Behavior" "(:|:)"
-tcProd = mkTyCon3 "Sirea" "Behavior" "(:&:)"
+-- Data.Typeable support. 
 
 instance Typeable2 S where
-    typeOf2 _ = mkTyConApp tcSig []
+    typeOf2 _ = mkTyConApp tycSig []
+        where tycSig = mkTyCon3 "Sirea" "Behavior" "S"
 
 instance Typeable2 (:|:) where
-    typeOf2 _ = mkTyConApp tcSum []
+    typeOf2 _ = mkTyConApp tycSum []
+        where tycSum = mkTyCon3 "Sirea" "Behavior" "(:|:)"
 
 instance Typeable2 (:&:) where
-    typeOf2 _ = mkTyConApp tcProd []
+    typeOf2 _ = mkTyConApp tycProd []
+        where tycProd = mkTyCon3 "Sirea" "Behavior" "(:&:)"
 
 
 
