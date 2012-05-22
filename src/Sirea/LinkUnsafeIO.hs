@@ -51,16 +51,17 @@ dtFinal = 3.0 -- seconds
 -- performing the IO). The IO action is executed when the value is
 -- fully stable, i.e. so you won't receive two updates for the same
 -- time. The motivation for unsafeOnUpdateB is easy support for 
--- debugging, unit tests, 
--- easy support for debugging, HUnit tests - stuff that is intended 
--- for easy removal. The signal itself is passed along untouched 
--- after performing the IO.
--- 
+-- debugging, unit tests, auditing, etc.
+--
+-- The outermost `IO` is called once, when the link is first built.
+-- It allows setting up any volatile resources, as necessary. This
+-- might be called from a different thread than `p`.
+--
 -- unsafeOnUpdateB qualifies as an effectful sink, i.e. it will keep
 -- a behavior alive. This will interfere with dead code elimination,
 -- and so may be unsuitable for debugging purposes.
-unsafeOnUpdateB :: (Eq a) => (T -> Maybe a -> IO ()) -> B w (S p a) (S p a)
-unsafeOnUpdateB op = unsafeOnUpdateBL op >>> undeadB
+unsafeOnUpdateB :: (Eq a) => IO (T -> Maybe a -> IO ()) -> B w (S p a) (S p a)
+unsafeOnUpdateB mkOp = unsafeOnUpdateBL mkOp >>> undeadB
 
 -- | unsafeOnUpdateBL - a very lazy variation of unsafeOnUpdateB.
 -- This variation allows dead-code elimination of the behavior when
@@ -68,13 +69,14 @@ unsafeOnUpdateB op = unsafeOnUpdateBL op >>> undeadB
 --
 -- Only suitable for signals you'll need for other reasons.
 --
-unsafeOnUpdateBL :: (Eq a) => (T -> Maybe a -> IO ()) -> B w (S p a) (S p a)
-unsafeOnUpdateBL op = unsafeLinkB blLnk
+unsafeOnUpdateBL :: (Eq a) => IO (T -> Maybe a -> IO ()) -> B w (S p a) (S p a)
+unsafeOnUpdateBL mkOp = unsafeLinkB blLnk
     where blLnk = MkLnk { ln_build = build
                         , ln_tsen = True
                         , ln_peek = 0     }
           build LnkDead = return LnkDead
           build (LnkSig lu) = 
+            mkOp >>= \ op ->
             newIORef (s_never,Nothing) >>= \ rfSig ->
             newIORef Nothing >>= \ rfA ->
             let update su =
@@ -130,9 +132,9 @@ runToStability rfSig rfA op su =
 -- complex signal without processing it (not even synchronizing it)
 -- but will check to see whether it's all dead code. If not, the 
 -- IO effect is activated.
-unsafeOnUpdateBLN :: (Eq a) => (T -> Maybe a -> IO ()) 
+unsafeOnUpdateBLN :: (Eq a) => IO (T -> Maybe a -> IO ()) 
                     -> B w (S p a :&: x) (S p a :&: x)
-unsafeOnUpdateBLN op = bfirst (unsafeOnUpdateBL op) >>> keepAliveB
+unsafeOnUpdateBLN mkOp = bfirst (unsafeOnUpdateBL mkOp) >>> keepAliveB
 
 
 

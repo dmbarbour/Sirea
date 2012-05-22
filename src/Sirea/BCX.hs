@@ -1,4 +1,4 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving, Rank2Types #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving, MultiParamTypeClasses #-}
 
 
 -- | Behavior with Context.
@@ -38,11 +38,12 @@ import Prelude hiding ((.),id)
 import Control.Applicative
 import Control.Category
 --import Control.Arrow
+import Sirea.Internal.BCross
 import Sirea.Behavior
-import Sirea.Partition
 import Sirea.Trans.Static 
-import Sirea.B
+import Sirea.Partition
 import Sirea.PCX
+import Sirea.B
 
 -- WithPCX is a functor and applicative of values that take a PCX.
 type WithPCX w = WrappedArrow (->) (PCX w)
@@ -58,6 +59,7 @@ type WithPCX w = WrappedArrow (->) (PCX w)
 newtype BCX w x y = BCX { fromBCX :: StaticB (WithPCX w) (B w) x y } 
     deriving ( Category, BFmap, BProd, BSum, BDisjoin
              , BZip, BSplit, BTemporal, BPeek, Behavior, BScope )
+    -- NOT deriving: BDynamic, BCross, BEmbed
 
 unwrapBCX :: BCX w x y -> PCX w -> B w x y
 unwrapBCX = unwrapArrow . unwrapStatic . fromBCX
@@ -65,6 +67,12 @@ unwrapBCX = unwrapArrow . unwrapStatic . fromBCX
 wrapBCX :: (PCX w -> B w x y) -> BCX w x y
 wrapBCX =  BCX . wrapStatic . WrapArrow
 
+instance BEmbed (B w) (BCX w) where
+    bembed = wrapBCX . const
+
+instance BCross (BCX w) where
+    bcross = wrapBCX crossB
+        
 
 -- Special Cases:
 --   BDynamic - need BCX B, BCX BCX

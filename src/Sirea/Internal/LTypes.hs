@@ -229,10 +229,16 @@ st_sigup su st =
 
 -- for some extra validation and debugging, ensure that stability
 -- is non-decreasing (excepting Forever, which acts as a reset).
-monotonicStability, respectsStability :: Maybe T -> Maybe T -> Bool
+monotonicStability :: Maybe T -> Maybe T -> Bool
 monotonicStability (Just t0) (Just tf) = (tf >= t0)
 monotonicStability _ _ = True
-respectsStability = monotonicStability
+
+-- validate that stability is respected by updates, i.e. that 
+-- no update happens earlier than the current stability.
+respectsStability  :: Maybe T -> Maybe T -> Bool
+respectsStability (Just t0) (Just tf) = (tf >= t0)
+respectsStability Nothing (Just _) = False
+respectsStability _ _ = True
 
 ------------------------------------------------------------------
 -- SigM represents states for two signals, for zip, merge, and 
