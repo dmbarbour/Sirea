@@ -8,30 +8,25 @@
 -- and names. A useful idiom: abstract infinite spaces of resources,
 -- and lazily initialize resources as they are discovered or used.
 -- It is easy to partition infinite space into more infinite spaces.
--- Every RDP application can thus have its own, infinite corner of 
--- the universe. This is compatible with the perspective that it is 
--- RDP "all the way down" - an RDP application is a dynamic behavior
--- that manipulates resources in a local partition, provided by the
--- lower layer RDP behavior.
+-- Every RDP application may thus have its own, infinite corner of 
+-- the universe. 
 --
 -- Sirea also uses this conservative notion of resources to achieve
 -- a more declarative programming experience. This is expressed in
--- PCX, and is *type driven* - developers may find any resource of
--- class Resource.
+-- PCX. In Sirea, resource acquisition is mostly type driven: the
+-- developers may find any resource of typeclass Resource.
 --
 -- The idea with PCX is to present resources as though they already
 -- exist, as though PCX is an infinite namespace, and resources are
 -- accessible if only we can name them. The naming in PCX is based
--- on Data.Typeable, though developers are free to extend this by
--- naming resources that represent spaces of resources with another
--- naming convention.
+-- on Data.Typeable, though developers are free to extend this with
+-- resources that represent new resource spaces.
 --
 -- PCX is most useful for volatile resources, which will not survive
--- destruction of the Haskell process. Persistent resources benefit
--- by use of volatile proxies, e.g. to maintain connections, process
--- updates, cache values. PCX is used in Sirea core for threads and 
--- hooking up communication between them. It will be heavily used by 
--- FFI adapters, e.g. to represent control over a GLUT window.
+-- destruction of the Haskell process and must thus be reconstructed 
+-- every time we start. Persistent resources use volatile proxies to
+-- represent connections, queues, caches, and so on. Resources serve
+-- as threads, legacy or FFI adapters, control ports for UI, etc.
 --
 -- NOTE: Threading PCX through an application would grow irritating.
 -- However, a simple behavior transformer can make it a lot nicer.
@@ -54,6 +49,7 @@ module Sirea.PCX
 import Data.Typeable
 import Data.Dynamic
 import Data.IORef
+import Data.Monoid
 import Control.Monad.Fix (mfix)
 import System.IO.Unsafe (unsafePerformIO, unsafeInterleaveIO)
 
@@ -118,10 +114,8 @@ instance (Typeable p) => Resource (PCX p) where
 -- Some utility instances.
 instance Resource [TypeRep] where
     locateResource = return . pcx_ident
-instance (Typeable a) => Resource (IORef (Maybe a)) where
-    locateResource _ = newIORef Nothing
-instance (Typeable a) => Resource (IORef [a]) where
-    locateResource _ = newIORef []
+instance (Typeable a, Monoid a) => Resource (IORef a) where
+    locateResource _ = newIORef mempty
 instance (Resource x, Resource y) => Resource (x,y) where
     locateResource pcx = return (findInPCX pcx, findInPCX pcx)
 instance (Resource x, Resource y, Resource z) => Resource (x,y,z) where

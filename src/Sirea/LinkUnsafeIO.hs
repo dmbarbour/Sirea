@@ -69,7 +69,7 @@ unsafeOnUpdateB op = unsafeOnUpdateBL op >>> undeadB
 -- Only suitable for signals you'll need for other reasons.
 --
 unsafeOnUpdateBL :: (Eq a) => (T -> Maybe a -> IO ()) -> B w (S p a) (S p a)
-unsafeOnUpdateBL op = unsafeLnkB blLnk
+unsafeOnUpdateBL op = unsafeLinkB blLnk
     where blLnk = MkLnk { ln_build = build
                         , ln_tsen = True
                         , ln_peek = 0     }

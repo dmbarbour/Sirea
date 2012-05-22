@@ -1,113 +1,43 @@
 {-# LANGUAGE EmptyDataDecls #-}
 
--- | Reactive Demand Programming (RDP) is designed for:
+-- | Reactive Demand Programming (RDP) design is for open, scalable,
+-- distributed systems. Sirea is much more humble: just one Haskell
+-- process. But it is still useful to model concurrent behaviors in
+-- Sirea, i.e. different partitions for different adapter tasks, and
+-- as a proof of concept.
 --
---   * open system: diverse authority, administrations, resources
---   * distributed systems: latency, concurrency, partitioning
---   * scalability: parallelism, mirroring, code distribution
+-- This module provides behaviors for signals to cross Partitions.
+-- Each partition has one Haskell thread. Trivial partitions merely
+-- process RDP updates, but many represent resources and continuous
+-- or periodic tasks (persisting state, maintaining a GLUT window,
+-- watching the filesystem, etc.). This is achieved via typeclass.
 --
--- Sirea has a much easier target: one Haskell application. 
+-- Sirea makes partitions very convenient - just name them by type,
+-- or infer them at `bcross`. This is very declarative. Partition 
+-- threads are only created if the partition is used.
 --
--- But Sirea also aims to provide a proof of concept for RDP, that
--- it will scale to open, distributed systems. Consequently, it uses
--- a partition and communication model that would be effective for a
--- distributed system.
+-- Partitions don't communicate directly. RDP behaviors orchestrate 
+-- communication between them, via `bcross`. Updates are delivered
+-- in batches, which are processed in a group. This ensures snapshot
+-- consistency: between `runStepper` calls, signals from each remote
+-- vat seem frozen. (Snapshot consistency does allow "glitches" in a
+-- sense: Alice's view of Charlie might be inconsistent with Alice's
+-- view of Bob's view of Charlie. But it resists most malign cases.)
 --
--- SIGNALS ACROSS PARTITIONS
--- =========================
+-- Use of `bcross` should usually be coupled with `bdelay`, which
+-- models communication latency and resists straggling updates. RDP
+-- does support eventual consistency, internally, but little can be
+-- done for the spoken word, spent arrow, or neglected opportunity.
+-- (Hopefully you anticipated a close approximation of the updated
+-- signal!) Each resource can have its own policy for retroactive
+-- correction, possible "undo", etc. But it is often best just to  
+-- achieve a more consistent system by using delay.
 --
--- Signals in Sirea behaviors are typed (S p a). This corresponds to
--- a concrete signal value of type (Sig a). The `p` type represents
--- partition, where the signal's value is hosted. Signals must be in
--- the same partition to be combined, e.g. by bzip or bdisjoin.
---
--- To move signals between partitions, developers may use `bcross`.
---
---     bcross :: (Partition p, Partition p') => b (S p x) (S p' x)
--- 
--- bcross moves data between two Sirea partitions, each of which has
--- a lightweight Haskell thread. Conveniently, Sirea will create the
--- threads needed for all the bcross behaviors - one per partition
--- (leveraging Data.Typeable). 
---
--- Lightweight partitions are also accessible as scopes - partitions
--- within a single thread. Scopes are popped or pushed like a stack.
---
--- PARTITIONS AS RESOURCE CONTROLLERS
--- ==================================
---
--- Sirea threads can perform useful work, more than processing RDP
--- updates. For example, depending on type a particular partition
--- might create itself as a bound thread to control a GLUT window,
--- and may have associated behaviors to observe or influence such
--- properties as framerate, mouse position, and what is displayed.
---
--- To support this, the threads are created by a typeclass, and a
--- Stepper object is provided to process incoming RDP updates. 
--- Sirea does not own the main loop of any thread, just requires 
--- that the Stepper object be called regularly or when updates are
--- available (set an event!). 
---
--- The difficulty is hooking threads into the RDP behaviors without
--- a lot of awkward data plumbing or use of global state. I think to
--- develop a dependency injection model for Haskell, Control.Make.
--- Both behaviors and partitions could then share dependencies in a
--- formal manner. 
---
--- COMMUNICATION AND CONSISTENCY
--- =============================
---
--- Sirea threads communicate via RDP updates. They should otherwise
--- be independent - no channels, no shared references, no STM. 
---
--- RDP updates are communicated in batches. Rather than immediately
--- delivering a signal update, `bcross` will append a batch for the
--- target thread. All outgoing batches are delivered at end of step.
--- At start of step, all available batches are processed.
---
--- Batch processing grants each thread a "snapshot" consistent view
--- of every other thread. This is convenient for reasoning: multiple
--- signals from one thread will at least be internally consistent. 
--- This handles most malign glitches. (Batch processing is also an
--- advantage for efficiency.)
---
--- Larger inconsistency is still possible. Alice's view of Bob may
--- differ from Alice's view of Charlie's view of Bob due to latency
--- in propagation of updates. Appropriate use of delay would mask
--- the problem, shifting it to the future where it can be resolved
--- before observed.
---
--- In addition to snapshot consistency and delay, RDP can provide 
--- eventual consistency (EC). But there are limits on what EC can do
--- for retroactive correction of state. "Four things come not back: 
--- the spoken word, the sped arrow, the past life, and the neglected
--- opportunity." Better to use appropriate delays. In a distributed
--- system, one might use disruption instead of admitting straggling
--- updates. 
--- 
--- Sirea does not model disruption. Instead it prevents threads from
--- falling too far behind (or getting too far ahead), by waiting on 
--- the slow threads.
--- 
--- MUST USE NON-BLOCKING IDIOMS
--- ============================
---
--- To control performance and ensure progress, Sirea ensures that no
--- thread gets too far "ahead" of other threads. Currently this is
--- implemented in terms of number of batches in flight, but another
--- valid approach would be to measure it in milliseconds. Bounds on
--- communication buffers help control memory overheads.
---
--- So long as every thread individually makes progress, the Sirea 
--- application as a whole will make progress. And if every thread 
--- keeps up with its workload, communication becomes wait free. The
--- buffers may be large so threads rarely encounter their limits.
---
--- But this blocking mechanism means the whole Sirea application can
--- halt if any particular thread halts. Threads should not perform 
--- blocking IO. (If necessary, a Sirea thread could fork a non-Sirea
--- worker thread to perform the blocking IO.) Sirea threads should
--- use only the RDP mechanisms to communicate.
+-- NOTE: Partition threads must use non-blocking IO if they interact
+-- with legacy libraries or the operating system. Sirea waits when a
+-- thread falls behind (for predictable time and space properties). 
+-- Blocking IO can cause the app to freeze. (Fork another thread if
+-- necessary; just don't block the `runStepper` operation.)
 --
 module Sirea.Partition 
     ( Partition(..)
@@ -164,19 +94,20 @@ class (Typeable p) => Partition p where
     -- PCX supports communication between threads and RDP behaviors. 
     newPartitionThread :: PCX p -> Stepper -> IO Stopper
 
--- | Pt is simply a default class of partitions, named by typeables.
--- A Pt partition runs in a forever loop, processing RDP updates.  
+-- | Pt is a type for trivial partitions. These partitions have no
+-- responsibilities, other than to process available RDP updates as
+-- fast as possible. They might gain responsibilities via behaviors
+-- that don't need any special treatment from their thread.
 --
--- This can be useful for pipeline parallelism, but the concurrency
--- properties mean you weaken consistency. (Sirea provides snapshot
--- consistency by batch-updates between partitions.) The concurrency
--- would be better justified if the thread had some IO role, e.g. to
--- watch the filesystem or manage a GLUT window.
+-- While partitioning can be a basis for parallelism, it weakens the
+-- consistency properties of Sirea applications. (Within a partition
+-- you have determinism up to input. Across partitions, you only get
+-- snapshot consistency and eventual consistency. Straggling updates
+-- are possible if a thread falls behind.) Consider whether `bspark` 
+-- or `bstrat` is sufficient for parallelism.
 --
--- (If you just want parallelism, use bspark, or bstrat and btouch.)
---
--- Mostly, Pt serves as an example partition type, and takes care of
--- the obvious, trivial case so that other people don't need to. 
+-- Partitions are better justified when they represent resources and
+-- various IO responsibilities.
 --   
 data Pt x
 
@@ -187,12 +118,20 @@ instance Typeable1 Pt where
 instance (Typeable x) => Partition (Pt x) where
     newPartitionThread _ = newPartitionThreadPt
 
--- | P0 = Pt () - special meaning, representing the main partition,
--- the user-controlled thread. Some dedicated code exists to handle
--- this case in the primitive cross behavior.
-type P0 = Pt ()
+-- | P0 is the initial or main partition for a Sirea application. It
+-- has a thread, but one controlled by the Sirea client rather than
+-- created. 
+data P0
+instance Typeable P0 where
+    typeOf _ = mkTyConApp tyConP0 []
+        where tyConP0 = mkTyCon3 "Sirea" "Partition" "P0"
+instance Partition P0 where
+    newPartitionThread _ = error "cannot create main thread"
 
 
+
+-- | Scopes are a thread-local alternative to full partitions. Scope
+-- may be useful to provide extra type names for resources.
 data Scope s p
 instance Typeable2 Scope where
     typeOf2 _ = mkTyConApp tycScope []
@@ -212,10 +151,6 @@ instance Typeable2 Scope where
 -- output if the target thread is falling behind. Progress for the
 -- application requires every Sirea thread to keep up with available
 -- updates.
---
--- When you build the main Sirea behavior for an application, a 
--- Stepper is returned. The Sirea behavior is not actually started
--- until the first runSireaStep is executed. 
 --
 -- runStepper: process available updates, deliver outputs. Returns 
 --   very quickly if there is nothing to do, so should wait on event
@@ -250,7 +185,11 @@ data Stopper = Stopper
 -------------------------------------------------
 
 -- ((doStop,isStopped),stopEvents)
-type StopData = ((Bool,Bool),IO()) 
+data StopData = SD
+    { shouldStop :: Bool
+    , isStopped :: Bool
+    , onStop :: IO ()
+    }
 
 makeStopper :: IORef StopData -> Stopper
 makeStopper rf = Stopper 
@@ -260,21 +199,24 @@ makeStopper rf = Stopper
 
 addStopDataEvent :: IORef StopData -> IO () -> IO ()
 addStopDataEvent rf ev = atomicModifyIORef rf addEv >>= id
-    where addEv sd@((_,True),_) = (sd,ev)
-          addEv (bbstop,e0) = ((bbstop,ev>>e0),return ())
+    where addEv sd = 
+            if (isStopped sd) then (sd, ev) else
+            let sd' = sd { onStop = (ev >> onStop sd) } in
+            (sd', return ())
 
 doStop :: StopData -> StopData
-doStop ((_,b),e) = ((True,b),e)
+doStop sd = sd { shouldStop = True }
 
 emptyStopData :: StopData
-emptyStopData = ((False,False),return ())
+emptyStopData = SD False False (return ())
 
 finiStopData :: IORef StopData -> IO ()
 finiStopData rf = atomicModifyIORef rf fini >>= id
-    where fini ((shouldStop,isStopped),runEvents) =
-                assert shouldStop $
-                assert (not isStopped) $
-                (((True,True),return()),runEvents)
+    where fini sd =
+                assert (shouldStop sd) $
+                assert (not $ isStopped sd) $
+                let sd' = SD True True (return ()) in
+                (sd', onStop sd)
 
 newPartitionThreadPt :: Stepper -> IO Stopper
 newPartitionThreadPt stepper =
@@ -285,8 +227,8 @@ newPartitionThreadPt stepper =
     let loop  = addStepperEvent stepper event >>
                 takeMVar rfWait >>
                 runStepper stepper >>
-                readIORef rfStop >>= \ ((shouldStop,_),_) ->
-                if shouldStop then stop else loop
+                readIORef rfStop >>= \ sd ->
+                if shouldStop sd then stop else loop
     in 
     forkIO loop >>
     return (makeStopper rfStop)   

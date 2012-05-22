@@ -4,7 +4,7 @@
 module Sirea.Build
     ( buildSireaApp
     , runSireaApp
-    , SireaApp
+    , SireaApp, P0
     ) where
 
 import Sirea.Internal.BTypes
@@ -18,7 +18,7 @@ import Sirea.BCX
 
 -- | This is what an RDP application looks like in Sirea:
 --
---     type SireaApp = BCX (S P0 ()) (S P0 ())
+--     type SireaApp = forall w . BCX w (S P0 ()) (S P0 ())
 --
 -- Such a behavior is intended for side-effects. The response signal
 -- is not used. Effects are achieved by signals to partitions that
@@ -37,7 +37,10 @@ import Sirea.BCX
 -- Most Sirea clients should just create one, big SireaApp, perhaps
 -- leveraging dynamic behaviors, rather than a bunch of small ones.
 --
-type SireaApp = forall w . B w (S P0 ()) (S P0 ())
+type SireaApp = forall w . BCX w (S P0 ()) (S P0 ())
+
+unwrapSireaApp :: SireaApp -> BCX w (S P0 ()) (S P0 ())
+unwrapSireaApp app = app
 
 -- | Build the "main" Sirea behavior, generating a Stepper for use
 -- in a user-controlled event loop. The application receives a fresh
@@ -56,14 +59,16 @@ type SireaApp = forall w . B w (S P0 ()) (S P0 ())
 -- over logical shutdown time. 
 --
 buildSireaApp :: SireaApp -> IO (Stepper, Stopper)
-buildSireaApp b = 
-    newPCX >>= \ appCX -> 
+buildSireaApp app = 
+    newPCX >>= \ cx -> 
+    let bcx = unwrapSireaApp app in
+    let b   = unwrapBCX bcx cx in
     let dt0 = LnkDUnit ldt_zero in
     let (_, mkLn) = compileB b dt0 LnkDead in
     mkLn >>= \ lnk0 ->
     case lnk0 of 
         LnkDead -> return (zeroStepper, zeroStopper)
-        (LnkSig lu) -> buildSireaBLU appCX lu
+        (LnkSig lu) -> buildSireaBLU cx lu
 
 zeroStepper :: Stepper 
 zeroStepper = Stepper 
@@ -77,7 +82,7 @@ zeroStopper = Stopper
     } 
 
 buildSireaBLU :: PCX w -> LnkUp () -> IO (Stepper, Stopper)
-buildSireaBLU mcx lu = undefined
+buildSireaBLU = undefined
     
 
 -- | If you don't need to run the stepper yourself, consider use of

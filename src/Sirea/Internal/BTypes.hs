@@ -84,7 +84,6 @@ data B w x y where
 
   -- B_unique :: !UniqueID -> !(B w x y) -> B w x y
 
-
 -- POSSIBILITY: Add the UniqueID automatically with unsafeLnkB 
 -- (via unsafePerformIO) and for all the BImpl options. 
 --
