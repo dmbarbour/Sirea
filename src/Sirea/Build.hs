@@ -14,7 +14,8 @@ import Control.Exception (finally, mask_)
 import Control.Concurrent (myThreadId, forkIO, killThread)
 import Sirea.Internal.BTypes
 import Sirea.Internal.LTypes
-import Sirea.Internal.BCompile
+import Sirea.Internal.BCompile(compileB)
+import Sirea.Internal.BCross(loadP0)
 import Sirea.Behavior
 import Sirea.Partition
 import Sirea.LinkUnsafeIO
@@ -66,12 +67,18 @@ unwrapSireaApp app = app
 --
 buildSireaApp :: SireaApp -> IO (Stepper, Stopper)
 buildSireaApp app = 
+    -- new generic context; fresh global space for the app
     newPCX >>= \ cx -> 
+    -- indicate the initial thread already exists
+    let tc0 = (findInPCX pcx :: TC P0) in
+    writeIORef (tc_init tc0) True >> 
+    -- build behavior using context; response signal drop
     let bcx = unwrapSireaApp app in
     let b   = unwrapBCX bcx cx in
     let dt0 = LnkDUnit ldt_zero in
     let (_, mkLn) = compileB b dt0 LnkDead in
     mkLn >>= \ lnk0 ->
+    -- prepare the stepper and stopper
     case lnk0 of 
         LnkDead -> return (zeroStepper, zeroStopper)
         (LnkSig lu) -> buildSireaBLU cx lu
@@ -89,8 +96,15 @@ zeroStopper = Stopper
     , addStopperEvent = id -- run stopper event immediately
     } 
 
+-- Build from a LinkUp, meaning there is something listening to the
+-- signal. What Sirea will do is set a signal to activate the LnkUp,
+-- then periodically increase the stability of that signal. 
+--
 buildSireaBLU :: PCX w -> LnkUp () -> IO (Stepper, Stopper)
-buildSireaBLU = undefined
+buildSireaBLU pcx lu = undefined
+
+-- note: mask_ the runStepper operation.
+
 
 -- | If you don't need to run the stepper yourself, consider use of
 -- runSireaApp. This will simply run the application until the main
@@ -114,7 +128,7 @@ basicSireaAppLoop rfContinue stepper =
     newEmptyMVar >>= \ mvWait  ->
     addStepperEvent stepper (putMVar mvWait ()) >>
     takeMVar mvWait >>
-    mask_ (runStepper stepper) >>
+    runStepper stepper >>
     basicSireaAppLoop rfContinue stepper 
     
 

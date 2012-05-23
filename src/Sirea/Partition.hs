@@ -60,13 +60,19 @@ import Control.Concurrent.MVar
 
 -- | Cross between partitions. Note that this behavior requires the
 -- `b` class itself to encapsulate knowledge of how the partitions
--- are accessed to avoid syntactic hassles.
+-- are accessed. In the normal use case, partitions are created when
+-- you cross into them by type, i.e. bcross into a GLUT partition in
+-- order to create and control a GLUT window. The illusion is that
+-- the partitions have always existed, they're just passive until
+-- agitated - i.e. discovery and manipulation rather than creation.
+--
+-- Cross from a partition to itself may optimize to identity.
 class BCross b where
-    bcross :: ( Partition p, Partition p') => b (S p x) (S p' x)
+    bcross :: (Partition p, Partition p') => b (S p x) (S p' x)
 
 -- | Scopes are lightweight partitions, all within a single thread.
 -- Scopes may have sub-scopes, simply push or pop like a stack. The
--- data plumbing between scopes should be free (after compile).
+-- data plumbing between scopes should be free after compile.
 --
 -- Scopes may be useful to modularize resources in a partition and
 -- prevent accidental communication.
@@ -114,7 +120,6 @@ data Pt x
 instance Typeable1 Pt where
     typeOf1 _ = mkTyConApp tyConPt []
         where tyConPt = mkTyCon3 "Sirea" "Partition" "Pt"
-
 instance (Typeable x) => Partition (Pt x) where
     newPartitionThread _ = newPartitionThreadPt
 
@@ -163,7 +168,7 @@ instance Typeable2 Scope where
 --   when the event is set, it is called immediately.
 --
 data Stepper = Stepper 
-    { runStepper      :: IO () -- ^ incremental step
+    { runStepper      :: IO () -- ^ synchronous incremental step
     , addStepperEvent :: IO () -> IO () -- ^ notify of work to do
     }
 
@@ -176,7 +181,7 @@ data Stepper = Stepper
 -- Note that you can set stopper events before running the stopper.
 -- If activity halts for any reason, the stopper events will fire.
 data Stopper = Stopper
-    { runStopper      :: IO () -- ^ asynchronous stop
+    { runStopper      :: IO () -- ^ asynchronous begin stop
     , addStopperEvent :: IO () -> IO () -- ^ notify when stopped
     }
 

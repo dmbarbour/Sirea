@@ -39,8 +39,8 @@ import Data.IORef
 --
 --   tsen - time sensitive: if true, prevents delay aggregation and
 --     forces aggregated delay to apply prior to reaching link. 
---   peek - how much the link might peek into the future to. May
---     influence choked updates and other optimizations.
+--   peek - how much the link might peek into the future of signals. 
+--     May influence various optimizations, eventually. 
 --
 -- Many MkLnk structures need a `PCX` argument to access resources
 -- without using global state. In that case, developers should use:
