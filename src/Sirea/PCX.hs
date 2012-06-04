@@ -107,9 +107,11 @@ instance (Typeable p) => Resource (PCX p) where
     locateResource pcx =
         mfix $ \ pcx' ->
         newIORef [] >>= \ store' ->
-        let typ  = (head . typeRepArgs . typeOf) pcx' in
-        let ident' = typ:(pcx_ident pcx) in
+        let p      = typeOfPCX pcx' in
+        let ident' = (typeOf p):(pcx_ident pcx) in
         return (PCX { pcx_ident = ident', pcx_store = store' })
+        where typeOfPCX :: PCX p -> p
+              typeOfPCX _ = undefined
 
 -- Some utility instances.
 instance Resource [TypeRep] where

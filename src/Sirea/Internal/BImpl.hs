@@ -621,11 +621,13 @@ eqShift eq as bs tLower tUpper =
 --
 -- The (IO () -> IO ()) operation is to enqueue the phase task. It
 -- should be specific to the partition. It is assumed that updates
--- and the phase queue are handled in the same thread.
-phaseUpdateB :: PhaseQ -> B w (S p x) (S p x)
-phaseUpdateB pq = mkLnkB id $ mkLnkSimp lnPhase
+-- and the phase queue are handled in the same thread. It is created
+-- when the behavior is built, if necessary.
+phaseUpdateB :: IO PhaseQ -> B w (S p x) (S p x)
+phaseUpdateB mkPQ = mkLnkB id $ mkLnkSimp lnPhase
     where lnPhase LnkDead = return LnkDead
           lnPhase (LnkSig lu) =
+            mkPQ >>= \ pq ->
             newIORef (suZero,False) >>= \ rfSu ->
             let lu' = makePhaseLU rfSu pq lu in 
             return (LnkSig lu')

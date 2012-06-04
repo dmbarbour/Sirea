@@ -80,11 +80,8 @@ class (Category b) => BFmap b where
     -- The idea of bstrat is to ensure the Eval completes before the
     -- `Just x` constructor is observed when sampling the signal, 
     -- but prior to observing x. This can be combined with btouch to
-    -- kickstart the computation, and bfmap to provide the `Eval` 
-    -- monad in the first place. 
-    --
-    -- This is for use in combination with btouch to kickstart the 
-    -- computation, and bfmap to get the `Eval` in the first place. 
+    -- kickstart the computation, and bfmap will provide the `Eval` 
+    -- structure in the first place. 
     bstrat :: b (S p (Eval x)) (S p x)
     bstrat = bfmap runEval
 
@@ -119,8 +116,8 @@ class (Category b) => BFmap b where
 
 -- | bforce will sequence evaluation when the signal update occurs,
 -- according to a provided sequential strategy. Useful idiom:
---     import Control.DeepSeq (rnf)
---     bforce rnf
+--   > import Control.DeepSeq (rnf)
+--   > bforce rnf
 -- This would reduce a signal to normal form before further progress 
 -- in the partition's thread. This can improve data parallelism by
 -- making more efficient use of partition threads, can help control
@@ -133,7 +130,7 @@ bforce f = bfmap seqf >>> bstrat >>> btouch
 -- computation rather than running it in the partition thread, and 
 -- does not wait for the computation to complete. 
 --
--- bspark is predictable but not very compositional. For example, in
+-- bspark is predictable, but not very composable. For example, in
 --   > bspark foo >>> bspark bar
 -- The bar reduction will occur in a spark that immediately waits
 -- for the foo reduction to complete. This ensures the bar reduction
@@ -143,7 +140,7 @@ bforce f = bfmap seqf >>> bstrat >>> btouch
 -- A lazy variation of bspark would be easy to implement, but would
 -- be problematic due to ad-hoc competition and GC interaction. If
 -- developers desire precise control over parallelism, they should
--- use bstrat and parallel strategies directly, or bseqap Monad.Par.
+-- directly use bstrat or bstratf, and btouch.
 --
 bspark :: (BFmap b) => (x -> ()) -> b (S p x) (S p x)
 bspark f = bfmap sparkf >>> bstrat >>> btouch
@@ -155,17 +152,15 @@ bspark f = bfmap sparkf >>> bstrat >>> btouch
 -- the same form as bstrat. This was motivated mostly for Monad.Par:
 --
 --     import Monad.Par
---     bunsafePar :: (BFmap b) => b (S p (Par x)) (S p x)
---     bunsafePar = bstratf runParAsync
+--     brunPar :: (BFmap b) => b (S p (Par x)) (S p x)
+--     brunPar = bstratf runParAsync
 --
--- Here bunsafePar will initiate computation if `Just x` constructor
--- is observed when sampling the signal, without waiting on x. Par
--- is tempting due to work integrating it with GPU computation.
--- 
--- NOTE: Monad.Par is unsafe because the current model leaks IVars,
--- which in Sirea leads easily to deadlock. Par can be used safely.
+-- Here brunPar will initiate computation if `Just x` constructor is
+-- observed when sampling the signal, i.e. when signal is touched.
+-- (NOTE: it would be unsafe to leak IVars from a Par computation.)
 --
-bstratf :: (BFmap b, Functor f) => (forall e . (f e -> e)) 
+bstratf :: (BFmap b, Functor f) 
+        => (forall e . (f e -> e)) 
         -> b (S p (f x)) (S p x)
 bstratf runF = bfmap (runF . fmap return) >>> bstrat
 
@@ -189,10 +184,6 @@ bstratf runF = bfmap (runF . fmap return) >>> bstrat
 --     (***) - operate on first and second in parallel
 --     (&&&) - create and define multiple pipelines at once
 --     bvoid - branch behavior just for side-effects, drop result
---
--- Delays diverge due to performing operations and adding latency to
--- only one of two signals. Use `bsynch` to synchronize the signals
--- when synchronous behavior is required.
 --
 class (Category b) => BProd b where
     bfirst   :: b x x' -> b (x :&: y) (x' :&: y)
@@ -271,8 +262,10 @@ bskip f = binr >>> bleft f >>> bmerge
 -- staticSwitch choice = if choice then binl else binr
 
 -- | bconjoin is a partial merge, extracting from a sum. 
-bconjoinl :: (BSum b, BProd b) => b ((x :&: y) :|: (x :&: z)) (x :&: (y :|: z)) 
-bconjoinr :: (BSum b, BProd b) => b ((x :&: z) :|: (y :&: z)) ((x :|: y) :&: z)
+bconjoinl :: (BSum b, BProd b) 
+          => b ((x :&: y) :|: (x :&: z)) (x :&: (y :|: z)) 
+bconjoinr :: (BSum b, BProd b) 
+          => b ((x :&: z) :|: (y :&: z)) ((x :|: y) :&: z)
 bconjoinl = bdup >>> (isolateX *** isolateYZ)
     where isolateX = (bfst +++ bfst) >>> bmerge
           isolateYZ = (bsnd +++ bsnd)
@@ -306,12 +299,13 @@ bdisjoin1 = dupChoiceSig >>> bdisjoin >>> rotChoiceSig
 -- | BZip is a behavior for combining elements of an asynchronous 
 -- product. The main purpose is to combine them to apply a Haskell
 -- function. The arguments must already be in the same partition to
--- zip them. The signals are implicitly synchronized.
+-- zip them. The signals are implicitly synchronized. 
 --
 -- At least one of bzip or bzap must be defined.
 --
 class (BProd b, BFmap b) => BZip b where
-    -- | bzip is a traditional zip, albeit between signals.
+    -- | bzip is a traditional zip, albeit between signals. Values
+    -- of the same times are combined.
     bzip :: b (S p x :&: S p y) (S p (x,y))
     bzip = bzipWith (,)
     
@@ -347,25 +341,32 @@ bunsplit = (bfmap Left ||| bfmap Right)
 
 -- | BTemporal - operations for orchestrating signals in time.
 -- (For spatial orchestration, see FRP.Sirea.Partition.)
+--
+-- For arrow laws, it would be ideal to model timing properties of
+-- signals in the type system. But doing so in Haskell is awkward.
+-- For Sirea, many operations implicitly synchronize signals: zip,
+-- merge, disjoin, etc.. 
 class (Category b) => BTemporal b where
-    -- | Delay a signal. For products or sums, every branch delays
-    -- equally. Delay models communication or calculation time. It
-    -- is important for consistency; without delay, updates straggle
-    -- and cause glitches at larger scales. Delay can also dampen
-    -- some feedback patterns with shared state resources.
+    -- | Delay a signal. For asynchronous products or sums, branches
+    -- that pass through `delay` are delayed by the same amount. The
+    -- delays in different branches may diverge: bdelay may apply to
+    -- only the left or first branch. 
     --
-    -- Delays for elements of asynchronous products and sums diverge
-    -- due to bfirst, bleft.
+    -- Delay represents communication or calculation time. Without
+    -- delay, updates straggle and cause glitches at larger scales.
+    -- Delay also dampens feedback patterns with shared state.
     --
     -- This is logical delay. It does not cause an actual wait in 
-    -- the implementaiton. 
+    -- the implementation. It only modifies the signal value. Many
+    -- small delays might aggregate and be applied to a signal at
+    -- once, as a simple optimization.
     bdelay :: DT -> b x x
     
     -- | Synchronize signals. Affects asynchronous products or sums.
     -- Adds delay to the lower-latency signals to ensure every input
-    -- has equal latency - i.e. logical synchronization. Forms of
-    -- synch might be performed implicitly by operations that need
-    -- synchronized input (zip, merge, disjoin). 
+    -- has equal latency - i.e. logical synchronization. Results in
+    -- logically seamless transitions between choices, or logically
+    -- simultaneous actions with products. Idempotent.
     bsynch :: b x x
 
 
@@ -438,26 +439,25 @@ class (Behavior b, Behavior b' {-, BEmbed b' b -}) => BDynamic b b' where
               f b' = bsecond b' >>> bfst -- modifies b'
 
 
+
 -- WISHLIST: a behavior-level map operation.
 --
 --  I'd love to have a notion of performing a behavior on every
---  element in a collection, i.e. 
+--  element in a collection, something like:
 --
---    B (S p x) (S p y) -> B (S p [x]) (S p [y]) 
---      {- OR -}
---    B (S p (k,x)) (S p' (k,y)) -> B (S p (Map k x)) (S p' (Map k y))
+--    bforeach :: B (S p x) (S p y) -> B (S p [x]) (S p [y]) 
 --  
 --  Currently this can be achieved with beval, but would not be very 
 --  efficient since it may need to rebuilt whenever an element in a
---  collection is modified. 
+--  collection is modified.  
 --
 --  I'm not sure HOW to do much better, except maybe to create types
---  for collections of behaviors. If SL is a list of complex signals
---  of a constant type:
+--  for collections of behaviors. If SL is a set of complex signals
+--  of a common type:
 --     map       :: B x y -> B (SL x) (SL y)
 --     singleton :: B x (SL x)
 --     cons      :: B (x :&: SL x) (SL x)
---     foldl     :: B (y :&: x) y -> B (SL x) y
+--     foldl     :: B (y :&: x) y -> B (y :&: SL x) y
 --  But I don't want to complicate Sirea with a new signal type, and
 --  it isn't clear that this would help. Might be better to stick
 --  with type-level operators like:  (x :&: (x :&: (x :&: (x ...

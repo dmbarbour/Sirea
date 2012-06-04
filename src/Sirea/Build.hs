@@ -10,12 +10,12 @@ module Sirea.Build
 
 import Data.IORef
 import Control.Concurrent.MVar
-import Control.Exception (finally, mask_)
+import Control.Exception (finally)
 import Control.Concurrent (myThreadId, forkIO, killThread)
 import Sirea.Internal.BTypes
 import Sirea.Internal.LTypes
 import Sirea.Internal.BCompile(compileB)
-import Sirea.Internal.BCross(loadP0)
+import Sirea.Internal.BCross
 import Sirea.Behavior
 import Sirea.Partition
 import Sirea.LinkUnsafeIO
@@ -68,20 +68,21 @@ unwrapSireaApp app = app
 buildSireaApp :: SireaApp -> IO (Stepper, Stopper)
 buildSireaApp app = 
     -- new generic context; fresh global space for the app
-    newPCX >>= \ cx -> 
+    newPCX >>= \ cw -> 
     -- indicate the initial thread already exists
-    let tc0 = (findInPCX pcx :: TC P0) in
+    let tc0 = (findInPCX cw :: TC P0) in
     writeIORef (tc_init tc0) True >> 
-    -- build behavior using context; response signal drop
+    -- build behavior using context
     let bcx = unwrapSireaApp app in
-    let b   = unwrapBCX bcx cx in
+    let b   = unwrapBCX bcx cw in
     let dt0 = LnkDUnit ldt_zero in
+    -- dropping the response signal
     let (_, mkLn) = compileB b dt0 LnkDead in
     mkLn >>= \ lnk0 ->
     -- prepare the stepper and stopper
     case lnk0 of 
         LnkDead -> return (zeroStepper, zeroStopper)
-        (LnkSig lu) -> buildSireaBLU cx lu
+        (LnkSig lu) -> buildSireaBLU cw lu
 
 -- zeroStepper and zeroStopper are used if the dead-code
 -- elimination happens to kill the whole application.
@@ -101,10 +102,7 @@ zeroStopper = Stopper
 -- then periodically increase the stability of that signal. 
 --
 buildSireaBLU :: PCX w -> LnkUp () -> IO (Stepper, Stopper)
-buildSireaBLU pcx lu = undefined
-
--- note: mask_ the runStepper operation.
-
+buildSireaBLU cw lu = undefined
 
 -- | If you don't need to run the stepper yourself, consider use of
 -- runSireaApp. This will simply run the application until the main
