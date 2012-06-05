@@ -8,6 +8,9 @@ module Sirea.Internal.BCross
     ( crossB
     , GobStopper(..)
     , TC(..)
+    , runTCStep
+    , addTCRecv, addTCEvent
+    , addTCWork, addTCSend
     , tcToStepper
     , OutBox
     ) where
@@ -81,7 +84,10 @@ mkSend cw p1 p2 (LnkSig lu) =
 --   * combines updates from multiple in-flight batches
 --   * touch to efficiently process multiple updates
 receiveB :: (Partition p) => PCX w -> p -> B w (S p x) (S p x)
-receiveB cw p = phaseUpdateB $ return (addTCWork $ getTC p cw)
+receiveB cw p = 
+    let tc = getTC p cw in
+    let doLater = addTCWork tc in
+    phaseUpdateB (return doLater)
 
 getTC :: (Typeable p) => p -> PCX w -> TC p
 getTC _ = findInPCX
@@ -145,10 +151,9 @@ newTC = TC <$> newIORef False
 -- | In each runStepper round:
 --    recv tasks are emptied (atomically) then processed
 --    work tasks are created by recv, then handled in group
---       will repeat so long as work exists, but usually just one
 --    send tasks performed at end of stepper round.
--- Note that this means a finite amount of work is performed in any
--- given round, since recv is not re-emptied. S
+-- The `work` phase might run multiple rounds if creates more work.
+-- However, `recv` and `send` are once per round. 
 tcToStepper :: TC p -> Stepper
 tcToStepper tc = Stepper 
     { runStepper = runTCStep tc
@@ -180,6 +185,7 @@ runTCWork rfw =
     where doWork work = work >> runTCWork rfw
           done = return ()
 
+-- TCSend will execute
 runTCSend :: IORef Work -> IO ()
 runTCSend rfEmit = 
     readIORef rfEmit >>= \ doEmit ->
@@ -279,16 +285,18 @@ ob_addWork :: OutBox p -> Work -> IO Bool
 ob_addWork ob op =
     let st = ob_state ob in
     readIORef st >>= \ mbW ->
-    case mbW of
-        Nothing -> writeIORef st (Just op) >> return True
-        Just w  -> writeIORef st (Just (w >> op)) >> return False
+    let result = maybe True (const False) mbW in
+    let mbW' = Just $ maybe op (>> op) mbW in
+    writeIORef st mbW' >>
+    return result
 
 -- | deliver work from the outbox; results in an empty outbox.
--- Manages semaphores; signal when processing of task begins.
+-- Uses the counting semaphore for bounded buffers.
 ob_deliver :: OutBox p -> (Work -> IO ()) -> IO ()
 ob_deliver ob deliver =
-    readIORef (ob_state ob) >>= \ mbW ->
-    writeIORef (ob_state ob) Nothing >>
+    let st = ob_state ob in
+    readIORef st >>= \ mbW ->
+    writeIORef st Nothing >>
     maybe (return ()) doDeliver mbW
     where doDeliver work =
             let sem = ob_sem ob in
@@ -304,7 +312,7 @@ ob_deliver ob deliver =
 --
 type Semaphore = IORef (Either Int [Event])
 
--- | create a new semaphore with a given initial number of slots
+-- | create a new semaphore with a given initial count
 newSemaphore :: Int -> IO Semaphore
 newSemaphore nInit = 
     assert (nInit >= 0) $

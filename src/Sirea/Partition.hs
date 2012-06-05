@@ -225,18 +225,20 @@ finiStopData rf = atomicModifyIORef rf fini >>= id
 
 newPartitionThreadPt :: Stepper -> IO Stopper
 newPartitionThreadPt stepper =
-    newEmptyMVar >>= \ rfWait ->
-    newIORef emptyStopData >>= \ rfStop -> 
-    let event = tryPutMVar rfWait () >> return () in
-    let stop  = finiStopData rfStop in
-    let loop  = readIORef rfStop >>= \ sd ->
-                if shouldStop sd then stop else
-                addStepperEvent stepper event >>
-                takeMVar rfWait >>
-                runStepper stepper >>
-                loop
-    in 
-    forkIO loop >>
-    return (makeStopper rfStop)   
+    newIORef emptyStopData >>= \ rfStop ->
+    forkIO (simplePartitionLoop rfStop stepper) >>
+    return (makeStopper rfStop)
 
+simplePartitionLoop :: IORef StopData -> Stepper -> IO ()
+simplePartitionLoop rfStop stepper =
+    readIORef rfStop >>= \ sd ->
+    if (shouldStop sd) 
+        then stop 
+        else wait >> run >>= \ _ -> loop
+    where stop = finiStopData rfStop 
+          wait = newEmptyMVar >>= \ mv ->                 
+                 addStepperEvent stepper (putMVar mv ()) >>
+                 takeMVar mv
+          run  = runStepper stepper
+          loop = simplePartitionLoop rfStop stepper
 

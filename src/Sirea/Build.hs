@@ -1,11 +1,37 @@
 {-# LANGUAGE GADTs, EmptyDataDecls, Rank2Types #-}
 
--- | "Build" a Sirea behavior for embedding in an external loop.
+-- | Build a Sirea application for embedding in an external loop.
+--
+-- A Sirea application, SireaApp, is a behavior with trivial inputs
+-- and outputs, but that will observe and influence its environment
+-- through sensors, actuators, and shared state. Applications react
+-- continuously to their environment, and may record information to
+-- adjust future behavior. Each SireaApp is essentially an agent.
+--
+-- Build will compile an application into a (Stepper,Stopper) pair.
+-- Those types are defined in Sirea.Partition. Stepper allows Sirea 
+-- to be used with existing event loops, and Stopper allows halting
+-- the application. If there is no need to hook Sirea into existing
+-- event loops, use `runSireaApp`, which takes over calling thread.
+--
+-- The first runStepper operation activates the application, setting
+-- the input signal (S P0 ()) to active at current wall-clock time.
+-- Stability is several seconds, increased incrementally by later 
+-- step operations. Stopper respects stability, so it takes several
+-- seconds to halt a SireaApp in that manner. For precise shutdown,
+-- use state and dynamic behavior to model halted, paused, disabled
+-- behavior for the application as a whole.
+--
+-- It is recommended that Sirea applications be designed resilient
+-- against crash, power loss, or abrupt killing of the whole Haskell 
+-- process. This requires attention to use of state.
+--
 module Sirea.Build
     ( buildSireaApp
-    , SireaApp
     , runSireaApp
-    , unsafeKillP0
+    , beginSireaApp
+    , SireaApp
+    , bUnsafeKillP0
     ) where
 
 import Data.IORef
@@ -21,51 +47,63 @@ import Sirea.Partition
 import Sirea.LinkUnsafeIO
 import Sirea.PCX
 import Sirea.BCX
+import Sirea.Time
 
+-- TUNING:
+--   dt_app_stability : how far ahead to stabilize (e.g. 5s)
+--   dt_app_step      : periodic increase in stability (e.g. 1s)
+--   dt_app_border    : assumed startup time (e.g. 50 ms)
+--
+-- Stabilizing 5s ahead means that some values are computed that
+-- far ahead; it also means at least 5s to shut down.
+dt_app_stability, dt_app_step, dt_app_border :: DT
+dt_app_stability = 3.0 -- stability of main signal
+dt_app_step = 0.5 -- periodic event to increase stability
+dt_app_border = 0.05 -- latency for startup, shutdown
 
 -- | This is what an RDP application looks like in Sirea:
 --
 --     type SireaApp = forall w . BCX w (S P0 ()) (S P0 ())
 --
--- Such a behavior is intended for side-effects. The response signal
--- is not used. Effects are achieved by signals to partitions that
--- integrate with real-world resources - user interfaces, sensors,
--- actuators, and databases. BCX effectively provides a global space
--- per SireaApp to maintain local proxies and adapters to arbitrary
--- resources.
+-- Such a behavior is intended for side-effects. Internally, signals
+-- orchestrate real-world resources: sensors, actuators, databases,
+-- and user interfaces. Interaction with an application must occur
+-- via shared resources. 
 --
--- Even though the response signal is useless, Sirea behaviors are
--- still very composable. Compose in parallel with (&&&). Use choice
--- ((:|:) or dynamic behaviors) to model switching and modes based
--- on a stateful element. Use shared state and blackboard metaphor
--- for collaboration. Publish dynamic behaviors to common registries
--- to represent plugins, extensions, and icon-like applications. 
---
--- Most Sirea clients should just create one, big SireaApp, perhaps
--- leveraging dynamic behaviors, rather than a bunch of small ones.
+-- RDP applications are essentially agents. Composition in parallel
+-- models multi-agent systems operating on a shared environment. Or
+-- compose with choice ((:|:) or dynamic behaviors) to model modal
+-- switching between behaviors, e.g. paused vs. active. Agents can
+-- collaborate with shared state and blackboard metaphors. They can
+-- represent plugins or extensions by publishing dynamic behaviors
+-- to shared locations.
 --
 type SireaApp = forall w . BCX w (S P0 ()) (S P0 ())
 
 unwrapSireaApp :: SireaApp -> BCX w (S P0 ()) (S P0 ())
 unwrapSireaApp app = app
 
--- | Build the "main" Sirea behavior, generating a Stepper for use
--- in a user-controlled event loop. The application receives a fresh
--- PCX partition. 
+-- | SireaObject is the result of compiling a SireaApp. It provides:
+-- 
+--     Stepper - for user-controlled event loops
+--     Stopper - to halt the application gracefully
+--     PCX P0  - to integrate main partition resources 
 --
--- After construction, nothing happens immediately. The first call
--- to runStepper will actually start the behavior. After you begin
--- to runStepper, you should continue running it (periodically or on
--- the stepper event) until the Stopper event is received. Halting
--- the behavior might take a couple seconds during which runStopper
--- must still be executed.
+-- These types are defined in the Partition and PCX modules. The P0
+-- partition is thus similar to other partitions, excepting Stopper
+-- is provided and halts the whole app. 
+data SireaObject = SireaObject 
+    { sireaStepper :: Stepper
+    , sireaStopper :: Stopper
+    , sireaContext :: PCX P0
+    }
+
+-- | Build the SireaApp behavior, generating a Stepper for use in a 
+-- user-controlled event loop, and a Stopper to gracefully halt the 
+-- application. Nothing should be started after build, not until the
+-- runStepper operation is called.
 --
--- NOTE: For best performance, model shutdown within Sirea behavior,
--- i.e. use state to set shutdown, and dynamic behavior switches to 
--- passive behavior. Result is better anticipation and more control
--- over logical shutdown time. 
---
-buildSireaApp :: SireaApp -> IO (Stepper, Stopper)
+buildSireaApp :: SireaApp -> IO SireaObject
 buildSireaApp app = 
     -- new generic context; fresh global space for the app
     newPCX >>= \ cw -> 
@@ -79,14 +117,13 @@ buildSireaApp app =
     -- dropping the response signal
     let (_, mkLn) = compileB b dt0 LnkDead in
     mkLn >>= \ lnk0 ->
-    -- prepare the stepper and stopper
     case lnk0 of 
-        LnkDead -> return (zeroStepper, zeroStopper)
+        LnkDead     -> return $ zeroObject cw
         (LnkSig lu) -> buildSireaBLU cw lu
 
 -- zeroStepper and zeroStopper are used if the dead-code
 -- elimination happens to kill the whole application.
-zeroStepper :: Stepper 
+zeroStepper :: Stepper
 zeroStepper = Stepper 
     { runStepper = return ()
     , addStepperEvent = const $ return ()
@@ -96,13 +133,29 @@ zeroStopper = Stopper
     { runStopper = return ()
     , addStopperEvent = id -- run stopper event immediately
     } 
+zeroObject :: PCX w -> SireaObject
+zeroObject cw = 
+    SireaObject { sireaStepper = zeroStepper
+                , sireaStopper = zeroStopper
+                , sireaContext = findInPCX cw
+                }
 
 -- Build from a LinkUp, meaning there is something listening to the
 -- signal. What Sirea will do is set a signal to activate the LnkUp,
 -- then periodically increase the stability of that signal. 
---
-buildSireaBLU :: PCX w -> LnkUp () -> IO (Stepper, Stopper)
-buildSireaBLU cw lu = undefined
+buildSireaBLU :: PCX w -> LnkUp () -> IO SireaObject
+buildSireaBLU cw lu =
+    newIORef False >>= \ rfStop -> 
+    let tc0 = getTC0 cw in
+    -- TODO: prepare the stopper
+    --       prepare the periodic stability increase
+    undefined
+    {- addTCRecv tc0 -}
+    
+getTC0 :: PCX w -> TC P0
+getTC0 = findInPCX
+
+
 
 -- | If you don't need to run the stepper yourself, consider use of
 -- runSireaApp. This will simply run the application until the main
@@ -112,8 +165,12 @@ buildSireaBLU cw lu = undefined
 runSireaApp :: SireaApp -> IO ()
 runSireaApp app = buildSireaApp app >>= beginSireaApp
 
-beginSireaApp :: (Stepper, Stopper) -> IO ()
-beginSireaApp (stepper,stopper) = 
+-- | beginSireaApp activates a forever loop to process the SireaApp.
+-- It is stopped by killing the main thread. Used by runSireaApp.
+beginSireaApp :: SireaObject -> IO ()
+beginSireaApp so =
+    let stepper = sireaStepper so in
+    let stopper = sireaStopper so in 
     newIORef True >>= \ rfContinue ->
     addStopperEvent stopper (writeIORef rfContinue False) >>
     let loop = basicSireaAppLoop rfContinue stepper in
@@ -130,17 +187,19 @@ basicSireaAppLoop rfContinue stepper =
     basicSireaAppLoop rfContinue stepper 
     
 
--- | unsafeKillP0 - use with runSireaApp. The first time the signal 
+-- | bUnsafeKillP0 - use with runSireaApp. The first time the signal
 -- stabilizes as active, unsafeKillP0 causes asynchronous killThread
 -- on the main (P0) thread. For runSireaApp, this causes a graceful 
 -- shutdown, but unsafeKillP0 should be unique in the app.
 --
 -- Note: even after kill, it may take a couple seconds to shut down.
 -- If that is too long, consider modeling shutdown properly as stage
--- of RDP application - i.e. dynamic switching to shutdown behavior.
+-- of RDP application - i.e. dynamic switch to a halt behavior. Then 
+-- bUnsafeKillP0 would still take a few seconds, but during inactive 
+-- period with few outward effects.
 --
-unsafeKillP0 :: BCX w (S P0 ()) (S P0 ())
-unsafeKillP0 = (wrapBCX . const) $ unsafeOnUpdateB $
+bUnsafeKillP0 :: BCX w (S P0 ()) (S P0 ())
+bUnsafeKillP0 = unsafeOnUpdateBCX $ \ _ ->
     newIORef False >>= \ rfKilled ->
     let kill = readIORef rfKilled >>= \ bBlooded ->
                if bBlooded then return () else

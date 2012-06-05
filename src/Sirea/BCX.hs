@@ -31,14 +31,15 @@
 -- 
 module Sirea.BCX
     ( BCX
-    , unwrapBCX, wrapBCX
+    , unwrapBCX
+    , wrapBCX
     ) where
 
 import Prelude hiding ((.),id)
 import Control.Applicative
 import Control.Category
 --import Control.Arrow
-import Sirea.Internal.BCross
+import Sirea.Internal.BCross (crossB)
 import Sirea.Behavior
 import Sirea.Trans.Static 
 import Sirea.Partition
@@ -74,8 +75,8 @@ instance BCross (BCX w) where
     bcross = wrapBCX crossB
         
 
--- Special Cases:
---   BDynamic - need BCX B, BCX BCX
+-- TODO:
+--   BDynamic
 
 --
 -- To consider and maybe do: something like

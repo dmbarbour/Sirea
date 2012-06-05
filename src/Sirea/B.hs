@@ -1,18 +1,13 @@
 
--- | `B w x y` is a raw, primitive behavior type in Sirea. 
+-- | `B w x y` is the raw, primitive behavior type in Sirea. 
 --
--- While flexible,
--- hooking `B` behaviors to resources is inconvenient. Non-trivial 
--- RDP behaviors requires a shared namespace of resources, and using
--- global Haskell state should be discouraged.
---
--- Use of `BCX` instead of `B` allows the behavior itself to thread
--- a resource context through a behavior, and enables behaviors that
--- require context (such as bcross from Sirea.Partition).
+-- Hooking `B` behaviors to resources is inconvenient. Non-trivial 
+-- RDP behaviors require a shared namespace of resources, and using
+-- global Haskell state should be discouraged. See `BCX`.
 --
 -- See Also:
 --   Sirea.Link for `unsafeLnkB` - new behavior primitives.
---
+--   Sirea.BCX for behavior with resource context
 module Sirea.B (B) where
 
 import Sirea.Time
@@ -27,6 +22,8 @@ import Sirea.Internal.BImpl
 -- TUNING
 --   dtScanAheadB: default lookahead for constB, adjeqfB.
 --   dtTouchB: compute ahead of stability for btouch.
+-- Eventually I'd like to make these values adaptive, i.e. depending
+-- on actual lookahead stability at runtime.
 dtScanAheadB, dtTouchB :: DT
 dtScanAheadB = 2.0 -- seconds ahead of stability
 dtTouchB = 0.1 -- seconds ahead of stability

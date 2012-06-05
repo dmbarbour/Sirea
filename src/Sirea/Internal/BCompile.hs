@@ -107,7 +107,9 @@ buildTshift t0 tf (LnkSig lu) =
     LnkSig (ln_sumap (su_delay dtDiff) lu)
 
 
-
+-- TODO (Maybe):
+--  Compute maximum internal latency for a behavior.
+--  Could be used for shutdown behavior.
 
 
 

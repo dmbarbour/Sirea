@@ -3,19 +3,21 @@
 -- | LinkUnsafeIO provides quick and dirty behaviors to integrate 
 -- IO. Such behaviors can support easy debugging or prototyping of
 -- resources. They in some cases will be sufficient for integration
--- of effects. Though, there are `cleaner` ways to integrate effects
--- with RDP (blackboard metaphor, shared services).
+-- of effects. There are cleaner ways to integrate effects with RDP
+-- via blackboard metaphor, shared services.
 --
 -- The onUpdate operations are unsafe because they are not generally
--- idempotent or commutative. Sirea won't replicate behaviors, but
--- developers should feel free to duplicate behaviors to abstract or
--- refactor code, leveraging RDP's spatial idempotence properties. 
+-- idempotent or commutative. They also are difficult to anticipate,
+-- and only weakly tied to real-time. They are suitable for simple
+-- logging tasks for debugging, e.g. console output.
 --
--- In practice, developers can ensure that unsafe IO is used in safe 
--- ways. It just takes a little discipline. 
+-- With discipline, developers can ensure unsafe IO is used in safe
+-- ways, either make it idempotent and commutative or ensure unique
+-- use within a behavior.
 --
--- LinkUnsafeIO does not actually provide a way to pipe input back 
--- into the RDP behavior, at least not directly. 
+-- At the moment this only supports output. I have some ideas about
+-- how to inject inputs with IO, but integration with partitions and
+-- the IO process is still necessary.
 --
 -- On the input side, I am still designing a behavior - perhaps to
 -- inject a signal into RDP from IO, which would then be masked by
@@ -24,18 +26,21 @@
 -- feasible to combine these updates into batches (using a monoid).
 --
 module Sirea.LinkUnsafeIO 
-    ( unsafeOnUpdateB
-    , unsafeOnUpdateBL
-    , unsafeOnUpdateBLN
+    ( unsafeOnUpdateB, unsafeOnUpdateBCX
+    , unsafeOnUpdateBL, unsafeOnUpdateBCXL
+    , unsafeOnUpdateBLN, unsafeOnUpdateBCXLN
     ) where
 
 import Data.IORef
+import Data.Typeable
 import Control.Applicative
 import Sirea.Link
 import Sirea.Signal
 import Sirea.Time
 import Sirea.Behavior
 import Sirea.B
+import Sirea.BCX
+import Sirea.PCX
 import Sirea.Internal.BImpl (undeadB, keepAliveB)
 
 import Control.Exception (assert)
@@ -62,6 +67,7 @@ dtFinal = 3.0 -- seconds
 -- and so may be unsuitable for debugging purposes.
 unsafeOnUpdateB :: (Eq a) => IO (T -> Maybe a -> IO ()) -> B w (S p a) (S p a)
 unsafeOnUpdateB mkOp = unsafeOnUpdateBL mkOp >>> undeadB
+
 
 -- | unsafeOnUpdateBL - a very lazy variation of unsafeOnUpdateB.
 -- This variation allows dead-code elimination of the behavior when
@@ -135,6 +141,30 @@ runToStability rfSig rfA op su =
 unsafeOnUpdateBLN :: (Eq a) => IO (T -> Maybe a -> IO ()) 
                     -> B w (S p a :&: x) (S p a :&: x)
 unsafeOnUpdateBLN mkOp = bfirst (unsafeOnUpdateBL mkOp) >>> keepAliveB
+
+
+-- | the BCX variations of unsafeOnUpdateB, BL, BLN
+--
+-- Access to partition context allows effects from different parts
+-- of one application to combine in shared state, and also to filter
+-- for duplicate effects or enforce uniqueness.
+--
+-- Note that these operate on a specific partition (PCX p) rather
+-- than the world context (PCX w). Each partition and scope has a 
+-- distinct set of resources, and each resource is manipulated by 
+-- a single Sirea thread.
+unsafeOnUpdateBCX   :: (Eq a, Typeable p) => (PCX p -> IO (T -> Maybe a -> IO ())) 
+                                          -> BCX w (S p a) (S p a)
+unsafeOnUpdateBCXL  :: (Eq a, Typeable p) => (PCX p -> IO (T -> Maybe a -> IO ())) 
+                                          -> BCX w (S p a) (S p a)
+unsafeOnUpdateBCXLN :: (Eq a, Typeable p) => (PCX p -> IO (T -> Maybe a -> IO ())) 
+                                          -> BCX w (S p a :&: x) (S p a :&: x)
+
+--unsafeOnUpdateBCX mkOp = wrapBCX $ \ cw -> unsafeOnUpdateB (mkOp (findInPCX cw))
+unsafeOnUpdateBCX mkOp = wrapBCX $ unsafeOnUpdateB . mkOp . findInPCX
+unsafeOnUpdateBCXL mkOp = wrapBCX $ unsafeOnUpdateBL . mkOp . findInPCX
+unsafeOnUpdateBCXLN mkOp = wrapBCX $ unsafeOnUpdateBLN . mkOp . findInPCX
+
 
 
 
