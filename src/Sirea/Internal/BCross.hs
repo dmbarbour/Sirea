@@ -257,14 +257,15 @@ data OutBox p = OutBox
 -- 
 --     at least 1 to communicate
 --     at least 2 to combine batches
---     higher can be better or worse:
---       * more parallelism
---       * reduced consistency
---       * increases peak memory costs
---       * max frequency ratio (fast producer, slow consumer)
--- 
--- I'm choosing a value here that should be good for most programs.
--- Could later make this configurable (e.g. via command-line).
+--
+-- Higher values can improve parallelism, but can cost memory and 
+-- increase latency between an update becoming available and being
+-- processed. I'm choosing a value that should be decent for most
+-- programs. 
+--
+-- I don't want configuration to be a major aspect of Sirea. But I
+-- might make this configurable via command line at some point (as a
+-- resource). 
 ob_max_in_flight :: Int
 ob_max_in_flight = 4
 
