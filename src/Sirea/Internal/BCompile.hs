@@ -47,10 +47,14 @@ compileBC0 (B_first bef) dtx =
     (B_first bef', dtz)
 compileBC0 (B_left bef) dtx =
     let dte = lnd_left dtx in
-    let (bef', dtf) = compileBC0 bef dte in
-    let dtz = LnkDSum dtf (lnd_right dtx) in
-    assert (ldt_anyLive dte == ldt_anyLive dtf) $
-    (B_left bef', dtz)
+    if (ldt_anyLive dte) 
+        then let (bef', dtf) = compileBC0 bef dte in
+             let dtz = LnkDSum dtf (lnd_right dtx) in
+             assert (ldt_anyLive dtf) $
+             (B_left bef', dtz)
+        else let dtf = tr_dead dte in
+             let dtz = LnkDSum dtf (lnd_right dtx) in
+             (B_left deadOnInputB, dtz)
 compileBC0 (B_latent fn) dtx =
     compileBC0 (fn dtx) dtx
 compileBC0 (B_tshift fn) dtx =
@@ -105,6 +109,16 @@ buildTshift t0 tf (LnkSig lu) =
     assert (dtDiff >= 0) $
     if (0 == dtDiff) then LnkSig lu else
     LnkSig (ln_sumap (su_delay dtDiff) lu)
+
+
+-- | deadOnInputB simply returns LnkDead. Assumption: already have
+-- proven the input is dead. Injected by compileBC0 when B_left is
+-- dead on input; goal is to prevent unnecessary construction of 
+-- resources (such as partition threads).
+deadOnInputB :: B w x y
+deadOnInputB = B_mkLnk tr_dead lnkDead
+    where lnkDead = MkLnk { ln_build = const (return LnkDead)
+                          , ln_tsen = False, ln_peek = 0 } 
 
 
 -- TODO (Maybe):
