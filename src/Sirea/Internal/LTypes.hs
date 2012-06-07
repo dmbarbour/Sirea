@@ -237,9 +237,7 @@ monotonicStability _ _ = True
 -- validate that stability is respected by updates, i.e. that 
 -- no update happens earlier than the current stability.
 respectsStability  :: Maybe T -> Maybe T -> Bool
-respectsStability (Just t0) (Just tf) = (tf >= t0)
-respectsStability Nothing (Just _) = False
-respectsStability _ _ = True
+respectsStability = monotonicStability
 
 ------------------------------------------------------------------
 -- SigM represents states for two signals, for zip, merge, and 

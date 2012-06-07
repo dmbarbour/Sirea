@@ -48,9 +48,12 @@ import Control.Exception (assert)
 
 -- dtFinal provides the upper bound for how far to execute when 
 -- stability increases to infinity, measured against the last 
--- update or the prior stability.
+-- update or the prior stability. This only happens on shutdown,
+-- so there should be a time at which we hit `Nothing` and there
+-- are no further updates. But we'll only look for that time up 
+-- to a few seconds into the signal. How far?
 dtFinal :: DT
-dtFinal = 3.0 -- seconds
+dtFinal = 6.0 -- seconds
 
 -- | unsafeOnUpdateB - perform an IO action for every unique value
 -- in a signal as it becomes stable, then forward the update (after

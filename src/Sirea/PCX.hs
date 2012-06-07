@@ -17,10 +17,10 @@
 -- developers may find any resource of typeclass Resource.
 --
 -- The idea with PCX is to present resources as though they already
--- exist, as though PCX is an infinite namespace, and resources are
+-- exist: as though PCX is an infinite namespace, and resources are
 -- accessible if only we can name them. The naming in PCX is based
 -- on Data.Typeable, though developers are free to extend this with
--- resources that represent new resource spaces.
+-- resources that represent resource spaces of different structure.
 --
 -- PCX is most useful for volatile resources, which will not survive
 -- destruction of the Haskell process and must thus be reconstructed 
@@ -171,7 +171,10 @@ fromDynList [] = Nothing
 fromDynList (x:xs) = fromDynamic x <|> fromDynList xs
 
 -- | newPCX - a `new` PCX space, unique and fresh.
--- You can find any number of child PCX spaces.
+--
+-- You can find child PCX spaces if more than one resource of a
+-- given type is necessary. To support persistence, a path in the
+-- PCX is accessible as a `[TyRep]` resource.
 newPCX :: IO (PCX w)
 newPCX = 
     newIORef [] >>= \ rf ->

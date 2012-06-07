@@ -51,7 +51,7 @@ import Data.Typeable -- B is typeable
 --   * duration coupling - the active periods of response y are
 --     tightly coupled to the active periods of demand x. If x is
 --     active 100 ms, inactive 300 ms, active 200 ms then so will
---     be y (albeit, possibly delayed a little).
+--     be y (albeit possibly delayed by a small constant).
 --   * continuous & eventless - no instantaneous states or values, 
 --     and conceptually infinite instants between times. Rather than
 --     a button-press event, for example, developers will see the

@@ -208,15 +208,12 @@ buildMerge_i tl tr (LnkSum x y) =
 buildMerge_i tl tr (LnkSig lu) =
     let lLiv = (ldt_live . lnd_sig) tl in
     let rLiv = (ldt_live . lnd_sig) tr in
-    case (lLiv, rLiv) of
-        (False,False) -> return (LnkDead, LnkDead)  -- merge of dead branches
-        (False,True) -> return (LnkDead, LnkSig lu) -- always in rhs path
-        (True,False) -> return (LnkSig lu, LnkDead) -- always in lhs path
-        (True,True) -> -- perform an actual merge of live data!
-            let onEmit = ln_update lu . sm_emit (<|>) in
-            let onTouch = ln_touch lu in
-            ln_withSigM onTouch onEmit >>= \ (ul,ur) ->
-            return (LnkSig ul, LnkSig ur)
+    if (not lLiv) then return (LnkDead, LnkSig lu) else
+    if (not rLiv) then return (LnkSig lu, LnkDead) else
+    let onEmit = ln_update lu . sm_emit (<|>) in
+    let onTouch = ln_touch lu in
+    ln_withSigM onTouch onEmit >>= \ (ul,ur) ->
+    return (LnkSig ul, LnkSig ur)
 
 
 
