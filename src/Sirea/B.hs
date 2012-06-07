@@ -25,11 +25,11 @@ import Sirea.Internal.BImpl
 -- Eventually I'd like to make these values adaptive, i.e. depending
 -- on actual lookahead stability at runtime.
 dtScanAheadB, dtTouchB :: DT
-dtScanAheadB = 2.0 -- seconds ahead of stability
-dtTouchB = 0.1 -- seconds ahead of stability
+dtScanAheadB = 1.0 -- seconds ahead of stability
+dtTouchB = 0 -- seconds ahead of stability
 
 eqfB :: (x -> x -> Bool) -> B w (S p x) (S p x)
-eqfB eq = unsafeEqShiftB dtScanAheadB eq
+eqfB = unsafeEqShiftB dtScanAheadB
 
 instance BFmap (B w) where 
     bfmap    = fmapB

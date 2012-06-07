@@ -1,4 +1,4 @@
-{-# LANGUAGE EmptyDataDecls, FlexibleInstances #-}
+{-# LANGUAGE FlexibleInstances #-}
 
 -- | Declarative resource linking mechanism for Haskell.
 --
@@ -50,6 +50,7 @@ import Data.Typeable
 import Data.Dynamic
 import Data.IORef
 import Data.Monoid
+import Control.Applicative
 import Control.Monad.Fix (mfix)
 import System.IO.Unsafe (unsafePerformIO, unsafeInterleaveIO)
 
@@ -167,7 +168,7 @@ loadOrAdd newR dynL =
 
 fromDynList :: (Typeable r) => [Dynamic] -> Maybe r
 fromDynList [] = Nothing
-fromDynList (x:xs) = maybe (fromDynList xs) Just (fromDynamic x)
+fromDynList (x:xs) = fromDynamic x <|> fromDynList xs
 
 -- | newPCX - a `new` PCX space, unique and fresh.
 -- You can find any number of child PCX spaces.

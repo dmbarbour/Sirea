@@ -1,4 +1,4 @@
-{-# LANGUAGE GADTs, EmptyDataDecls, Rank2Types #-}
+{-# LANGUAGE GADTs, Rank2Types #-}
 
 -- | Build a Sirea application for embedding in an external loop.
 --
@@ -36,6 +36,7 @@ module Sirea.Build
 
 import Data.IORef
 import Control.Concurrent.MVar
+import Control.Monad (unless, when, void)
 import Control.Exception (finally)
 import Control.Concurrent (myThreadId, forkIO, killThread)
 import Sirea.Internal.BTypes
@@ -179,12 +180,12 @@ beginSireaApp so =
 basicSireaAppLoop :: IORef Bool -> Stepper -> IO ()
 basicSireaAppLoop rfContinue stepper = 
     readIORef rfContinue >>= \ bContinue ->
-    if (not bContinue) then return () else
-    newEmptyMVar >>= \ mvWait  ->
-    addStepperEvent stepper (putMVar mvWait ()) >>
-    takeMVar mvWait >>
-    runStepper stepper >>
-    basicSireaAppLoop rfContinue stepper 
+    when bContinue $ 
+        newEmptyMVar >>= \ mvWait  ->
+        addStepperEvent stepper (putMVar mvWait ()) >>
+        takeMVar mvWait >>
+        runStepper stepper >>= \ _ ->
+        basicSireaAppLoop rfContinue stepper 
     
 
 -- | bUnsafeKillP0 - use with runSireaApp. The first time the signal
@@ -202,12 +203,12 @@ bUnsafeKillP0 :: BCX w (S P0 ()) (S P0 ())
 bUnsafeKillP0 = unsafeOnUpdateBCX $ \ _ ->
     newIORef False >>= \ rfKilled ->
     let kill = readIORef rfKilled >>= \ bBlooded ->
-               if bBlooded then return () else
-               writeIORef rfKilled True >>
-               myThreadId >>= \ tidP0 ->
-               forkIO (killThread tidP0) >>
-               return () 
+               unless bBlooded $ void $ 
+                   writeIORef rfKilled True >>
+                   myThreadId >>= \ tidP0 ->
+                   forkIO (killThread tidP0)
     in
+    -- operation ignores T and pr
     let op _ = maybe (return ()) (const kill) in
     return op
 

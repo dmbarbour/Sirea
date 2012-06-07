@@ -34,6 +34,7 @@ module Sirea.LinkUnsafeIO
 import Data.IORef
 import Data.Typeable
 import Control.Applicative
+import Control.Monad (unless)
 import Sirea.Link
 import Sirea.Signal
 import Sirea.Time
@@ -110,18 +111,16 @@ runToStability rfSig rfA op su =
     case (,) <$> tLower <*> tUpper of
         Nothing -> return ()
         Just (tL,tU) ->
-            if (tL == tU) then return () else
-            assert (tL < tU) $
-            let lsigs = sigToList sf tL tU in
-            let action (t,a) =
-                    if (t == tU) then return () else
-                    assert ((tL <= t) && (t < tU)) $
-                    readIORef rfA >>= \ a0 ->
-                    if (a == a0) then return () else
-                    writeIORef rfA a >> 
-                    op t a
-            in 
-            mapM_ action lsigs
+            unless (tL == tU) $ assert (tL < tU) $
+                let lsigs = sigToList sf tL tU in
+                let action (t,a) =
+                        unless (t == tU) $ assert ((tL <= t) && (t < tU)) $
+                            readIORef rfA >>= \ a0 ->
+                            unless (a == a0) $
+                                writeIORef rfA a >> 
+                                op t a
+                in 
+                mapM_ action lsigs
 
 -- | unsafeOnUpdateBLN - perform IO effects if any of many signals
 -- are used later in the pipeline. A Goldilocks solution:

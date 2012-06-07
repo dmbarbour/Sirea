@@ -1,4 +1,4 @@
-{-# LANGUAGE GADTs, TypeOperators, EmptyDataDecls #-}
+{-# LANGUAGE GADTs, TypeOperators #-}
 
 -- Behavior types. 
 module Sirea.Internal.BTypes
@@ -65,22 +65,22 @@ import Data.Typeable -- B is typeable
 -- coupling. 
 data B w x y where
   -- most operations
-  B_mkLnk   :: !(TR x y) -> !(MkLnk w x y) -> B w x y
+  B_mkLnk   :: (TR x y) -> (MkLnk w x y) -> B w x y
 
   -- time modeling, logical delay, concrete delay
-  B_tshift  :: !(TS x) -> B w x x
+  B_tshift  :: (TS x) -> B w x x
 
   -- category
-  B_pipe    :: !(B w x y) -> !(B w y z) -> B w x z
+  B_pipe    :: (B w x y) -> (B w y z) -> B w x z
 
   -- arrows
-  B_first   :: !(B w x x') -> B w (x :&: y) (x' :&: y)
-  B_left    :: !(B w x x') -> B w (x :|: y) (x' :|: y)
+  B_first   :: (B w x x') -> B w (x :&: y) (x' :&: y)
+  B_left    :: (B w x x') -> B w (x :|: y) (x' :|: y)
 
   -- bmerge needed some extra info to perform critical
   -- dead code elimination. Basically, it needs compile
   -- data from the forward pass.
-  B_latent  :: !(LnkD LDT x -> B w x y) -> B w x y
+  B_latent  :: (LnkD LDT x -> B w x y) -> B w x y
 
   -- B_unique :: !UniqueID -> !(B w x y) -> B w x y
 
@@ -179,9 +179,9 @@ tr_dead x = LnkDUnit ldtDead
 -- It allows a single value to represent a group. Usefully
 -- it can be propagated even if the type is unknown.
 data LnkD d x where
-    LnkDUnit :: !d -> LnkD d x
-    LnkDProd :: !(LnkD d x) -> !(LnkD d y) -> LnkD d (x :&: y)
-    LnkDSum  :: !(LnkD d x) -> !(LnkD d y) -> LnkD d (x :|: y)
+    LnkDUnit :: d -> LnkD d x
+    LnkDProd :: (LnkD d x) -> (LnkD d y) -> LnkD d (x :&: y)
+    LnkDSum  :: (LnkD d x) -> (LnkD d y) -> LnkD d (x :|: y)
 
 lnd_fst :: LnkD d (x :&: y) -> LnkD d x
 lnd_snd :: LnkD d (x :&: y) -> LnkD d y

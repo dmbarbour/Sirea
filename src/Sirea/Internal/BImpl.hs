@@ -35,6 +35,7 @@ import Sirea.Signal
 
 import Control.Category
 import Control.Applicative
+import Control.Monad (unless)
 import Control.Parallel.Strategies (Eval, runEval, evalList, rseq)
 import Control.Exception (assert)
 import Data.Function (on)
@@ -436,7 +437,7 @@ unsafeAddStabilityB dt =
     mkLnkB id (mkLnkPure lnAddStability)
     where lnAddStability = ln_lumap $ ln_sumap suAddStability
           suAddStability su =
-            let tStable = fmap (flip addTime dt) (su_stable su) in
+            let tStable = fmap (`addTime` dt) (su_stable su) in
             su { su_stable = tStable }
 
 -- | force evaluation of signal relative to stability, up to `Just`. 
@@ -588,7 +589,7 @@ lnEqShift dt eq rf lu = LnkUp { ln_touch = onTouch, ln_update = onUpdate }
                 Nothing -> ln_update lu su
                 Just (sf,tLower) ->
                     -- search for change between update time and stability + dt
-                    let tUpper = maybe tLower (flip addTime dt) (su_stable su) in
+                    let tUpper = maybe tLower (`addTime` dt) (su_stable su) in
                     let shifted = eqShift eq s0 sf tLower tUpper in
                     let su' = su { su_state = Just shifted } in
                     ln_update lu su'
@@ -638,13 +639,15 @@ makePhaseLU :: IORef (SigUp a,Bool) -> PhaseQ -> LnkUp a -> LnkUp a
 makePhaseLU rf pq lu = LnkUp { ln_touch = touch, ln_update = update }
     where touch = return ()
           update su =
-            readIORef rf >>= \ (su0,hasUpdate) ->
+            readIORef rf >>= \ (su0,bPrepared) ->
             writeIORef rf (appendSigUp su0 su, True) >>
-            if hasUpdate then return () else
-            ln_touch lu >> pq deliver
+            unless bPrepared doPrepare
+          doPrepare = 
+            ln_touch lu >> 
+            pq deliver
           deliver = -- called later, by PhaseQ
-            readIORef rf >>= \ (su,hasUpdate) ->
-            assert hasUpdate $
+            readIORef rf >>= \ (su,bPrepared) ->
+            assert bPrepared $
             writeIORef rf (suZero,False) >>
             ln_update lu su
 

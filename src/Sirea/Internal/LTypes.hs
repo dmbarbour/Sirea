@@ -18,6 +18,7 @@ import Sirea.Time
 import Sirea.Signal
 import Control.Exception (assert)
 import Control.Monad (unless)
+import Control.Arrow (first)
 import Data.IORef
 
 -- | MkLnk - constructors and metadata for including a new behavior
@@ -64,9 +65,9 @@ type Lnk = LnkW LnkUp
 -- | LnkW is a GADT for a complex product of signals. 
 data LnkW s a where
     LnkDead :: LnkW s a -- for dead code
-    LnkSig  :: !(s a) -> LnkW s (S p a)
-    LnkProd :: !(LnkW s a) -> !(LnkW s b) -> LnkW s (a :&: b)
-    LnkSum  :: !(LnkW s a) -> !(LnkW s b) -> LnkW s (a :|: b)
+    LnkSig  :: (s a) -> LnkW s (S p a)
+    LnkProd :: (LnkW s a) -> (LnkW s b) -> LnkW s (a :&: b)
+    LnkSum  :: (LnkW s a) -> (LnkW s b) -> LnkW s (a :|: b)
 
 -- | LnkUp processes updates to a concrete signal. Complex signals
 -- can be represented ultimately as a complex product of LnkUp 
@@ -174,7 +175,7 @@ su_time = fmap snd . su_state
 -- | modify the value of a signal update
 su_fmap :: (Sig a -> Sig b) -> SigUp a -> SigUp b
 su_fmap fn su =
-    let state' = fmap (\(s0,t) -> (fn s0, t)) (su_state su) in
+    let state' = fmap (first fn) (su_state su) in
     SigUp { su_state = state', su_stable = su_stable su }
 
 -- | apply a signal update to a signal.

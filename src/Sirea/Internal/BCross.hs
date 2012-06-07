@@ -18,9 +18,11 @@ module Sirea.Internal.BCross
 import Data.Typeable
 import Data.Function (fix)
 import Data.IORef
+import Data.Maybe (isNothing)
 import Control.Applicative
 import Control.Exception (mask_, assert)
 import Control.Concurrent.MVar 
+import Control.Monad (join, unless, when)
 
 import Sirea.Internal.BTypes
 import Sirea.Internal.STypes
@@ -112,11 +114,11 @@ initPartition :: (Partition p) => p -> PCX w -> IO ()
 initPartition p cw =
     let tc = getTC p cw in
     atomicModifyIORef (tc_init tc) (\x->(True,x)) >>= \ bInit ->
-    if bInit then return () else
-    let cp = getPCX p cw in
-    newPartitionThread cp (tcToStepper tc) >>= \ stopper ->
-    let gs = unGob $ findInPCX cw in
-    atomicModifyIORef gs (\stoppers->(stopper:stoppers,()))
+    unless bInit $ 
+        let cp = getPCX p cw in
+        newPartitionThread cp (tcToStepper tc) >>= \ stopper ->
+        let gs = unGob $ findInPCX cw in
+        atomicModifyIORef gs (\stoppers->(stopper:stoppers,()))
     
 -- | TC is the thread context, which is basically a couple IORefs 
 -- with some metadata about the thread. 
@@ -192,14 +194,14 @@ runTCSend rfEmit =
     writeIORef rfEmit (return ()) >>
     doEmit
 
+-- add work to a partition; will execute at start of next round
 addTCRecv :: TC p -> Work -> IO ()
-addTCRecv tc op = atomicModifyIORef (tc_recv tc) putOpTakeEvent >>= id
+addTCRecv tc op = join $ atomicModifyIORef (tc_recv tc) putOpTakeEvent
     where putOpTakeEvent (Left event) = (Right op, event)
           putOpTakeEvent (Right work) = (Right (work >> op), return ())
 
 addTCEvent :: TC p -> Event -> IO ()
-addTCEvent tc ev =
-    atomicModifyIORef (tc_recv tc) addOrExecEvent >>= id
+addTCEvent tc ev = join $ atomicModifyIORef (tc_recv tc) addOrExecEvent
     where addOrExecEvent (Left event) = (Left (event >> ev), return ())
           addOrExecEvent (Right work) = (Right work, ev)
 
@@ -225,10 +227,10 @@ tcSend cw p1 p2 =
 tcSend' :: TC p1 -> OutBox p2 -> TC p2 -> Work -> IO ()
 tcSend' tc1 ob tc2 work =
     ob_addWork ob work >>= \ bFirst -> 
-    if bFirst then prepSend else return ()
+    when bFirst prepSend
     where prepSend  = addTCSend tc1 doDeliver -- deliver at end of round
-          doDeliver = ob_deliver ob recvInP2  -- perform delivery (may wait)
-          recvInP2  = addTCRecv tc2           -- outbox work shifted to p2
+          doDeliver = ob_deliver ob recvInP2  -- performs delivery (may wait)
+          recvInP2  = addTCRecv tc2           -- adds work to next round in p2
 
 -- | OutBox - output from Sirea thread.
 --
@@ -245,7 +247,7 @@ tcSend' tc1 ob tc2 work =
 -- Outboxes are modeled as resources under the sender's PCX. It is
 -- manipulated single-threaded by the sender's thread, except for a
 -- semaphore. Work to perform remotely is simply queued as an IO
--- task. Releasing the semaphore is added as a task to each batch to
+-- task. Releasing the semaphore is added as a task to each batch, to
 -- model the bounded buffer.
 -- 
 data OutBox p = OutBox 
@@ -286,7 +288,7 @@ ob_addWork :: OutBox p -> Work -> IO Bool
 ob_addWork ob op =
     let st = ob_state ob in
     readIORef st >>= \ mbW ->
-    let result = maybe True (const False) mbW in
+    let result = isNothing mbW in
     let mbW' = Just $ maybe op (>> op) mbW in
     writeIORef st mbW' >>
     return result
@@ -322,7 +324,7 @@ newSemaphore nInit =
 -- signal that a resource is available; will call an event if any
 -- thread is waiting, otherwise will increment number available
 sem_signal :: Semaphore -> IO ()
-sem_signal s = atomicModifyIORef s inc >>= id
+sem_signal s = join $ atomicModifyIORef s inc
     where inc (Left n) = (Left (succ n), return())
           inc (Right []) = error "invalid state for semaphore"
           inc (Right (op:[])) = (Left 0, op)
@@ -332,7 +334,7 @@ sem_signal s = atomicModifyIORef s inc >>= id
 -- the resource is available, and grants the resource with the
 -- same call (must signal to release)
 sem_wait_event :: Semaphore -> Event -> IO ()
-sem_wait_event s ev = atomicModifyIORef s dec >>= id
+sem_wait_event s ev = join $ atomicModifyIORef s dec
     where dec (Left 0) = (Right [ev], return ())
           dec (Left n) = assert (n > 0) $ (Left (pred n), ev)
           dec (Right ops) = (Right (ops++[ev]), return ())

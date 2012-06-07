@@ -141,8 +141,8 @@ instance Num DT where
     abs (DT a) = if (_tmDay a < 0) then negate (DT a) else (DT a)
     signum (DT a) = 
         if (_tmDay a < 0) 
-            then fromInteger (negate 1) 
-            else fromInteger 1
+            then -1 
+            else  1
     fromInteger = nanosToDt . (*) nanosInSec
 
 -- 'Fractional' is primarily for the 'fromRational' 

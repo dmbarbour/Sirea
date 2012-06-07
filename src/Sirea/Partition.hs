@@ -56,6 +56,7 @@ import Data.Typeable
 import Data.IORef
 import Control.Exception (assert)
 import Control.Concurrent (forkIO)
+import Control.Monad (join)
 import Control.Concurrent.MVar
 
 -- | Cross between partitions. Note that this behavior requires the
@@ -203,7 +204,7 @@ makeStopper rf = Stopper
     }
 
 addStopDataEvent :: IORef StopData -> IO () -> IO ()
-addStopDataEvent rf ev = atomicModifyIORef rf addEv >>= id
+addStopDataEvent rf ev = join $ atomicModifyIORef rf addEv
     where addEv sd = 
             if (isStopped sd) then (sd, ev) else
             let sd' = sd { onStop = (ev >> onStop sd) } in
@@ -216,7 +217,7 @@ emptyStopData :: StopData
 emptyStopData = SD False False (return ())
 
 finiStopData :: IORef StopData -> IO ()
-finiStopData rf = atomicModifyIORef rf fini >>= id
+finiStopData rf = join $ atomicModifyIORef rf fini
     where fini sd =
                 assert (shouldStop sd) $
                 assert (not $ isStopped sd) $
