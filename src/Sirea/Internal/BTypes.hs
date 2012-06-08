@@ -82,7 +82,7 @@ data B w x y where
   -- data from the forward pass.
   B_latent  :: (LnkD LDT x -> B w x y) -> B w x y
 
-  -- B_unique :: !UniqueID -> !(B w x y) -> B w x y
+  -- B_unique :: UniqueID -> (B w x y) -> B w x y
 
 -- POSSIBILITY: Add the UniqueID automatically with unsafeLnkB 
 -- (via unsafePerformIO) and for all the BImpl options. 

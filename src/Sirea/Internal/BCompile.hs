@@ -2,6 +2,7 @@
 
 module Sirea.Internal.BCompile
     ( compileB
+--    , latencyB
     ) where
 
 import Sirea.Internal.BTypes
@@ -32,7 +33,8 @@ compileB bxy dtx lny =
 
 -- | This is an initial left-to-right compile within a behavior. It
 -- computes the timing properties of the resulting signal, applies 
--- latent updates, and eliminates dead code on input. 
+-- time-dependent transforms (B_latent), and eliminates dead code on
+-- input (at B_left).
 compileBC0 :: B w x z -> LnkD LDT x -> (B w x z, LnkD LDT z)
 compileBC0 (B_pipe bxy byz) dtx =
     let (bxy', dty) = compileBC0 bxy dtx in
@@ -119,6 +121,7 @@ deadOnInputB :: B w x y
 deadOnInputB = B_mkLnk tr_dead lnkDead
     where lnkDead = MkLnk { ln_build = const (return LnkDead)
                           , ln_tsen = False, ln_peek = 0 } 
+
 
 
 -- TODO (Maybe):

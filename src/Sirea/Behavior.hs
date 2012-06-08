@@ -107,10 +107,11 @@ class (Category b) => BFmap b where
     -- must be used judiciously (or badjeqf could itself become the
     -- redundant computation).
     --
-    -- Not all redundant updates are eliminated. When a signal is
-    -- updated, scanning for the first actual change could diverge
-    -- if there is no change. Type `b` may allow configuration of
-    -- how far to scan.
+    -- Not all redundant updates are eliminated. In particular, you
+    -- may still see redundant updates for each actual signal update
+    -- because it isn't feasible to scan indefinitely into the prior
+    -- signal's future to find the first difference. (But the update
+    -- can be shifted a bit into the future to avoid much rework.)
     badjeqf :: (Eq x) => b (S p x) (S p x)
     badjeqf = bfwd -- semantic effect is identity
 
@@ -156,11 +157,11 @@ bspark f = bfmap sparkf >>> bstrat >>> btouch
 --     brunPar = bstratf runParAsync
 --
 -- Here brunPar will initiate computation if `Just x` constructor is
--- observed when sampling the signal, i.e. when signal is touched.
--- (NOTE: it would be unsafe to leak IVars from a Par computation.)
+-- observed when sampling the signal, i.e. when signal is touched,
+-- begin computing `x` value in parallel. (NOTE: it would be unsafe 
+-- to leak IVars from a Par computation.)
 --
-bstratf :: (BFmap b, Functor f) 
-        => (forall e . (f e -> e)) 
+bstratf :: (BFmap b, Functor f) => (forall e . (f e -> e)) 
         -> b (S p (f x)) (S p x)
 bstratf runF = bfmap (runF . fmap return) >>> bstrat
 
@@ -225,8 +226,9 @@ bvoid f = bdup >>> bfirst f >>> bsnd
 --     bassocls - sums are associative (shift parens left)
 --
 -- Excepting bmerge, the above operations should be free at runtime.
--- bmerge does have some overhead, but is rarely a useful operation.
--- A few more operations are defined using bmirror.
+-- bmerge has an overhead similar to bzip (in some cases it might be
+-- better for performance to simply apply the same operation to left
+-- and right). A few more operations are defined using bmirror.
 --
 --     bright - apply behavior only to the right path
 --     binr - constant choose right; i.e. if false

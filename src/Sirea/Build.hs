@@ -17,10 +17,10 @@
 -- The first runStepper operation activates the application, setting
 -- the input signal (S P0 ()) to active at current wall-clock time.
 -- Stability is several seconds, increased incrementally by later 
--- step operations. Stopper respects stability, so it takes several
--- seconds to halt a SireaApp in that manner. For precise shutdown,
--- use state and dynamic behavior to model halted, paused, disabled
--- behavior for the application as a whole.
+-- step operations. Stopper respects stability, so it takes seconds
+-- to halt a SireaApp in that manner. For precise shutdown use state 
+-- and dynamic behavior to model halted, paused, disabled behavior 
+-- for the application as a whole.
 --
 -- It is recommended that Sirea applications be designed resilient
 -- against crash, power loss, or abrupt killing of the whole Haskell 
@@ -50,17 +50,6 @@ import Sirea.PCX
 import Sirea.BCX
 import Sirea.Time
 
--- TUNING:
---   dt_app_stability : how far ahead to stabilize (e.g. 5s)
---   dt_app_step      : periodic increase in stability (e.g. 1s)
---   dt_app_border    : assumed startup time (e.g. 50 ms)
---
--- Stabilizing 5s ahead means that some values are computed that
--- far ahead; it also means at least 5s to shut down.
-dt_app_stability, dt_app_step, dt_app_border :: DT
-dt_app_stability = 3.0 -- stability of main signal
-dt_app_step = 0.5 -- periodic event to increase stability
-dt_app_border = 0.05 -- latency for startup, shutdown
 
 -- | This is what an RDP application looks like in Sirea:
 --
@@ -146,15 +135,35 @@ zeroObject cw =
 -- then periodically increase the stability of that signal. 
 buildSireaBLU :: PCX w -> LnkUp () -> IO SireaObject
 buildSireaBLU cw lu =
-    newIORef False >>= \ rfStop -> 
-    let tc0 = getTC0 cw in
+    newIORef emptyStopState >>= \ rfStop -> 
+    let tc0 = findInPCX cw in
+    addTCRecv tc0 (initAndMaintain tc0 rfStop lu) >> 
+    let stepper = tcToStepper tc0 in
     -- TODO: prepare the stopper
     --       prepare the periodic stability increase
     undefined
     {- addTCRecv tc0 -}
     
-getTC0 :: PCX w -> TC P0
-getTC0 = findInPCX
+data StopState = StopState { isStopped :: Bool, onStopped :: IO () }
+emptyStopState :: StopState
+emptyStopState = StopState False (return ())
+
+-- A periodic heartbeat-like task maintains stability of a SireaApp,
+-- and supports the application lifecycle from start to stop. This
+-- is modeled by a periodic increase in the stability of the input
+-- signal. It does influence incremental computations (e.g. btouch).
+-- Stopping the thread respects these stability values.
+-- 
+
+
+-- Tuning parameters for the heartbeat thread:
+--   dt_app_stability : how far ahead to stabilize
+--   dt_app_step      : period between stability updates
+--   dt_app_border    : assumed startup time
+dt_app_stability, dt_app_step, dt_app_border :: DT
+dt_app_stability = 0.84  -- stability of main signal
+dt_app_step      = 0.12  -- periodic event to increase stability
+dt_app_border    = 0.06  -- estimated latency for startup, shutdown
 
 
 
@@ -162,7 +171,7 @@ getTC0 = findInPCX
 -- runSireaApp. This will simply run the application until the main
 -- thread receives a killThread signal, at which point it will try
 -- to shutdown gracefully. The signal can be delivered internally by
--- use of unsafeKillP0. 
+-- use of bUnsafeKillP0. 
 runSireaApp :: SireaApp -> IO ()
 runSireaApp app = buildSireaApp app >>= beginSireaApp
 

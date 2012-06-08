@@ -8,41 +8,38 @@
 -- and names. A useful idiom: abstract infinite spaces of resources,
 -- and lazily initialize resources as they are discovered or used.
 -- It is easy to partition infinite space into more infinite spaces.
--- Every RDP application may thus have its own, infinite corner of 
--- the universe. 
+-- Every RDP component may thus have its own, infinite corner of the
+-- universe. 
 --
 -- Sirea also uses this conservative notion of resources to achieve
--- a more declarative programming experience. This is expressed in
+-- a more declarative programming experience. This is modeled with
 -- PCX. In Sirea, resource acquisition is mostly type driven: the
--- developers may find any resource of typeclass Resource.
+-- developers may "locate" any resource of typeclass Resource.
 --
 -- The idea with PCX is to present resources as though they already
 -- exist: as though PCX is an infinite namespace, and resources are
 -- accessible if only we can name them. The naming in PCX is based
--- on Data.Typeable, though developers are free to extend this with
--- resources that represent resource spaces of different structure.
+-- on Data.Typeable, though it is feasible to extend PCX with more
+-- resource models of different names and paths.
 --
 -- PCX is most useful for volatile resources, which will not survive
 -- destruction of the Haskell process and must thus be reconstructed 
--- every time we start. Persistent resources use volatile proxies to
--- represent connections, queues, caches, and so on. Resources serve
--- as threads, legacy or FFI adapters, control ports for UI, etc.
+-- every time we start. But persistent resources also benefit, using
+-- volatile proxies (connections, queues, caches, cursors, etc.). In
+-- Sirea, PCX supports threads, UI, networking, and FFI adapters.
 --
--- NOTE: Threading PCX through an application would grow irritating.
--- However, a simple behavior transformer can make it a lot nicer.
--- Another module in Sirea will provide the BCX type to carry an
--- initial PCX to every element in a behavior that might want it.
---
--- NOTE: PCX is very simple and does not handle larger concerns such
--- as configurations, policies, and dependency injection. Don't try
--- to force it; configuration via mutable variables is just awkward.
--- I'll tackle those concerns at a higher layer (along with plugins,
--- live programming and configuration).
+-- PCX is unsuitable for configuration or dependency injection. The
+-- model is difficult to parameterize or override. The configuration
+-- problem should be solved at another layer (preferably in RDP for
+-- reactive reconfiguration) - Sirea will eventually have a plugins
+-- model that tackles configurations, dependencies, preferences, and
+-- live programming or adaptation.
 -- 
 module Sirea.PCX
-    ( PCX    -- abstract
-    , newPCX -- a new toplevel
+    ( PCX       -- abstract
+    , newPCX    -- a new toplevel
     , findInPCX -- the lookup function
+    , pcxPath   -- identifier for the PCX.
     , Resource(..)
     ) where
 
@@ -60,13 +57,14 @@ import System.IO.Unsafe (unsafePerformIO, unsafeInterleaveIO)
 -- It holds one resource of each type. Conceptually, it is already
 -- holding those resources, and we just need to look for them. So
 -- access to any particular resource is idempotent and offers a
--- pretense of purity.
+-- pretense of purity. The actual implementation uses IO to create
+-- resources lazily (and unsafely) when we need them.
 --
 -- Multiple instances of one type are easily achieved by modeling
 -- another resource space as a resource. E.g. if you want a space
 -- with integers mapped to state, you can do that - just write the
 -- type and add a Resource instance for it. Child PCX contexts are
--- also accessible as resources.
+-- accessible (as resources).
 --
 -- NOTE: `PCX w` has connotations that `w` is the full world, i.e.
 -- the root partition created by `newPCX`. It is also used in type
@@ -89,6 +87,14 @@ instance Typeable1 PCX where
     typeOf1 _ = mkTyConApp tycPCX []
         where tycPCX = mkTyCon3 "Sirea" "PCX" "PCX"
 
+-- | pcxPath identifies a PCX relative to its initial construction,
+-- across child PCX resources. This offers resources unique, stable,
+-- path-based identity within an application, which can be leveraged
+-- for orthogonal persistence (e.g. keys in a database). 
+pcxPath :: PCX p -> [TypeRep]
+pcxPath = pcx_ident
+
+
 -- | Resource - found inside a PCX. 
 --
 -- Resources are constructed in IO, but developers should protect an
@@ -100,7 +106,8 @@ instance Typeable1 PCX where
 --   * not sensitive to thread in which construction occurs
 --
 -- That is, we shouldn't see anything unless we agitate resources by
--- further IO operations.
+-- further IO operations. If we create a resource but don't ever use
+-- it, there should be no significant effects.
 class (Typeable r) => Resource r where
     locateResource :: PCX p -> IO r
 
@@ -115,8 +122,6 @@ instance (Typeable p) => Resource (PCX p) where
               typeOfPCX _ = undefined
 
 -- Some utility instances.
-instance Resource [TypeRep] where
-    locateResource = return . pcx_ident
 instance (Typeable a, Monoid a) => Resource (IORef a) where
     locateResource _ = newIORef mempty
 instance (Resource x, Resource y) => Resource (x,y) where
@@ -173,8 +178,7 @@ fromDynList (x:xs) = fromDynamic x <|> fromDynList xs
 -- | newPCX - a `new` PCX space, unique and fresh.
 --
 -- You can find child PCX spaces if more than one resource of a
--- given type is necessary. To support persistence, a path in the
--- PCX is accessible as a `[TyRep]` resource.
+-- given type is necessary. 
 newPCX :: IO (PCX w)
 newPCX = 
     newIORef [] >>= \ rf ->

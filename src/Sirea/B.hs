@@ -1,9 +1,10 @@
 
 -- | `B w x y` is the raw, primitive behavior type in Sirea. 
 --
--- Hooking `B` behaviors to resources is inconvenient. Non-trivial 
--- RDP behaviors require a shared namespace of resources, and using
--- global Haskell state should be discouraged. See `BCX`.
+-- `B` assumes that necessary hooks (into environment and resources)
+-- are already formed. However, it is inconvenient to achieve those
+-- hooks by hand. To model environment and convenient type-driven
+-- relationships (and multi-threading with bcross), use BCX.
 --
 -- See Also:
 --   Sirea.Link for `unsafeLnkB` - new behavior primitives.
