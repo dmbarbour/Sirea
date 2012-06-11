@@ -31,12 +31,13 @@ module Sirea.Build
     , runSireaApp
     , beginSireaApp
     , SireaApp
-    , bUnsafeKillP0
+    , bUnsafeExit
     ) where
 
 import Data.IORef
+import Data.Typeable
 import Control.Concurrent.MVar
-import Control.Monad (unless, when, void)
+import Control.Monad (unless, when, void, liftM)
 import Control.Exception (finally, assert)
 import Control.Concurrent (myThreadId, forkIO, killThread, threadDelay)
 import Sirea.Internal.BTypes
@@ -216,7 +217,8 @@ dtBorder    = 0.06  -- latency added for startup (for anticipation)
 -- | If you don't need to run the stepper yourself, consider use of
 -- runSireaApp. This will simply run the application until the main
 -- thread receives a killThread signal, at which point it will try
--- to shutdown gracefully.
+-- to shutdown gracefully. Use of `bUnsafeExit` will cause this 
+-- signal.
 --
 --    runSireaApp app = buildSireaApp app >>= beginSireaApp
 --
@@ -246,29 +248,39 @@ basicSireaAppLoop rfContinue stepper =
           loop = basicSireaAppLoop rfContinue stepper 
     
 
--- | bUnsafeKillP0 - use with runSireaApp. The first time the signal
--- stabilizes as active, unsafeKillP0 causes asynchronous killThread
--- on the main (P0) thread. For runSireaApp, this causes a graceful 
--- shutdown. bUnsafeKillP0 should be unique in the app.
+-- | bUnsafeExit - use with runSireaApp, sends a killThread signal
+-- once an active signal to bUnsafeExit stabilizes. Basically a way
+-- to halt the application from within the application. Should not
+-- be used if the client plans to halt the application externally.
+-- 
+-- This uses a resource to ensure killThread happens only once even
+-- if multiple bUnsafeExit behaviors are used. However, caution is
+-- warranted: this doesn't compose very well, i.e. if two different
+-- applications or agents both use bUnsafeExit, it is difficult to
+-- switch between them or run them concurrently.  
 --
--- Note: even after kill, it may take a couple seconds to shut down.
--- If that is too long, consider modeling shutdown properly as stage
--- of RDP application - i.e. dynamic switch to a halt behavior. Then 
--- bUnsafeKillP0 could still take a few seconds, but during inactive
--- behavior so it's more like a zombie process awaiting GC.
+-- A better design is to model shutdown behavior within SireaApp, by
+-- use of dynamic behaviors (bdynamic) or choice (:|:). This results
+-- in more precise shutdown, and composes better. But bUnsafeExit is
+-- sufficient for many apps in practice.
 --
-bUnsafeKillP0 :: BCX w (S P0 ()) (S P0 ())
-bUnsafeKillP0 = unsafeOnUpdateBCX $ \ _ ->
-    newIORef False >>= \ rfKilled ->
+bUnsafeExit :: BCX w (S P0 ()) (S P0 ())
+bUnsafeExit = unsafeOnUpdateBCX $ \ cw -> 
+    let rfKilled = inExitR $ findInPCX cw in
     let kill = readIORef rfKilled >>= \ bBlooded ->
                unless bBlooded $ void $ 
                    writeIORef rfKilled True >>
                    myThreadId >>= \ tidP0 ->
                    forkIO (killThread tidP0)
     in
-    -- operation ignores T and pr
     let op _ = maybe (return ()) (const kill) in
     return op
 
+newtype ExitR = ExitR { inExitR :: IORef Bool }
+instance Typeable ExitR where
+    typeOf _ = mkTyConApp tycExitR []
+        where tycExitR = mkTyCon3 "Sirea" "Build.Internal" "ExitR"
+instance Resource ExitR where
+    locateResource _ = liftM ExitR $ newIORef False
 
 

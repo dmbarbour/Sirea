@@ -100,7 +100,7 @@ getPCX _ = findInPCX
 
 -- | the GobStopper is collection of all the Stopper values in an
 -- application; it is used to shut down the individual partitions
--- during graceful shutdown. 
+-- during graceful shutdown. (The P0 Stopper is excluded.) 
 newtype GobStopper = Gob { unGob :: IORef [Stopper] }
 instance Typeable GobStopper where
     typeOf _ = mkTyConApp tycGS []

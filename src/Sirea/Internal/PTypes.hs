@@ -24,9 +24,9 @@ module Sirea.Internal.PTypes
 --
 -- addStepperEvent: add a callback to occur when work is available.
 --   The callback must be wait free, and must not call runStepper
---   itself - a typical behavior would be `tryPutMVar`. Events must
---   be reset per step, and are called only once. If work available
---   when the event is set, it is called immediately. 
+--   itself. Typically used with MVars to wait for available input.
+--   The event is called from non-partition threads, and should not
+--   call runStepper. Event is removed when called or by runStepper.
 --
 data Stepper = Stepper 
     { runStepper      :: IO () -- ^ synchronous incremental step
