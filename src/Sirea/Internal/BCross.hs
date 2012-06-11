@@ -7,6 +7,7 @@
 module Sirea.Internal.BCross 
     ( crossB
     , GobStopper(..)
+    , runGobStopper
     , TC(..)
     , runTCStep
     , addTCRecv, addTCEvent
@@ -107,6 +108,24 @@ instance Typeable GobStopper where
 instance Resource GobStopper where
     locateResource _ = Gob <$> newIORef []
 
+-- | runGobStopper will:
+--     halt all active threads (at instant of runGobStopper)
+--     register an event to call when all threads fully halt.
+-- If new stoppers are later added, they'll be missed. Usually
+-- this would be called only at shutdown, when nothing new should
+-- or could be created.
+runGobStopper :: GobStopper -> IO () -> IO ()
+runGobStopper gs ev =
+    readIORef (unGob gs) >>= \ lStoppers ->
+    if (null lStoppers) then ev else
+    newIORef (length lStoppers) >>= \ rfCD ->
+    let onStop = readIORef rfCD >>= \ cd ->
+                 writeIORef rfCD (cd - 1) >>
+                 when (0 == cd) ev
+    in 
+    mapM_ (flip addStopperEvent onStop) lStoppers >>
+    mapM_ runStopper lStoppers
+
 -- initPartition is performed when building behaviors (or dynamic 
 -- behaviors) when we cross into another partition. It ensures the
 -- partition exists before we step into it. Idempotent.
@@ -116,10 +135,13 @@ initPartition p cw =
     atomicModifyIORef (tc_init tc) (\x->(True,x)) >>= \ bInit ->
     unless bInit $ 
         let cp = getPCX p cw in
-        newPartitionThread cp (tcToStepper tc) >>= \ stopper ->
+        newPartitionThread cp (tcToStepper tc) >>= \ s0 ->
+        let stopInStepper = addTCRecv tc (runStopper s0) in
+        let stopper = s0 { runStopper = stopInStepper } in 
         let gs = unGob $ findInPCX cw in
         atomicModifyIORef gs (\stoppers->(stopper:stoppers,()))
     
+
 -- | TC is the thread context, which is basically a couple IORefs 
 -- with some metadata about the thread. 
 --    tc_init :: for initialization; atomic
@@ -187,7 +209,13 @@ runTCWork rfw =
     where doWork work = work >> runTCWork rfw
           done = return ()
 
--- TCSend will execute
+-- TCSend will empty non-empty outboxes for the round. Usually a 
+-- small task, since fan-out between partitions is limited by type.
+-- Updates in each outbox will be sent as one atomic batch.
+--
+-- This operation may wait: each outbox has a semaphore with limited
+-- number of in-flight batches. If a fast producer sends to a slower
+-- consumer, the producer may end up waiting.
 runTCSend :: IORef Work -> IO ()
 runTCSend rfEmit = 
     readIORef rfEmit >>= \ doEmit ->
@@ -215,7 +243,10 @@ addTCSend :: TC p -> Work -> IO ()
 addTCSend tc newWork = modifyIORef (tc_send tc) addWork
     where addWork oldWork = (oldWork >> newWork)
 
--- tcSend - delays work for remote processing.
+-- tcSend - send work from p1 to p2 in world w.
+-- actual send happens at end of p1's round.
+-- actual receive happens at beginning of p2's round.
+-- outbox (modeled as a resource) controls communication with semaphore.
 tcSend :: (Partition p1, Partition p2) 
        => PCX w -> p1 -> p2 -> Work -> IO ()
 tcSend cw p1 p2 = 
@@ -269,7 +300,7 @@ data OutBox p = OutBox
 -- might make this configurable via command line at some point (as a
 -- resource). 
 ob_max_in_flight :: Int
-ob_max_in_flight = 4
+ob_max_in_flight = 6
 
 instance Typeable1 OutBox where
     typeOf1 _ = mkTyConApp tycOB []

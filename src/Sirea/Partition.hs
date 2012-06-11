@@ -51,13 +51,12 @@ module Sirea.Partition
 
 import Sirea.Behavior
 import Sirea.PCX
+import Sirea.Internal.PTypes
+import Sirea.Internal.Thread
 
 import Data.Typeable
 import Data.IORef
-import Control.Exception (assert)
 import Control.Concurrent (forkIO)
-import Control.Monad (join)
-import Control.Concurrent.MVar
 
 -- | Cross between partitions. Note that this behavior requires the
 -- `b` class itself to encapsulate knowledge of how the partitions
@@ -75,12 +74,11 @@ class BCross b where
 -- Scopes may have sub-scopes, simply push or pop like a stack. The
 -- data plumbing between scopes should be free after compile.
 --
--- Scopes may be useful to modularize resources in a partition and
--- prevent accidental communication.
+-- Scopes may be useful to modularize resources, i.e. act as virtual
+-- objects within a partition, with distinct type-based identity.
 class BScope b where
     bpushScope :: b (S p x) (S (Scope s p) x)
     bpopScope  :: b (S (Scope s p) x) (S p x)
-
 
 -- | Partition p - indicates a toplevel partition type, and also 
 -- can override the default partition thread constructor.
@@ -122,19 +120,21 @@ instance Typeable1 Pt where
     typeOf1 _ = mkTyConApp tyConPt []
         where tyConPt = mkTyCon3 "Sirea" "Partition" "Pt"
 instance (Typeable x) => Partition (Pt x) where
-    newPartitionThread _ = newPartitionThreadPt
+    newPartitionThread _ stepper = 
+        newIORef emptyStopData >>= \ rfStop ->
+        forkIO (simplePartitionLoop rfStop stepper) >>
+        return (makeStopper rfStop)
+
 
 -- | P0 is the initial or main partition for a Sirea application. It
 -- has a thread, but one controlled by the Sirea client rather than
--- created. 
+-- created by Sirea. See Sirea.Build for more information.
 data P0
 instance Typeable P0 where
     typeOf _ = mkTyConApp tyConP0 []
         where tyConP0 = mkTyCon3 "Sirea" "Partition" "P0"
 instance Partition P0 where
     newPartitionThread _ = error "cannot create main thread"
-
-
 
 -- | Scopes are a thread-local alternative to full partitions. Scope
 -- may be useful to provide extra type names for resources.
@@ -144,102 +144,4 @@ instance Typeable2 Scope where
         where tycScope = mkTyCon3 "Sirea" "Partition" "Scope"
 
 
--- | Stepper - incremental processing of RDP updates in Sirea.
---
--- In Sirea, each partition has one Haskell thread, and each Sirea
--- thread has one Stepper object. The stepper is responsible for 
--- receiving available signal updates, performing RDP processing,
--- and sending batched updates to other Sirea threads. Between steps
--- the thread may have other responsibilities.
---
--- A step will run quickly if there is nothing to do. There is no 
--- wait for input. However, running a step may cause a wait on 
--- output if the target thread is falling behind. Progress for the
--- application requires every Sirea thread to keep up with available
--- updates.
---
--- runStepper: process available updates, deliver outputs. Returns 
---   very quickly if there is nothing to do, so should wait on event
---   or a fast-pased periodic task (e.g. render frame) after a step.
---
--- addStepperEvent: add a callback to occur when work is available.
---   The callback must be wait free, and must not call runStepper
---   itself - a typical behavior would be `tryPutMVar`. Events must
---   be reset per step, and are called only once. If work available
---   when the event is set, it is called immediately.
---
-data Stepper = Stepper 
-    { runStepper      :: IO () -- ^ synchronous incremental step
-    , addStepperEvent :: IO () -> IO () -- ^ notify of work to do
-    }
-
--- | Stopper should provide a way to gracefully halt Sirea threads. 
--- RDP behaviors should be shut down when the control signals become
--- inactive. However, these operations tell a thread to release any
--- resources, to perform any final commits for persistence, etc. and
--- to stop whether or not the signal is still active.
---
--- Note that you can set stopper events before running the stopper.
--- If activity halts for any reason, the stopper events will fire.
-data Stopper = Stopper
-    { runStopper      :: IO () -- ^ asynchronous begin stop
-    , addStopperEvent :: IO () -> IO () -- ^ notify when stopped
-    }
-
--------------------------------------------------
--- Implementing the default partition behavior --
--------------------------------------------------
-
--- ((doStop,isStopped),stopEvents)
-data StopData = SD
-    { shouldStop :: Bool
-    , isStopped :: Bool
-    , onStop :: IO ()
-    }
-
-makeStopper :: IORef StopData -> Stopper
-makeStopper rf = Stopper 
-    { runStopper = modifyIORef rf doStop
-    , addStopperEvent = addStopDataEvent rf
-    }
-
-addStopDataEvent :: IORef StopData -> IO () -> IO ()
-addStopDataEvent rf ev = join $ atomicModifyIORef rf addEv
-    where addEv sd = 
-            if (isStopped sd) then (sd, ev) else
-            let sd' = sd { onStop = (ev >> onStop sd) } in
-            (sd', return ())
-
-doStop :: StopData -> StopData
-doStop sd = sd { shouldStop = True }
-
-emptyStopData :: StopData
-emptyStopData = SD False False (return ())
-
-finiStopData :: IORef StopData -> IO ()
-finiStopData rf = join $ atomicModifyIORef rf fini
-    where fini sd =
-                assert (shouldStop sd) $
-                assert (not $ isStopped sd) $
-                let sd' = SD True True (return ()) in
-                (sd', onStop sd)
-
-newPartitionThreadPt :: Stepper -> IO Stopper
-newPartitionThreadPt stepper =
-    newIORef emptyStopData >>= \ rfStop ->
-    forkIO (simplePartitionLoop rfStop stepper) >>
-    return (makeStopper rfStop)
-
-simplePartitionLoop :: IORef StopData -> Stepper -> IO ()
-simplePartitionLoop rfStop stepper =
-    readIORef rfStop >>= \ sd ->
-    if (shouldStop sd) 
-        then stop 
-        else wait >> run >>= \ _ -> loop
-    where stop = finiStopData rfStop 
-          wait = newEmptyMVar >>= \ mv ->                 
-                 addStepperEvent stepper (putMVar mv ()) >>
-                 takeMVar mv
-          run  = runStepper stepper
-          loop = simplePartitionLoop rfStop stepper
 
