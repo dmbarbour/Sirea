@@ -74,10 +74,6 @@ import System.IO.Unsafe (unsafePerformIO, unsafeInterleaveIO)
 -- directly share resources, but behaviors orchestrate communication
 -- between partitions to allow indirect sharing.
 --
--- Assume finding resources in PCX is moderately expensive. Rather
--- than looking for the resources you need each time you need them,
--- take them all up front.
---
 data PCX p = PCX 
     { pcx_ident :: [TypeRep]
     , pcx_store :: IORef [Dynamic]
@@ -153,6 +149,11 @@ instance (Resource t, Resource u, Resource v, Resource w, Resource x
 -- searching for it. Resources are initialized lazily. Since 
 -- lookups are idempotent, there are no issues of unsafe IO being
 -- duplicated.
+--
+-- Assume finding resources in PCX is moderately expensive. Rather
+-- than looking for the resources you need each time you need them,
+-- try to apply PCX and obtain resources up front for partial 
+-- evaluation.
 --
 findInPCX :: (Resource r) => PCX p -> r
 findInPCX = unsafePerformIO . findInPCX_IO

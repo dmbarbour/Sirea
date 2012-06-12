@@ -1,6 +1,6 @@
 {-# LANGUAGE TypeOperators, GADTs #-}
 
--- | LinkUnsafeIO provides quick and dirty behaviors to integrate 
+-- | UnsafeOnUpdate provides quick and dirty behaviors to integrate 
 -- IO. Such behaviors can support easy debugging or prototyping of
 -- resources. They in some cases will be sufficient for integration
 -- of effects. There are cleaner ways to integrate effects with RDP
@@ -15,17 +15,13 @@
 -- ways, either make it idempotent and commutative or ensure unique
 -- use within a behavior.
 --
--- At the moment this only supports output. I have some ideas about
--- how to inject inputs with IO, but integration with partitions and
--- the IO process is still necessary.
---
 -- On the input side, I am still designing a behavior - perhaps to
 -- inject a signal into RDP from IO, which would then be masked by
 -- the demand signal. For thread-safety, such a signal would first
 -- go through an intermediate, dedicated partition. It should be
 -- feasible to combine these updates into batches (using a monoid).
 --
-module Sirea.LinkUnsafeIO 
+module Sirea.UnsafeOnUpdate 
     ( unsafeOnUpdateB, unsafeOnUpdateBCX
     , unsafeOnUpdateBL, unsafeOnUpdateBCXL
     , unsafeOnUpdateBLN, unsafeOnUpdateBCXLN

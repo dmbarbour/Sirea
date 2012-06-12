@@ -36,6 +36,7 @@ module Sirea.BCX
     ) where
 
 import Prelude hiding ((.),id)
+import Data.Typeable
 import Control.Applicative
 import Control.Category
 --import Control.Arrow
@@ -61,6 +62,10 @@ newtype BCX w x y = BCX { fromBCX :: StaticB (WithPCX w) (B w) x y }
     deriving ( Category, BFmap, BProd, BSum, BDisjoin
              , BZip, BSplit, BTemporal, BPeek, Behavior, BScope )
     -- NOT deriving: BDynamic, BCross, BEmbed
+
+instance Typeable2 (BCX w) where
+    typeOf2 _ = mkTyConApp tcBCX []
+        where tcBCX = mkTyCon3 "Sirea" "Behavior" "BCX"
 
 unwrapBCX :: BCX w x y -> PCX w -> B w x y
 unwrapBCX = unwrapArrow . unwrapStatic . fromBCX

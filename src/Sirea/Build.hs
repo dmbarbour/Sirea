@@ -47,7 +47,7 @@ import Sirea.Internal.BCross
 import Sirea.Internal.Thread
 import Sirea.Behavior
 import Sirea.Partition
-import Sirea.LinkUnsafeIO
+import Sirea.UnsafeOnUpdate
 import Sirea.PCX
 import Sirea.BCX
 import Sirea.Time

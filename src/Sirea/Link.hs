@@ -54,14 +54,8 @@ unsafeLinkB ln = bsynch >>> B_tshift xBarrier >>> B_mkLnk tr_unit ln
 -- | unsafeLinkBCX provides access to PCX, which is a good place to
 -- keep any "shared" state associated with a link. If otherwise you 
 -- would need global state, please use unsafeLinkBCX instead and put
--- state in the PCX. 
---
--- Each partition has a dedicated child PCX for state. Obtain that 
--- PCX as a resource  (i.e. `findIn pcx :: PCX p`). Resources in a
--- partition should only be manipulated by local signals, i.e. after
--- bcross to that partition. That supports snapshot consistency. So
--- you should always be able to find the partition ID in the signal.
---
+-- state in the PCX. Make the state specific to a partition, esp. if
+-- it must be manipulated by the partition thread.
 unsafeLinkBCX :: (PCX w -> MkLnk w x y) -> BCX w x y
 unsafeLinkBCX = wrapBCX . (unsafeLinkB .)
 

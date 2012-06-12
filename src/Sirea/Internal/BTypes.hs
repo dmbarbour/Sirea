@@ -27,9 +27,6 @@ import Sirea.Internal.LTypes (MkLnk)
 import Sirea.Time (DT)
 import Control.Exception (assert)
 
-import Data.Typeable -- B is typeable
-
-
 -- | (B w x y) describes an RDP behavior - a signal transformer with
 -- potential for declarative `demand effects`. Signal x is called
 -- the demand, and y the response. Behaviors may be composed, so the
@@ -93,14 +90,6 @@ data B w x y where
 --
 -- It could work reasonably well in practice. But no pressing need
 -- for it.
-
-
-tcB :: TyCon
-tcB = mkTyCon3 "Sirea" "Behavior" "B"
-
-instance Typeable2 (B w) where
-    typeOf2 _ = mkTyConApp tcB []
-
 
 -- | delay computation of B x y until timing info is available
 latentOnTime :: (LnkD LDT x -> B w x y) -> B w x y

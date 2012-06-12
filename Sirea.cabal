@@ -47,7 +47,8 @@ Library
     Sirea.B
     Sirea.BCX
     Sirea.Link
-    Sirea.LinkUnsafeIO
+    Sirea.ORef
+    Sirea.UnsafeOnUpdate
 
     Sirea.Trans.Static
 

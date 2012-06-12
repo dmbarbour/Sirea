@@ -16,6 +16,11 @@ import Sirea.Behavior
 import Sirea.Partition
 import Sirea.Internal.BTypes
 import Sirea.Internal.BImpl
+import Data.Typeable
+
+instance Typeable2 (B w) where
+    typeOf2 _ = mkTyConApp tcB []
+        where tcB = mkTyCon3 "Sirea" "Behavior" "B"
 
 ---------------------------
 -- Concrete Instances: B --
