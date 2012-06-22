@@ -6,6 +6,7 @@
 -- crossB, i.e. used in BCX.
 module Sirea.Internal.BCross 
     ( crossB
+    , delayToNextStepB
     , GobStopper(..)
     , runGobStopper
     , TC(..)
@@ -92,7 +93,32 @@ receiveB cw p =
     let doLater = addTCWork tc in
     phaseUpdateB (return doLater)
 
-getTC :: (Typeable p) => p -> PCX w -> TC p
+
+-- delayToNextStepB will delay an update to the next recv round. Meant
+-- for use within a partition, for ORefs and other behaviors that
+-- are updated between runStepper operations.
+delayToNextStepB :: (Partition p) => PCX w -> B w (S p x) (S p x)
+delayToNextStepB cw = fix $ \ b ->
+    let (p,_) = getPartitions b in
+    immediateSendB cw p >>> receiveB cw p
+
+-- immediateSendB simply dumps the work to the next TCRecv task, does
+-- not go through the TCSend mechanism. Meant for use between Stepper
+-- operations, for partition sending to self, for delayToNextStepB.
+immediateSendB :: (Partition p) => PCX w -> p -> B w (S p x) (S p x)
+immediateSendB cw p =
+    let tc = getTC p cw in
+    let doSend = addTCRecv tc in
+    B_mkLnk tr_fwd $ MkLnk { ln_build = return . fnImmSend doSend
+                           , ln_tsen = False, ln_peek = 0 }
+
+fnImmSend :: (IO () -> IO ()) -> Lnk (S p x) -> Lnk (S p x)
+fnImmSend _ LnkDead = LnkDead
+fnImmSend doSend (LnkSig lu) = LnkSig lu'
+    where lu' = LnkUp { ln_touch = return (), ln_update = update }
+          update = doSend . ln_update lu
+
+getTC :: (Partition p) => p -> PCX w -> TC p
 getTC _ = findInPCX
 
 getPCX :: (Typeable p) => p -> PCX w -> PCX p

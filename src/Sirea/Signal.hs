@@ -32,7 +32,7 @@ module Sirea.Signal
  , s_mask
  , s_merge
  , s_switch, s_switch'
- , s_is_final
+ , s_is_final, s_term
  , s_delay, s_peek
  , s_select
  , s_adjn, s_adjeqf
@@ -213,6 +213,15 @@ s_is_final s0 tm =
         DSDone -> True
         _ -> False
 
+-- | Test whether a signal has terminated after a given instant.
+--     s_term s t = isNothing (s_sample s t) && (s_is_final s t)
+s_term :: Sig a -> T -> Bool
+s_term s0 tm =
+    let (v,ds) = ds_query (s_head s0) tm (s_tail s0) in
+    let isFinal = case dstep ds tm of 
+                    DSDone -> True
+                    _ -> False
+    in isNothing v && isFinal
 
 -- | s_adjn will eliminate adjacent `Nothing` values. These might 
 -- exist after s_full_map to filter a signal by its values.
@@ -273,23 +282,18 @@ s_adjeqf eq s0 =
           meq (Just x) (Just y) = eq x y
           meq _ _ = False
 
--- TODO:
+-- TODO?
 -- Apply a strategy to initialize parallel evaluation of a signal 
 -- during sampling. I.e. if you sample at time T, may initialize 
 -- parallel computation of the signal at time T+dt. 
--- s_strat :: DT -> (a -> Eval b) -> Sig a -> Sig b
+-- s_strat :: DT -> Sig (Eval a) -> Sig a
 
 
 -- IDEAS:
---  choke - limit updates to a certain rate. 
---    risks temporal aliasing, and doesn't likely combine well with
---    update by switching. Probably doesn't help much if we assume
---    lazy computation of signal values anyway.
---  chokeqf - choke with a filter for similar updates
---  updating `profile` of a constant signal...
---     similar to s_adjeqf, but limited to just the update?
---     maybe s_adjeqf_switch? Might need a maximum T for the handoff,
---     i.e. to avoid computing indefinitely. Seems complicated.
+--  choke: should be done with intermediate state, as RDP behavior,
+--    since it means we're looking at past values or tracking time.
+--  improve s_adjeqf handoff? maybe some sort of `improving` value
+--    model fot the update times? seems complicated.
 --  
 
 

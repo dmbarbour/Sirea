@@ -9,7 +9,9 @@
 -- See Also:
 --   Sirea.Link for `unsafeLnkB` - new behavior primitives.
 --   Sirea.BCX for behavior with resource context
-module Sirea.B (B) where
+module Sirea.B 
+    ( B
+    ) where
 
 import Sirea.Time
 import Sirea.Behavior

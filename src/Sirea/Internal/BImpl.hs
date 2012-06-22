@@ -18,12 +18,15 @@ module Sirea.Internal.BImpl
     , delayB, synchB, peekB, forceDelayB -- temporal
 
     -- miscellaneous
+    , unsafeSigZipB
     , unsafeChangeScopeB 
     , unsafeAddStabilityB 
     , unsafeEqShiftB
     , unsafeFullMapB
     , phaseUpdateB
-    , undeadB, keepAliveB
+    , undeadB
+    , keepAliveB
+    , unsafeAutoSubscribeB, OnSubscribe, UnSubscribe
     ) where
 
 import Prelude hiding (id,(.))
@@ -368,15 +371,21 @@ disjMaskRight sa su = s_mask sa su'
 
 -- | apply pure functions in one signal to values in another
 zapB :: B w (S p (a -> b) :&: S p a) (S p b)
-zapB = synchB >>> mkLnkB tr_unit (mkLnkSimp buildZap)
+zapB = synchB >>> unsafeSigZipB (<*>)
+
+-- | combine arbitrary signals. Be careful, this can easily break 
+-- invariants unless synchronization constraints are enforced and 
+-- the signal function is carefully constrained.
+unsafeSigZipB :: (Sig a -> Sig b -> Sig c) -> B w (S p a :&: S p b) (S p c)
+unsafeSigZipB = mkLnkB tr_unit . mkLnkSimp . buildZip
 
 -- intermediate state is needed to perform zip, zap, etc.
 -- since updates on fst and snd might occur at different times.
-buildZap :: Lnk (S p b) -> IO (Lnk (S p (a -> b) :&: S p a))
-buildZap LnkDead = return LnkDead
-buildZap (LnkSig lu) = 
+buildZip :: (Sig a -> Sig b -> Sig c) -> Lnk (S p c) -> IO (Lnk (S p a :&: S p b))
+buildZip _ LnkDead = return LnkDead
+buildZip fnZip (LnkSig lu) = 
     let onTouch = ln_touch lu in
-    let onEmit = ln_update lu . sm_emit (<*>) in
+    let onEmit = ln_update lu . sm_emit fnZip in
     ln_withSigM onTouch onEmit >>= \ (sf,sa) ->
     return (LnkProd (LnkSig sf) (LnkSig sa))
 
@@ -661,13 +670,8 @@ appendSigUp su0 su = SigUp { su_state = state', su_stable = stable' }
             if (t0 >= tf) then (sf,tf) else
             (s_switch' s0 tf sf, t0)
 
-
-
-
 -- | keepAliveB will keep the first element alive so long as other
--- parts of the signal are alive. This would only be useful for 
--- performance debugging, and should probably be performed just
--- after `bfirst btouch`. (used by LinkUnsafeIO)
+-- parts of the signal are alive. (used by unsafeOnUpdateBLN)
 keepAliveB :: B w (S p x :&: y) (S p x :&: y)
 keepAliveB = mkLnkB id $ mkLnkPure lnkMatchLiveness
     where lnkMatchLiveness xy =
@@ -681,15 +685,29 @@ keepAliveB = mkLnkB id $ mkLnkPure lnkMatchLiveness
 undeadB :: B w (S p x) (S p x)
 undeadB = mkLnkB id $ mkLnkPure (LnkSig . ln_lnkup)
 
--- maybe a behavior to report / track liveness?
---  idea is to report when a signal is dead forever
---  relative to stability or update time.
---  to better support graceful shutdown of Sirea behaviors.
--- but might not be worth it... perhaps better and easier
--- to simply wait a few seconds at shutdown
+
+-- | unsafeAutoSubscribeB is a simplified subscription model for a
+-- behavior: subscribe whenever there is demand now or in future, 
+-- and unsubscribe when signal seems to be unnecessary. Subscription
+-- has a callback based on Lnk x, and is insensitive to demand. 
+--
+-- This is `unsafe` because it does not respect duration coupling;
+-- indeed, you'll need to hack around it a bit to regain duration
+-- coupling, perform merges or masking, ensure thread safety.
+unsafeAutoSubscribeB :: OnSubscribe x -> B w (S p ()) x
+unsafeAutoSubscribeB onSub = mkLnkB tr_unit (mkLnkSimp (buildSubscriber onSub))
+
+type OnSubscribe x = Lnk x -> IO (UnSubscribe)
+type UnSubscribe = IO ()
 
 
+buildSubscriber :: OnSubscribe x -> Lnk x -> IO (Lnk (S p ()))
+buildSubscriber onSub lnx = 
+    if (ln_dead lnx) then return LnkDead else
+    -- don't subscribe yet; subscribe on demand update.
+    -- will need some state to track demand signal and
+    -- to track UnSubscribe command if available. 
 
-
+    
 
 

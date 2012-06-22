@@ -25,6 +25,8 @@
 --   * support anticipation (bpeek) like other RDP resources
 --   * model precise, consistent, logical timing for signals
 --
+-- It may be useful to couple ORef with demand monitors to have some
+-- influence between them (or to maintain ORef only as needed).
 module Sirea.ORef
     ( ORefType(..)
     , ProvidesORef
@@ -45,7 +47,9 @@ import Sirea.BCX
 import Sirea.Signal
 import Sirea.Link 
 import Sirea.Behavior
-import Sirea.Time (DT)
+import Sirea.Time (T,DT)
+import Sirea.Internal.LTypes
+import Sirea.Internal.BImpl
 
 -- | ORefType: some parameters for a new ORef. An ORef type should
 -- adequately explain its purpose - i.e. instead of (Int,Int), use:
@@ -80,42 +84,79 @@ class (Typeable p, ORefType x) => ProvidesORef p x
 loadORef :: (ProvidesORef p x) => PCX p -> ORef x
 loadORef = ORef . findInPCX
 
-newtype ORef x = ORef { inORef :: ORefR x } 
-newtype ORefR x = ORefR { inORefR :: IORef (ORefSt x) } 
+-- ORef exists mostly to hide the ORef resource, forcing clients to
+-- use loadORef and declare the resource.
+newtype ORef x = ORef (ORefR x)
+
+-- The ORef resource is just a named IORef. This is not a shared 
+-- IORef; the actual updates should occur only in the owning thread.
+newtype ORefR x = ORefR (IORef (ORefSt x))
 
 instance Typeable1 ORefR where
     typeOf1 _ = mkTyConApp tycORefR []
         where tycORefR = mkTyCon3 "Sirea" "ORef.Internal" "ORefR"
 instance (ORefType x) => Resource (ORefR x) where
-    locateResource _ = ORefR <$> newIORef defaultORefSt
+    locateResource _ = ORefR <$> newIORef initORefSt
 
+-- details for an active ORef:
+--   oref_hist   : history relative to stability
+--   oref_signal : current signal associated with ORef (*)
+--   oref_stable : current stability of current signal
+--   oref_lsubs  : list of subscriptions with identifiers
+--
+-- a new subscriber should be added not when the ORef is created,
+-- but rather when its subscription becomes active in the ORef's
+-- owning partition. Similarly, unsubscribe if the ORef is inactive
+-- for the foreseeable future. 
+--
+-- The subscriber is responsible for masking the signal to preserve
+-- duration coupling.
+-- 
 data ORefSt x = ORefSt
+    { oref_hist     :: !DT
+    , oref_signal   :: !(SigSt x)
+    , oref_lsubs    :: [(Int,LnkUp x)]
+    , oref_subid    :: !Int
+    }
 
-defaultORefSt :: (ORefType x) => ORefSt x
-defaultORefSt = undefined
+orefDefHist :: DT
+orefDefHist = 3.0 -- seconds
+   
 
+initORefSt :: (ORefType x) => ORefSt x
+initORefSt = ORefSt 
+    { oref_hist     = orefDefHist
+    , oref_signal   = st_zero { st_signal = s_always orefDefault }
+    , oref_lsubs    = []
+    , oref_subid    = 10000
+    }
 
 -- | writeORef will set the future of the observable variable. For
 -- use in a specific partition thread associated with `p`. Updates
 -- should respect stability values (i.e. be monotonic in stability,
 -- and updates apply no earlier than prior stability.) 
 --
--- The actual update is deferred until the next runStepper action.
--- Developers using writeORef should runStepper at the end of each
--- round - i.e. to clear the queue before waiting on new work.
+-- The associated behaviors will delay processing until the next
+-- runStepper operation. While using writeORef there may always be
+-- a new task ready. Do avoid creating a busy update loop, perhaps
+-- runStepper at the end of each round.
 --
-writeORef :: ORef x -> SigUp x -> IO ()
-writeORef = undefined
+writeORef :: (ORefType x) => ORef x -> SigUp x -> IO ()
+writeORef (ORef (ORefR rfR)) = writeORef' rfR . withDefault
+    where withDefault = su_fmap (<|> s_always orefDefault)
+
+-- at writeORef', the signal update is already merged with default
+writeORef' :: IORef (ORefSt x) -> SigUp x -> IO ()
+writeORef' = undefined
 
 
-orefDefaultHistory :: DT
-orefDefaultHistory = 3.0 -- seconds
 
 -- | tuneORefGC - modify the default and the amount of history kept
 -- for a specific ORef. The default is a few seconds of history,
 -- which should be good in most cases. But there may be concerns if
 -- the ORef describes a large value that updates rapidly and fails
--- to share much structure.
+-- to share much structure. This should be called when starting the
+-- partition thread.
 --
 -- Keeping some history is necessary for dynamic behaviors. When
 -- new subscribers are added, a brief history for state and ORef
@@ -133,9 +174,8 @@ tuneORefGC = undefined
 
 
 
--- | readORef will obtain the recent values of the ORef, as of the
--- recent runStepper operation. For use in the specific partition
--- thread associated with `p`. 
+-- | readORef will obtain the signal recently written to the ORef.
+-- Does not include the orefDefaults or fallbacks. 
 --
 -- The ORef signal is always active, with the default value if not
 -- otherwise specified.
@@ -146,6 +186,26 @@ readORef = undefined
 -- result is the ORef signal masked by the demand signal.
 observeORef :: (ProvidesORef p x) => BCX w (S p ()) (S p x)
 observeORef = undefined
+
+
+    -- implementation:
+    --   manage subscription based on signal.
+    --   phase delay updates from writeORef.
+    --   mask the signals when combining them.
+    -- roughly:
+    --   b (S p ()) (S p () :&: S p ())
+    --   unsafe behavior to receive writes
+    --   unsafe behavior to mask signals (unsafeSigZipB s_mask)
+    --   b y (S p x) -- unsafe behavior to receive writes.
+    --   
+    --   
+
+autoSubscribeB :: OnSubscribe (S p x) -> B w (S p ()) (S p x)
+autoSubscribeB onSub = forceDelayB >>> dupB >>> firstB sub >>> mask
+    where sub  = unsafeAutoSubscribeB onSub 
+          mask = unsafeSigZipB s_mask
+
+
 
 
 

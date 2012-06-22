@@ -7,8 +7,8 @@ Description:
   Reactive Demand Programming is an effectful, declarative paradigm
   for continuous orchestration of open systems. Sirea implements RDP
   in Haskell. This particular module is the `core` of Sirea, just
-  the basic behaviors and implementation. Domain specific resources
-  will be provided by external libraries.
+  the basic behaviors and implementation. Problem specific resources
+  will be provided by external modules or plugins.
   
   RDP is similar to arrowized FRP, excepting how it manages effects
   and state. RDP behaviors can encapsulate access to resources and
@@ -17,7 +17,7 @@ Description:
   
   RDP is effectful, but not imperative. The constraints on effects
   ensure RDP expressions are commutative, idempotent, continuous,
-  concurrent, and internally stateless. RDP achieves most reasoning, 
+  concurrent, and internally stateless. RDP achieves many reasoning, 
   refactoring, and abstraction benefits of pure functional code. 
 
 Author: David Barbour
@@ -36,6 +36,8 @@ Library
     ,time
 
   Exposed-Modules:
+    Sirea.Prelude
+
     Sirea.Time
     Sirea.Signal
     Sirea.Behavior

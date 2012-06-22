@@ -3,35 +3,31 @@
 -- | Reactive Demand Programming (RDP) design is for open, scalable,
 -- distributed systems. Sirea is much more humble: just one Haskell
 -- process. But it is still useful to model concurrent behaviors in
--- Sirea, i.e. different partitions for different adapter tasks, and
--- as a proof of concept.
---
+-- Sirea - for task concurrency, and proof of concept for modeling
+-- spatial orchestration.
+-- 
 -- This module provides behaviors for signals to cross Partitions.
 -- Each partition has one Haskell thread. Trivial partitions merely
 -- process RDP updates, but many represent resources and continuous
 -- or periodic tasks (persisting state, maintaining a GLUT window,
--- watching the filesystem, etc.). This is achieved via typeclass.
+-- watching the filesystem, etc.). A typeclass allows clients to 
+-- create partitions for specific tasks.
 --
 -- Sirea makes partitions very convenient - just name them by type,
 -- or infer them at `bcross`. This is very declarative. Partition 
--- threads are only created if the partition is used.
+-- threads are only created if the partition is used. Partitions 
+-- can be abstracted by typeclass, possibly by existentials.
 --
 -- Partitions don't communicate directly. RDP behaviors orchestrate 
--- communication between them, via `bcross`. Updates are delivered
--- in batches, which are processed in a group. This ensures snapshot
--- consistency: between `runStepper` calls, signals from each remote
--- vat seem frozen. (Snapshot consistency does allow "glitches" in a
--- sense: Alice's view of Charlie might be inconsistent with Alice's
--- view of Bob's view of Charlie. But it resists most malign cases.)
+-- communication between using bcross. Atomic batches of updates are
+-- communicated to support snapshot consistency of other partitions
+-- between runStepper calls. Snapshot consistency isn't glitch free,
+-- i.e. without proper `bdelay` you might still see glitches across
+-- three or more partitions. But it resists most malign glitches.
 --
--- Use of `bcross` should usually be coupled with `bdelay`, which
--- models communication latency and resists straggling updates. RDP
--- does support eventual consistency, internally, but little can be
--- done for the spoken word, spent arrow, or neglected opportunity.
--- (Hopefully you anticipated a close approximation of the updated
--- signal!) Each resource can have its own policy for retroactive
--- correction, possible "undo", etc. But it is often best just to  
--- achieve a more consistent system by using delay.
+-- Use bdelay with bcross to model the communication overheads, and
+-- computation costs within each partition. There is no delay by
+-- default.
 --
 -- NOTE: Partition threads must use non-blocking IO if they interact
 -- with legacy libraries or the operating system. Sirea waits when a

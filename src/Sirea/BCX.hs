@@ -33,6 +33,7 @@ module Sirea.BCX
     ( BCX
     , unwrapBCX
     , wrapBCX
+    , delayToRunStepperBCX
     ) where
 
 import Prelude hiding ((.),id)
@@ -40,7 +41,7 @@ import Data.Typeable
 import Control.Applicative
 import Control.Category
 --import Control.Arrow
-import Sirea.Internal.BCross (crossB)
+import Sirea.Internal.BCross (crossB, delayToNextStepB)
 import Sirea.Behavior
 import Sirea.Trans.Static 
 import Sirea.Partition
@@ -78,10 +79,21 @@ instance BEmbed (B w) (BCX w) where
 
 instance BCross (BCX w) where
     bcross = wrapBCX crossB
-        
+
+
+-- | delayToRunStepperBCX will delay link updates to next runStepper
+-- operation. Useful for updates provided *between* runStepper ops
+-- by the partition thread.
+delayToRunStepperBCX :: (Partition p) => BCX w (S p x) (S p x)
+delayToRunStepperBCX = wrapBCX delayToNextStepB
 
 -- TODO:
 --   BDynamic
+
+-- phaseDelayBCX:
+--   delay an operation until the next round of inputs.
+--   useful for updates provided by the partition thread.
+
 
 --
 -- To consider and maybe do: something like
