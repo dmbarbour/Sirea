@@ -38,7 +38,7 @@ import Sirea.Signal
 
 import Control.Category
 import Control.Applicative
-import Control.Monad (unless)
+import Control.Monad (unless, when)
 import Control.Parallel.Strategies (Eval, runEval, evalList, rseq)
 import Control.Exception (assert)
 import Data.Function (on)
@@ -691,6 +691,14 @@ undeadB = mkLnkB id $ mkLnkPure (LnkSig . ln_lnkup)
 -- and unsubscribe when signal seems to be unnecessary. Subscription
 -- has a callback based on Lnk x, and is insensitive to demand. 
 --
+-- Note that unsafeAutoSubscribeB does not provide any signals to
+-- the output link directly. It is up to the OnSubscribe x to hook
+-- the Lnk x to something that provides a signal.
+--
+-- Note that you should probably use a barrier, forceDelayB, on the
+-- input signal to unsafeAutoSubscribeB. And probably a phaseDelay
+-- or delayToNextStepB on the output.
+--
 -- This is `unsafe` because it does not respect duration coupling;
 -- indeed, you'll need to hack around it a bit to regain duration
 -- coupling, perform merges or masking, ensure thread safety.
@@ -700,10 +708,39 @@ unsafeAutoSubscribeB onSub = mkLnkB tr_unit (mkLnkSimp (buildSubscriber onSub))
 type OnSubscribe x = Lnk x -> IO (UnSubscribe)
 type UnSubscribe = IO ()
 
-
 buildSubscriber :: OnSubscribe x -> Lnk x -> IO (Lnk (S p ()))
 buildSubscriber onSub lnx = 
     if (ln_dead lnx) then return LnkDead else
+    newIORef st_zero >>= \ rfSt ->
+    newIORef Nothing >>= \ rfUnsub ->
+    let touch = return () in
+    let update = updateSubscribe onSub lnx rfSt rfUnsub in
+    return $ LnkUp { ln_touch = touch, ln_update = update }
+
+updateSubscriber :: OnSubscribe x -> Lnk x 
+                 -> IORef (SigSt ()) -> IORef (Maybe UnSubscribe)
+                 -> SigUp () -> IO ()
+updateSubscriber onSub lnx rfSt rfUnsub su =
+    readIORef rfSt >>= \ st -> 
+    let st' = st_sigup su st in
+    case st_stable st' of
+        Nothing -> writeIORef rfSt st'
+        Just t -> 
+            let stc = st_clear t st' in
+            let bTerm = s_term (st_signal st) t in
+            writeIORef rfSt stc >>
+            if bTerm then unsubscribe 
+                     else subscribe
+    where subscribe =
+            readIORef rfUnsub >>= \ ux ->
+            when (isNothing ux) $
+                onSub lnx >>= \ ux' ->
+                writeIORef rfUnsub (Just ux')
+          unsubscribe =
+            readIORef rfUnsub >>= \ ux ->
+            writeIORef rfUnsub Nothing >>
+            maybe (return ()) id ux
+            
     -- don't subscribe yet; subscribe on demand update.
     -- will need some state to track demand signal and
     -- to track UnSubscribe command if available. 

@@ -45,6 +45,7 @@ import Sirea.Internal.SigType
 import Sirea.Internal.DiscreteTimedSeq
 import Control.Exception (assert)
 import Control.Applicative
+import Data.Maybe (isNothing)
 
 -- | listToSig allows developers to turn a list of signal updates
 -- into a signal. The list must be ordered in strict monotonic time,

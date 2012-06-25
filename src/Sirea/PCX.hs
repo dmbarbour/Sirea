@@ -185,4 +185,10 @@ newPCX =
     newIORef [] >>= \ rf ->
     return $ PCX { pcx_ident = [], pcx_store = rf  }
 
+-- NOTE: it would be trivial to extend PCX with resources accessed by Ordinal.
+-- (Even via a Resource, this could be done.)
+-- Might be worth doing to support rich resources with dynamic behaviors.
+ 
+
+
 

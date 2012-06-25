@@ -52,6 +52,8 @@ Library
     Sirea.ORef
     Sirea.UnsafeOnUpdate
 
+    Sirea.Clock
+
     Sirea.Trans.Static
 
 
