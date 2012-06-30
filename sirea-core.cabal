@@ -1,4 +1,4 @@
-Name: Sirea
+Name: sirea-core
 Version: 0.1
 Cabal-Version: >= 1.2
 Synopsis: Simply Reactive! Declarative orchestration in Haskell with RDP.
@@ -9,16 +9,27 @@ Description:
   Haskell. This particular module is the `core` of Sirea, just the 
   basic behaviors and implementation. Other packages will support
   specific domains or problems (UI, state, video, sound, etc.).
-  
+
   RDP is similar to arrowized FRP, excepting how it manages effects
   and state. RDP behaviors can encapsulate access to resources and
   services, observing and influencing them through signals. State is
-  modeled as an external service. 
+  modeled as an external service. (By comparison, FRP models state 
+  as an internal resource with event accumulators or integrals, but
+  is purely functional. FRP does not encapsulate access to shared 
+  state or resources.) 
   
   RDP is effectful, but not imperative. The constraints on effects
-  ensure RDP expressions are commutative, idempotent, continuous,
-  concurrent, and internally stateless. RDP achieves many reasoning, 
-  refactoring, and abstraction benefits of pure functional code. 
+  ensure RDP achieves many reasoning, refactoring, and abstraction 
+  benefits of pure functional code. In particular, constraints for
+  declarative expression are provided: commutative, idempotent, and
+  associative expression; simple logical composition of effects as
+  sets of concurrent demands. 
+  
+  Arrowized composition of behaviors protects RDP properties. Sirea
+  developers, however, must be disciplined when adding new effects
+  modules: many hooks between RDP and Haskell IO are not RDP safe.
+
+  For more information, see the github Readme and linked pages.
 
 Author: David Barbour
 Maintainer: dmbarbour@gmail.com

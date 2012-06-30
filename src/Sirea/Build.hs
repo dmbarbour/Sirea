@@ -178,6 +178,7 @@ beginApp tc0 gs rfSD lu =
            schedule dtStep (addTCRecv tc0 (maintainApp tc0 gs rfSD lu tStable))
 
 -- schedule will delay an event then perform it in another thread.
+-- Sirea only does this with one thread at a time.
 schedule :: DT -> IO () -> IO ()
 schedule dt op = assert (usec > 0) $ void $ 
     forkIO (threadDelay usec >> op)
@@ -210,8 +211,10 @@ shutdownEvent tc0 gs rfSD = runGobStopper gs finiStop
 --   dtStability : how far ahead to stabilize
 --   dtStep      : period between stability updates
 --   dtBorder    : assumed startup time
+--
+-- dtStep can also influence amount of computation per round.
 dtStability, dtStep, dtBorder :: DT
-dtStability = 0.60  -- stability of main signal
+dtStability = 0.70  -- stability of main signal
 dtStep      = 0.10  -- periodic event to increase stability
 dtBorder    = 0.05  -- latency added for startup (for anticipation)
 

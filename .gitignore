@@ -4,3 +4,4 @@ tmp/
 *.hi
 *.o
 src/FRP/Sirea/BdeepGen
+cabal-dev/
