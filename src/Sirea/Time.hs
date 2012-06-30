@@ -21,8 +21,8 @@ import Control.Exception (assert)
 -- continuous, but the actual implementation is limited precision.
 --    tmDay   - Modified Julian Day (days since Nov 17, 1858)
 --    tmNanos - Nanoseconds in the day. [0,86400*10^9)
--- Simplified. Strict. No leap seconds. Limited range, but over
--- plus or minus five million years.
+-- Simplified. Strict. No leap seconds. Limited range, just over
+-- plus or minus five million years. 
 --
 -- The choice of nanoseconds is so we can squeeze time-of-day into
 -- a double value, for interaction with most scripting languages

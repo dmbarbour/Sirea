@@ -38,11 +38,12 @@
 module Sirea.Partition 
     ( Partition(..)
     , BCross(..)
-    , BScope(..)
-    , Scope
+{-  , BScope(..)
+    , Scope      -}
     , Pt, P0
     , Stepper(..)
     , Stopper(..)
+    , onNextStep
     ) where
 
 import Sirea.Behavior
@@ -66,6 +67,7 @@ import Control.Concurrent (forkIO)
 class BCross b where
     bcross :: (Partition p, Partition p') => b (S p x) (S p' x)
 
+{-
 -- | Scopes are lightweight partitions, all within a single thread.
 -- Scopes may have sub-scopes, simply push or pop like a stack. The
 -- data plumbing between scopes should be free after compile.
@@ -75,6 +77,8 @@ class BCross b where
 class BScope b where
     bpushScope :: b (S p x) (S (Scope s p) x)
     bpopScope  :: b (S (Scope s p) x) (S p x)
+
+-}
 
 -- | Partition p - indicates a toplevel partition type, and also 
 -- can override the default partition thread constructor.
@@ -94,6 +98,21 @@ class (Typeable p) => Partition p where
     -- 
     -- PCX supports communication between threads and RDP behaviors. 
     newPartitionThread :: PCX p -> Stepper -> IO Stopper
+
+
+-- | onNextStep will delay any IO action until the next runStepper
+-- operation by an associated partition. For use within a partition,
+-- or by worker threads associated with a partition. onNextStep can 
+-- also serve as a notification that work is available, as it will
+-- cause any stepper event to trigger.
+--
+-- Note: Worker threads can be useful to handle synchronous IO, such
+-- as with filesystem or socket. In general, however, you'll want to
+-- model a rendezvous or semaphore - i.e. the worker thread halts if
+-- the partition thread isn't keeping up. (This helps control memory
+-- and processing costs.)
+onNextStep :: (Partition p) => PCX p -> IO () -> IO ()
+onNextStep = addTCRecv . findInPCX
 
 -- | Pt is a type for trivial partitions. These partitions have no
 -- responsibilities, other than to process available RDP updates as
@@ -132,12 +151,13 @@ instance Typeable P0 where
 instance Partition P0 where
     newPartitionThread _ = error "cannot create main thread"
 
+{-
 -- | Scopes are a thread-local alternative to full partitions. Scope
 -- may be useful to provide extra type names for resources.
 data Scope s p
 instance Typeable2 Scope where
     typeOf2 _ = mkTyConApp tycScope []
         where tycScope = mkTyCon3 "Sirea" "Partition" "Scope"
-
+-}
 
 

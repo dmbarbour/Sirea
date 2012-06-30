@@ -1,32 +1,11 @@
 
 {-# LANGUAGE MultiParamTypeClasses #-}
 
--- | ORef stands for 'observable reference'.
---
--- The essential concept is:
---   a variable
---   describing environment
---   observed by many
---
--- ORef is simplistic. It doesn't support rich queries or multiple
--- views. But it can serve a useful role in resource adapters and 
--- simple signal sources such as framerates or mouse position.
---
--- Each ORef is identified by type and partition. In practice, this
--- means the set of ORefs must be known statically and are a very
--- small set of values. But ORefs are best used sparingly; they are
--- an impoverished, inflexible reactive concept compared to RDP's 
--- rich use of demand values and demand monitors.
---
--- For Sirea and RDP, the full future of the ORef is updated, not
--- just the current value. The main reasons for this are:
---   * easy modeling for models that change in stable ways
---   * shift updates slightly to the future, to avoid rework
---   * support anticipation (bpeek) like other RDP resources
---   * model precise, consistent, logical timing for signals
---
--- It may be useful to couple ORef with demand monitors to have some
--- influence between them (or to maintain ORef only as needed).
+-- | ORef stands for 'observable reference' - a variable maintained
+-- by a partition and observable by RDP behaviors. An ORef variable
+-- is not sensitive to demand (not directly, anyway); it is one to
+-- many communication. This is useful for simple sensory signals if
+-- they are cheap enough to provide even when there is no demand.
 module Sirea.ORef
     ( ORefType(..)
     , ProvidesORef
@@ -38,18 +17,26 @@ module Sirea.ORef
     , observeORef
     ) where
 
+-- TODO: Generalize ORef internals for use with
+--   * Demand Monitors
+--   * Reactive State Models
+--   * Filesystem Observers (named by values other than types...)
+--   
+
 import Data.Typeable
 import Data.IORef
 import Control.Applicative
 
 import Sirea.PCX
 import Sirea.BCX
+--import Sirea.Partition (onNextStep)
 import Sirea.Signal
 import Sirea.Link 
 import Sirea.Behavior
-import Sirea.Time (T,DT)
+import Sirea.Time 
+import Sirea.Partition
 import Sirea.Internal.LTypes
-import Sirea.Internal.BImpl
+--import Sirea.Internal.BImpl
 
 -- | ORefType: some parameters for a new ORef. An ORef type should
 -- adequately explain its purpose - i.e. instead of (Int,Int), use:
@@ -70,13 +57,13 @@ class (Typeable x) => ORefType x where
     orefDefault :: x
 
 -- | ProvidesORef is a simple declaration that a given ORefType is
--- provided and maintained by a given partition type.
+-- provided and maintained by a given partition.
 --
 -- This is necessary because otherwise it would be too easy to ask
 -- for an ORef that the thread doesn't maintain, by accident. All 
 -- the ORefs provided by a partition should be declared in proximity 
 -- to the partition type (and could be given specific names.)
-class (Typeable p, ORefType x) => ProvidesORef p x 
+class (Partition p, ORefType x) => ProvidesORef p x 
 
 -- | loadORef - build an ORef from resources in the partition. The
 -- ORef cannot be obtained directly with findInPCX to enforce that
@@ -117,6 +104,7 @@ data ORefSt x = ORefSt
     , oref_signal   :: !(SigSt x)
     , oref_lsubs    :: [(Int,LnkUp x)]
     , oref_subid    :: !Int
+    --, oref_step     :: !(IO () -> IO ())
     }
 
 orefDefHist :: DT
@@ -132,9 +120,7 @@ initORefSt = ORefSt
     }
 
 -- | writeORef will set the future of the observable variable. For
--- use in a specific partition thread associated with `p`. Updates
--- should respect stability values (i.e. be monotonic in stability,
--- and updates apply no earlier than prior stability.) 
+-- use in a specific partition thread associated with `p`. 
 --
 -- The associated behaviors will delay processing until the next
 -- runStepper operation. While using writeORef there may always be
@@ -145,10 +131,12 @@ writeORef :: (ORefType x) => ORef x -> SigUp x -> IO ()
 writeORef (ORef (ORefR rfR)) = writeORef' rfR . withDefault
     where withDefault = su_fmap (<|> s_always orefDefault)
 
--- at writeORef', the signal update is already merged with default
+-- at writeORef', the signal update is already merged with default.
 writeORef' :: IORef (ORefSt x) -> SigUp x -> IO ()
-writeORef' = undefined
-
+writeORef' rf su = undefined
+{-    readIORef rf >>= \ st ->
+    mapM 
+-}
 
 
 -- | tuneORefGC - modify the default and the amount of history kept
@@ -186,8 +174,6 @@ readORef = undefined
 -- result is the ORef signal masked by the demand signal.
 observeORef :: (ProvidesORef p x) => BCX w (S p ()) (S p x)
 observeORef = undefined
-
-
     -- implementation:
     --   manage subscription based on signal.
     --   phase delay updates from writeORef.
@@ -199,11 +185,6 @@ observeORef = undefined
     --   b y (S p x) -- unsafe behavior to receive writes.
     --   
     --   
-
-autoSubscribeB :: OnSubscribe (S p x) -> B w (S p ()) (S p x)
-autoSubscribeB onSub = forceDelayB >>> dupB >>> firstB sub >>> mask
-    where sub  = unsafeAutoSubscribeB onSub 
-          mask = unsafeSigZipB s_mask
 
 
 

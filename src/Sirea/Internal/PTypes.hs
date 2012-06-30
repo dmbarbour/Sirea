@@ -2,7 +2,19 @@
 module Sirea.Internal.PTypes
     ( Stepper(..)
     , Stopper(..)
+    , TC(..)
+    , runTCStep
+    , addTCRecv, addTCEvent
+    , addTCWork, addTCSend
+    , tcToStepper
     ) where
+
+import Sirea.PCX
+import Data.Typeable
+import Data.IORef
+import Control.Applicative
+import Control.Exception (mask_)
+import Control.Monad (join)
 
 -- | Stepper - incremental processing of RDP updates in Sirea.
 --
@@ -53,4 +65,119 @@ data Stopper = Stopper
     }
 
 
+-- | TC is the thread context - basically a small set of queues in
+-- IORefs, and some initialization status (for partitions other than
+-- P0, keep track to shutdown later).
+--    tc_init :: for initialization; atomic
+--    tc_recv :: either event or work; atomic
+--    tc_work :: phased tasks, repeats until empty; not atomic
+--    tc_send :: tasks to perform at end of round; not atomic
+-- These are not heavily optimized; they don't need to be, since
+-- there are a bounded number of tasks in any queue at once, and
+-- received operations are pre-grouped in batches.
+data TC = TC 
+    { tc_init :: IORef Bool
+    , tc_recv :: IORef (Either Event Work)
+    , tc_work :: IORef (Maybe Work)
+    , tc_send :: IORef Work
+    }
+type Event = IO ()
+type Work = IO ()
+
+newTC :: IO TC
+newTC = TC <$> newIORef False
+           <*> newIORef (Left (return ()))
+           <*> newIORef Nothing
+           <*> newIORef (return ())
+
+instance Typeable TC where
+    typeOf _ = mkTyConApp tycTC []
+        where tycTC = mkTyCon3 "Sirea" "Partition.Internal" "TC"
+instance Resource TC where
+    locateResource _ = newTC
+
+
+-- | In each runStepper round:
+--    recv tasks are emptied (atomically) then processed
+--    work tasks are created by recv, then handled in group
+--    send tasks performed at end of stepper round.
+-- The `work` phase might run multiple rounds if creates more work.
+-- However, `recv` and `send` are once per round. 
+tcToStepper :: TC -> Stepper
+tcToStepper tc = Stepper 
+    { runStepper = runTCStep tc
+    , addStepperEvent = addTCEvent tc
+    }
+ 
+runTCStep :: TC -> IO ()
+runTCStep tc = mask_ $
+    runTCRecv (tc_recv tc) >>
+    runTCWork (tc_work tc) >>
+    runTCSend (tc_send tc)
+
+-- TCRecv has either event or work.
+runTCRecv :: IORef (Either Event Work) -> IO ()
+runTCRecv rfRecv =
+    atomicModifyIORef rfRecv swapZero >>=
+    either ignoreEvent performWork
+    where swapZero x = (Left (return ()),x)
+          ignoreEvent _ = return ()
+          performWork work = work
+
+-- TCWork will execute multiple phases.
+-- Usually there is only one phase.
+runTCWork :: IORef (Maybe Work) -> IO ()
+runTCWork rfw = 
+    readIORef rfw >>= \ mbWork ->
+    writeIORef rfw Nothing >>
+    maybe done doWork mbWork
+    where doWork work = work >>= \ _ -> runTCWork rfw
+          done = return ()
+
+-- TCSend will empty non-empty outboxes for the round. Usually a 
+-- small task, since fan-out between partitions is limited by type.
+-- Updates in each outbox will be sent as one atomic batch.
+--
+-- This operation may wait: each outbox has a semaphore with limited
+-- number of in-flight batches. If a fast producer sends to a slower
+-- consumer, the producer may end up waiting.
+runTCSend :: IORef Work -> IO ()
+runTCSend rfEmit = 
+    readIORef rfEmit >>= \ doEmit ->
+    writeIORef rfEmit (return ()) >>
+    doEmit
+
+-- add work to a partition; will execute at start of next round
+addTCRecv :: TC -> Work -> IO ()
+addTCRecv tc op = join $ atomicModifyIORef (tc_recv tc) putOpTakeEvent
+    where putOpTakeEvent (Left event) = (Right op, event)
+          putOpTakeEvent (Right work) = (Right (work >> op), return ())
+
+addTCEvent :: TC -> Event -> IO ()
+addTCEvent tc ev = join $ atomicModifyIORef (tc_recv tc) addOrExecEvent
+    where addOrExecEvent (Left event) = (Left (event >> ev), return ())
+          addOrExecEvent (Right work) = (Right work, ev)
+
+-- work is not modified atomically.
+addTCWork :: TC -> Work -> IO ()
+addTCWork tc newWork = modifyIORef (tc_work tc) addWork
+    where addWork Nothing = Just newWork
+          addWork (Just oldWork) = Just (oldWork >> newWork)
+
+addTCSend :: TC -> Work -> IO ()
+addTCSend tc newWork = modifyIORef (tc_send tc) addWork
+    where addWork oldWork = (oldWork >> newWork)
+
+
+-- TO CONSIDER:
+--   I could model stop external to the behaviors themselves, halting on a runStepper.
+--   Idea is:
+--      Users of thread can schedule onStop tasks, i.e. to clean up. 
+--      We always stop on a runStepper operation.
+--      We simply enter a terminating loop until we get the stoppedOnMVar 
+--      When main thread gets StoppedOnMVar, it returns.
+--   I don't believe this would be an improvement, though. What I actually need is a
+--   clean model for switching threads when I switch plugins... (eventually, anyway).
+--   Maybe it'd be better to design threads with something like this in mind? E.g. in
+--   the plugins model itself.
 

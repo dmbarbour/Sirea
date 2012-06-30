@@ -33,7 +33,7 @@ module Sirea.BCX
     ( BCX
     , unwrapBCX
     , wrapBCX
-    , delayToRunStepperBCX
+    , onNextStepBCX
     ) where
 
 import Prelude hiding ((.),id)
@@ -41,7 +41,7 @@ import Data.Typeable
 import Control.Applicative
 import Control.Category
 --import Control.Arrow
-import Sirea.Internal.BCross (crossB, delayToNextStepB)
+import Sirea.Internal.BCross (crossB, stepDelayB, phaseDelayB)
 import Sirea.Behavior
 import Sirea.Trans.Static 
 import Sirea.Partition
@@ -51,24 +51,25 @@ import Sirea.B
 -- WithPCX is a functor and applicative of values that take a PCX.
 type WithPCX w = WrappedArrow (->) (PCX w)
 
+
 -- | The BCX type is essentially:
 --
 --       type BCX w x y = PCX w -> B w x y
 --
 -- But wrapped for manipulation as a Behavior.
 --
--- BCX is a behavior that can work in any world w, given a partition
--- context (PCX w) to represent or proxy resources in that world. 
+-- BCX is a behavior that can work in any world w, given a context
+-- (GCX w) to represent or proxy resources in that world. 
 newtype BCX w x y = BCX { fromBCX :: StaticB (WithPCX w) (B w) x y } 
     deriving ( Category, BFmap, BProd, BSum, BDisjoin
-             , BZip, BSplit, BTemporal, BPeek, Behavior, BScope )
+             , BZip, BSplit, BTemporal, BPeek, Behavior {-, BScope -} )
     -- NOT deriving: BDynamic, BCross, BEmbed
 
 instance Typeable2 (BCX w) where
     typeOf2 _ = mkTyConApp tcBCX []
         where tcBCX = mkTyCon3 "Sirea" "Behavior" "BCX"
 
-unwrapBCX :: BCX w x y -> PCX w -> B w x y
+unwrapBCX :: BCX w x y -> (PCX w -> B w x y)
 unwrapBCX = unwrapArrow . unwrapStatic . fromBCX
 
 wrapBCX :: (PCX w -> B w x y) -> BCX w x y
@@ -81,11 +82,20 @@ instance BCross (BCX w) where
     bcross = wrapBCX crossB
 
 
--- | delayToRunStepperBCX will delay link updates to next runStepper
--- operation. Useful for updates provided *between* runStepper ops
--- by the partition thread.
-delayToRunStepperBCX :: (Partition p) => BCX w (S p x) (S p x)
-delayToRunStepperBCX = wrapBCX delayToNextStepB
+-- | onNextStepBCX will delay processing until the next runStepper
+-- event, and processes updates as though from a remote partition.
+-- This can be useful for achieving snapshot consistency relative
+-- even to a thread's internal updates, or for receiving updates
+-- from worker threads.
+-- 
+onNextStepBCX :: (Partition p) => BCX w (S p x) (S p x)
+onNextStepBCX = wrapBCX $ \ cw -> stepDelayB cw >>> phaseDelayB cw
+
+
+-- Idea: Wrap the `PCX w` into a `GCX w` for global context. 
+--   Idea is (1) to associate resources only with partition contexts.
+--           (2) to hinder accidental use of toplevel where PCX is desired.
+-- 
 
 -- TODO:
 --   BDynamic

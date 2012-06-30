@@ -4,11 +4,11 @@ Cabal-Version: >= 1.2
 Synopsis: Simply Reactive! Declarative orchestration in Haskell with RDP.
 Category: Reactivity
 Description:
-  Reactive Demand Programming is an effectful, declarative paradigm
-  for continuous orchestration of open systems. Sirea implements RDP
-  in Haskell. This particular module is the `core` of Sirea, just
-  the basic behaviors and implementation. Problem specific resources
-  will be provided by external modules or plugins.
+  Reactive Demand Programming is an effectful, declarative, reactive
+  model for orchestration of open systems. Sirea implements RDP in
+  Haskell. This particular module is the `core` of Sirea, just the 
+  basic behaviors and implementation. Other packages will support
+  specific domains or problems (UI, state, video, sound, etc.).
   
   RDP is similar to arrowized FRP, excepting how it manages effects
   and state. RDP behaviors can encapsulate access to resources and
@@ -48,15 +48,26 @@ Library
 
     Sirea.B
     Sirea.BCX
+
     Sirea.Link
     Sirea.ORef
     Sirea.UnsafeOnUpdate
-
     Sirea.Clock
 
     Sirea.Trans.Static
 
-
+    Sirea.Internal.STypes
+    Sirea.Internal.DiscreteTimedSeq
+    Sirea.Internal.SigType
+    Sirea.Internal.LTypes
+    Sirea.Internal.BTypes
+    Sirea.Internal.PTypes
+    Sirea.Internal.BImpl
+    Sirea.Internal.BCross
+    Sirea.Internal.BCompile
+    Sirea.Internal.Thread
+    Sirea.Internal.BDynamic
+    
 
   ghc-options: -threaded -Wall -fno-warn-orphans
 

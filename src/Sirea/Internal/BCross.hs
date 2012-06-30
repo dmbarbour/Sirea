@@ -4,35 +4,41 @@
 --
 -- It also contains types associated with partitions and
 -- crossB, i.e. used in BCX.
+--
+-- Organization:
+--   Each Partition has a `TC` (thread context).
+--      This includes inbox, outbox, working tasks.
+
+--   
 module Sirea.Internal.BCross 
     ( crossB
-    , delayToNextStepB
+    , stepDelayB
+    , phaseDelayB
     , GobStopper(..)
     , runGobStopper
-    , TC(..)
-    , runTCStep
-    , addTCRecv, addTCEvent
-    , addTCWork, addTCSend
-    , tcToStepper
     , OutBox
     ) where
 
 import Data.Typeable
 import Data.Function (fix)
 import Data.IORef
-import Data.Maybe (isNothing)
+-- import Data.Maybe (isNothing)
 import Control.Applicative
-import Control.Exception (mask_, assert)
+import Control.Exception (assert)
 import Control.Concurrent.MVar 
 import Control.Monad (join, unless, when)
 
 import Sirea.Internal.BTypes
 import Sirea.Internal.STypes
 import Sirea.Internal.LTypes
+import Sirea.Internal.PTypes
 import Sirea.Internal.BImpl (phaseUpdateB)
 import Sirea.Partition
 import Sirea.PCX
 import Sirea.Behavior
+
+type Event = IO ()
+type Work = IO ()
 
 -- crossB will:
 --    add the update as a task to perform in another partition.
@@ -43,8 +49,8 @@ crossB :: (Partition p1, Partition p2) => PCX w -> B w (S p1 x) (S p2 x)
 crossB cw = fix $ \ b ->
     let (p1,p2) = getPartitions b in
     if (typeOf p1 == typeOf p2) 
-      then jumpB 
-      else sendB cw p1 p2 >>> receiveB cw p2
+      then jumpB
+      else sendB cw p1 p2 >>> phaseDelayB cw
 
 -- this is a total hack in haskell to access typesystem data
 getPartitions :: B w (S p1 x) (S p2 x) -> (p1,p2)
@@ -52,15 +58,19 @@ getPartitions _ = (undefined,undefined)
 
 -- jumpB is used if we're moving to the same partition we started in
 -- It simply ignores the partitions and forwards the signal. Jump is
--- free after compilation.
-jumpB :: B w (S p1 x) (S p2 x)
-jumpB = B_mkLnk tr_fwd lnkJump
+-- free after compilation. It would be unsafe to use this if p1 != p2.
+jumpB :: (Partition p1, Partition p2) => B w (S p1 x) (S p2 x)
+jumpB = fix $ \ b ->
+    let (p1,p2) = getPartitions b in
+    assert(typeOf p1 == typeOf p2) $
+    B_mkLnk tr_fwd lnkJump
     where lnkJump = MkLnk { ln_build = return . fnJump
                           , ln_tsen = False, ln_peek = 0 }
+          
 
-fnJump :: Lnk (S p a) -> Lnk (S p' a) 
+fnJump :: Lnk (S p x) -> Lnk (S p' x)
 fnJump LnkDead = LnkDead
-fnJump (LnkSig lu) = LnkSig lu
+fnJump (LnkSig lu) = (LnkSig lu)
 
 -- sendB, if active (not dead code), will
 --   * create partitions if they don't already exist
@@ -84,42 +94,48 @@ mkSend cw p1 p2 (LnkSig lu) =
     let lu' = LnkUp { ln_touch = touch', ln_update = update' } in
     return (LnkSig lu')
 
--- receiveB is used on the receive side of bcross. Serves two roles:
---   * combines updates from multiple in-flight batches
---   * touch to efficiently process multiple updates
-receiveB :: (Partition p) => PCX w -> p -> B w (S p x) (S p x)
-receiveB cw p = 
-    let tc = getTC p cw in
+-- | phaseDelayB delays updates a phase within runStepper. The idea
+-- is to touch a bunch of updates in one run before executing them 
+-- later run, potentially eliminating redundant updates. Use of 
+-- phaseDelayB may also accumulate multiple updates, which is useful
+-- if phaseDelayB runs in the runStepper receive phase.
+phaseDelayB :: (Partition p) => PCX w -> B w (S p x) (S p x)
+phaseDelayB cw = fix $ \ b -> 
+    let (p,_) = getPartitions b in
+    let cp = getPCX p cw in
+    let tc = getTC cp in
     let doLater = addTCWork tc in
     phaseUpdateB (return doLater)
 
-
--- delayToNextStepB will delay an update to the next recv round. Meant
--- for use within a partition, for ORefs and other behaviors that
--- are updated between runStepper operations.
-delayToNextStepB :: (Partition p) => PCX w -> B w (S p x) (S p x)
-delayToNextStepB cw = fix $ \ b ->
+-- | stepDelayB is for use within a partition, but delays actions to
+-- the next runStepper operation (cf. Sirea.Partition.onNextStep).
+-- This should be combined with phaseDelayB in most cases.
+--   i.e. stepDelayB cw >>> phaseDelayB cw
+-- This composition works similar to an internal bcross.
+--
+-- The motivation for stepDelayB is to process updates provided
+-- between steps, while ensuring the snapshot consistency within a
+-- partition. Can also be used for worker threads. But it may prove
+-- more useful in some cases to use `onNextStep` with phaseDelayB,
+-- e.g. to ensure updates are grouped.
+--
+stepDelayB :: (Partition p) => PCX w -> B w (S p x) (S p x)
+stepDelayB cw = fix $ \ b ->
     let (p,_) = getPartitions b in
-    immediateSendB cw p >>> receiveB cw p
-
--- immediateSendB simply dumps the work to the next TCRecv task, does
--- not go through the TCSend mechanism. Meant for use between Stepper
--- operations, for partition sending to self, for delayToNextStepB.
-immediateSendB :: (Partition p) => PCX w -> p -> B w (S p x) (S p x)
-immediateSendB cw p =
-    let tc = getTC p cw in
+    let cp = getPCX p cw in
+    let tc = getTC cp in
     let doSend = addTCRecv tc in
-    B_mkLnk tr_fwd $ MkLnk { ln_build = return . fnImmSend doSend
+    B_mkLnk tr_fwd $ MkLnk { ln_build = return . fnStepDelay doSend
                            , ln_tsen = False, ln_peek = 0 }
 
-fnImmSend :: (IO () -> IO ()) -> Lnk (S p x) -> Lnk (S p x)
-fnImmSend _ LnkDead = LnkDead
-fnImmSend doSend (LnkSig lu) = LnkSig lu'
+fnStepDelay :: (IO () -> IO ()) -> Lnk (S p x) -> Lnk (S p x)
+fnStepDelay _ LnkDead = LnkDead
+fnStepDelay stepDelay (LnkSig lu) = LnkSig lu'
     where lu' = LnkUp { ln_touch = return (), ln_update = update }
-          update = doSend . ln_update lu
+          update = stepDelay . ln_update lu
 
-getTC :: (Partition p) => p -> PCX w -> TC p
-getTC _ = findInPCX
+getTC :: (Partition p) => PCX p -> TC
+getTC = findInPCX 
 
 getPCX :: (Typeable p) => p -> PCX w -> PCX p
 getPCX _ = findInPCX
@@ -154,13 +170,14 @@ runGobStopper gs ev =
 
 -- initPartition is performed when building behaviors (or dynamic 
 -- behaviors) when we cross into another partition. It ensures the
--- partition exists before we step into it. Idempotent.
+-- partition exists before we step into it. Idempotent and atomic.
+-- (Must be atomic if dynamic behaviors may declare partitions).
 initPartition :: (Partition p) => p -> PCX w -> IO ()
 initPartition p cw =
-    let tc = getTC p cw in
+    let cp = getPCX p cw in
+    let tc = getTC cp in
     atomicModifyIORef (tc_init tc) (\x->(True,x)) >>= \ bInit ->
     unless bInit $ 
-        let cp = getPCX p cw in
         newPartitionThread cp (tcToStepper tc) >>= \ s0 ->
         let stopInStepper = addTCRecv tc (runStopper s0) in
         let stopper = s0 { runStopper = stopInStepper } in 
@@ -168,126 +185,21 @@ initPartition p cw =
         atomicModifyIORef gs (\stoppers->(stopper:stoppers,()))
     
 
--- | TC is the thread context, which is basically a couple IORefs 
--- with some metadata about the thread. 
---    tc_init :: for initialization; atomic
---    tc_recv :: either event or work; atomic
---    tc_work :: phased tasks, repeats until empty; not atomic
---    tc_send :: tasks to perform at end of round; not atomic
--- These are not heavily optimized; they don't need to be, since
--- there are a bounded number of tasks in any queue at once, and
--- received operations are pre-grouped in batches.
-data TC p = TC 
-    { tc_init :: IORef Bool
-    , tc_recv :: IORef (Either Event Work)
-    , tc_work :: IORef (Maybe Work)
-    , tc_send :: IORef Work
-    }
-type Event = IO ()
-type Work = IO ()
-
-instance Typeable1 TC where
-    typeOf1 _ = mkTyConApp tycTC []
-        where tycTC = mkTyCon3 "Sirea" "Partition.Internal" "TC"
-instance (Typeable p) => Resource (TC p) where
-    locateResource _ = newTC
-
-newTC :: IO (TC p)
-newTC = TC <$> newIORef False
-           <*> newIORef (Left (return ()))
-           <*> newIORef Nothing
-           <*> newIORef (return ())
-
--- | In each runStepper round:
---    recv tasks are emptied (atomically) then processed
---    work tasks are created by recv, then handled in group
---    send tasks performed at end of stepper round.
--- The `work` phase might run multiple rounds if creates more work.
--- However, `recv` and `send` are once per round. 
-tcToStepper :: TC p -> Stepper
-tcToStepper tc = Stepper 
-    { runStepper = runTCStep tc
-    , addStepperEvent = addTCEvent tc
-    }
- 
-runTCStep :: TC p -> IO ()
-runTCStep tc = mask_ $
-    runTCRecv (tc_recv tc) >>
-    runTCWork (tc_work tc) >>
-    runTCSend (tc_send tc)
-
--- TCRecv has either event or work.
-runTCRecv :: IORef (Either Event Work) -> IO ()
-runTCRecv rfRecv =
-    atomicModifyIORef rfRecv swapZero >>=
-    either ignoreEvent performWork
-    where swapZero x = (Left (return ()),x)
-          ignoreEvent _ = return ()
-          performWork work = work
-
--- TCWork will execute multiple phases.
--- Usually there is only one phase.
-runTCWork :: IORef (Maybe Work) -> IO ()
-runTCWork rfw = 
-    readIORef rfw >>= \ mbWork ->
-    writeIORef rfw Nothing >>
-    maybe done doWork mbWork
-    where doWork work = work >> runTCWork rfw
-          done = return ()
-
--- TCSend will empty non-empty outboxes for the round. Usually a 
--- small task, since fan-out between partitions is limited by type.
--- Updates in each outbox will be sent as one atomic batch.
---
--- This operation may wait: each outbox has a semaphore with limited
--- number of in-flight batches. If a fast producer sends to a slower
--- consumer, the producer may end up waiting.
-runTCSend :: IORef Work -> IO ()
-runTCSend rfEmit = 
-    readIORef rfEmit >>= \ doEmit ->
-    writeIORef rfEmit (return ()) >>
-    doEmit
-
--- add work to a partition; will execute at start of next round
-addTCRecv :: TC p -> Work -> IO ()
-addTCRecv tc op = join $ atomicModifyIORef (tc_recv tc) putOpTakeEvent
-    where putOpTakeEvent (Left event) = (Right op, event)
-          putOpTakeEvent (Right work) = (Right (work >> op), return ())
-
-addTCEvent :: TC p -> Event -> IO ()
-addTCEvent tc ev = join $ atomicModifyIORef (tc_recv tc) addOrExecEvent
-    where addOrExecEvent (Left event) = (Left (event >> ev), return ())
-          addOrExecEvent (Right work) = (Right work, ev)
-
--- work is not modified atomically.
-addTCWork :: TC p -> Work -> IO ()
-addTCWork tc newWork = modifyIORef (tc_work tc) addWork
-    where addWork Nothing = Just newWork
-          addWork (Just oldWork) = Just (oldWork >> newWork)
-
-addTCSend :: TC p -> Work -> IO ()
-addTCSend tc newWork = modifyIORef (tc_send tc) addWork
-    where addWork oldWork = (oldWork >> newWork)
-
 -- tcSend - send work from p1 to p2 in world w.
 -- actual send happens at end of p1's round.
 -- actual receive happens at beginning of p2's round.
 -- outbox (modeled as a resource) controls communication with semaphore.
 tcSend :: (Partition p1, Partition p2) 
        => PCX w -> p1 -> p2 -> Work -> IO ()
-tcSend cw p1 p2 = 
-    let tc1 = getTC p1 cw in
+tcSend cw p1 p2 work = 
+    assert (typeOf p1 /= typeOf p2) $
+    let tc1 = getTC (getPCX p1 cw) in
     let ob  = getOB cw p1 p2 in
-    let tc2 = getTC p2 cw in
-    tcSend' tc1 ob tc2
-
-tcSend' :: TC p1 -> OutBox p2 -> TC p2 -> Work -> IO ()
-tcSend' tc1 ob tc2 work =
-    ob_addWork ob work >>= \ bFirst -> 
-    when bFirst prepSend
-    where prepSend  = addTCSend tc1 doDeliver -- deliver at end of round
-          doDeliver = ob_deliver ob recvInP2  -- performs delivery (may wait)
-          recvInP2  = addTCRecv tc2           -- adds work to next round in p2
+    let tc2 = getTC (getPCX p2 cw) in
+    ob_addWork ob work >>= \ bFirstWorkInBox ->
+    when bFirstWorkInBox $
+        let deliverOb = ob_deliver ob tc2 in
+        addTCSend tc1 deliverOb
 
 -- | OutBox - output from Sirea thread.
 --
@@ -331,12 +243,12 @@ ob_max_in_flight = 6
 instance Typeable1 OutBox where
     typeOf1 _ = mkTyConApp tycOB []
         where tycOB = mkTyCon3 "Sirea" "Partition.Internal" "OutBox"
-instance (Typeable p) => Resource (OutBox p) where
+instance (Partition p) => Resource (OutBox p) where
     locateResource _ = OutBox <$> newSemaphore ob_max_in_flight
                               <*> newIORef Nothing
 
 -- | obtain the outbox resource p1->p2 starting from the world context
-getOB :: (Typeable p1, Typeable p2) => PCX w -> p1 -> p2 -> OutBox p2
+getOB :: (Partition p1, Partition p2) => PCX w -> p1 -> p2 -> OutBox p2
 getOB cw p1 _ = findInPCX (getPCX p1 cw)
 
 -- | add some work to the OutBox. Returns true if work was added to
@@ -345,15 +257,18 @@ ob_addWork :: OutBox p -> Work -> IO Bool
 ob_addWork ob op =
     let st = ob_state ob in
     readIORef st >>= \ mbW ->
-    let result = isNothing mbW in
-    let mbW' = Just $ maybe op (>> op) mbW in
-    writeIORef st mbW' >>
-    return result
+    case mbW of
+        Nothing ->
+            writeIORef st (Just op) >>
+            return True
+        Just ops ->
+            writeIORef st (Just (ops >> op)) >>
+            return False
 
 -- | deliver work from the outbox; results in an empty outbox.
 -- Uses the counting semaphore for bounded buffers.
-ob_deliver :: OutBox p -> (Work -> IO ()) -> IO ()
-ob_deliver ob deliver =
+ob_deliver :: OutBox p -> TC -> IO ()
+ob_deliver ob dst =
     let st = ob_state ob in
     readIORef st >>= \ mbW ->
     writeIORef st Nothing >>
@@ -361,9 +276,9 @@ ob_deliver ob deliver =
     where doDeliver work =
             let sem = ob_sem ob in
             sem_wait sem >>
-            deliver (sem_signal sem >> work)
+            addTCRecv dst (sem_signal sem >> work)
 
--- | a simple semaphore to model bounded-buffers. 
+-- | a simple semaphore to model bounded-buffers between partitions. 
 -- 
 -- State is either a count of available resources or a list of tasks
 -- each waiting on a resource. Signal either releases one thread or 

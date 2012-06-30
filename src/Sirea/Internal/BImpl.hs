@@ -38,11 +38,12 @@ import Sirea.Signal
 
 import Control.Category
 import Control.Applicative
-import Control.Monad (unless, when)
+import Control.Monad (unless)
 import Control.Parallel.Strategies (Eval, runEval, evalList, rseq)
 import Control.Exception (assert)
 import Data.Function (on)
 import Data.IORef (newIORef, readIORef, writeIORef, IORef)
+--import Data.Maybe (isNothing)
 
 import qualified Data.List as L
 
@@ -703,7 +704,7 @@ undeadB = mkLnkB id $ mkLnkPure (LnkSig . ln_lnkup)
 -- indeed, you'll need to hack around it a bit to regain duration
 -- coupling, perform merges or masking, ensure thread safety.
 unsafeAutoSubscribeB :: OnSubscribe x -> B w (S p ()) x
-unsafeAutoSubscribeB onSub = mkLnkB tr_unit (mkLnkSimp (buildSubscriber onSub))
+unsafeAutoSubscribeB = mkLnkB tr_unit . mkLnkSimp . buildSubscriber 
 
 type OnSubscribe x = Lnk x -> IO (UnSubscribe)
 type UnSubscribe = IO ()
@@ -714,8 +715,8 @@ buildSubscriber onSub lnx =
     newIORef st_zero >>= \ rfSt ->
     newIORef Nothing >>= \ rfUnsub ->
     let touch = return () in
-    let update = updateSubscribe onSub lnx rfSt rfUnsub in
-    return $ LnkUp { ln_touch = touch, ln_update = update }
+    let update = updateSubscriber onSub lnx rfSt rfUnsub in
+    return $ LnkSig $ LnkUp { ln_touch = touch, ln_update = update }
 
 updateSubscriber :: OnSubscribe x -> Lnk x 
                  -> IORef (SigSt ()) -> IORef (Maybe UnSubscribe)
@@ -733,9 +734,10 @@ updateSubscriber onSub lnx rfSt rfUnsub su =
                      else subscribe
     where subscribe =
             readIORef rfUnsub >>= \ ux ->
-            when (isNothing ux) $
-                onSub lnx >>= \ ux' ->
-                writeIORef rfUnsub (Just ux')
+            case ux of
+                Just _  -> return ()
+                Nothing -> onSub lnx >>=
+                           writeIORef rfUnsub . Just
           unsubscribe =
             readIORef rfUnsub >>= \ ux ->
             writeIORef rfUnsub Nothing >>

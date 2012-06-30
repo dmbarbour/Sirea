@@ -68,10 +68,12 @@ instance (Behavior b, Applicative f) => Behavior (StaticB f b)
 -- from Sirea.Partition
 instance (BCross b, Applicative f) => BCross (StaticB f b) where
     bcross  = toSB bcross
+
+{-
 instance (BScope b, Applicative f) => BScope (StaticB f b) where
     bpushScope = toSB bpushScope
     bpopScope  = toSB bpopScope
-
+-}
 
 
 

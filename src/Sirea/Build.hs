@@ -43,6 +43,7 @@ import Control.Concurrent (myThreadId, forkIO, killThread, threadDelay)
 import Sirea.Internal.BTypes
 import Sirea.Internal.LTypes
 import Sirea.Internal.BCompile(compileB)
+import Sirea.Internal.PTypes 
 import Sirea.Internal.BCross
 import Sirea.Internal.Thread
 import Sirea.Behavior
@@ -112,13 +113,14 @@ buildSireaApp app =
     -- new generic context; fresh global space for the app
     newPCX >>= \ cw -> 
     -- indicate the initial thread already exists
-    let tc0 = (findInPCX cw :: TC P0) in
+    let cp0 = findInPCX cw :: PCX P0 in
+    let tc0 = findInPCX cp0 :: TC in
     writeIORef (tc_init tc0) True >> 
-    -- build behavior using context
+    -- compute behavior in the new context
     let bcx = unwrapSireaApp app in
     let b   = unwrapBCX bcx cw in
+    -- compile behavior, dropping response
     let dt0 = LnkDUnit ldt_zero in
-    -- dropping the response signal
     let (_, mkLn) = compileB b dt0 LnkDead in
     mkLn >>= \ lnk0 ->
     case lnk0 of 
@@ -150,8 +152,9 @@ zeroObject cw =
 buildSireaBLU :: PCX w -> LnkUp () -> IO SireaObject
 buildSireaBLU cw lu =
     newIORef emptyStopData >>= \ rfSD ->
-    let tc0     = findInPCX cw in
     let gs      = findInPCX cw in
+    let cp0     = findInPCX cw :: PCX P0 in
+    let tc0     = findInPCX cp0 in
     addTCRecv tc0 (beginApp tc0 gs rfSD lu) >> -- add kickstart
     let stepper = tcToStepper tc0 in
     let stopper = makeStopper rfSD in
@@ -161,7 +164,7 @@ buildSireaBLU cw lu =
           
 -- task to initialize application (performed on first runStepper)
 -- a slight delay is introduced before everything really starts.
-beginApp :: TC P0 -> GobStopper -> IORef StopData -> LnkUp () -> IO ()
+beginApp :: TC -> GobStopper -> IORef StopData -> LnkUp () -> IO ()
 beginApp tc0 gs rfSD lu =
     readIORef rfSD >>= \ sd ->
     if shouldStop sd 
@@ -182,7 +185,7 @@ schedule dt op = assert (usec > 0) $ void $
 
 -- regular maintenance operation, simply increases stability of the
 -- active signal on a regular basis; performed within main thread.
-maintainApp :: TC P0 -> GobStopper -> IORef StopData -> LnkUp () -> T -> IO ()
+maintainApp :: TC -> GobStopper -> IORef StopData -> LnkUp () -> T -> IO ()
 maintainApp tc0 gs rfSD lu tStable =
     readIORef rfSD >>= \ sd ->
     if shouldStop sd 
@@ -198,7 +201,7 @@ maintainApp tc0 gs rfSD lu tStable =
 
 -- this is the last phase of shutdown - actually stopping threads
 -- and eventually calling the Stopper event for the main thread.
-shutdownEvent :: TC P0 -> GobStopper -> IORef StopData -> IO ()
+shutdownEvent :: TC -> GobStopper -> IORef StopData -> IO ()
 shutdownEvent tc0 gs rfSD = runGobStopper gs finiStop
     where finiStop = addTCRecv tc0 (finiStopData rfSD)
     
@@ -209,10 +212,8 @@ shutdownEvent tc0 gs rfSD = runGobStopper gs finiStop
 --   dtBorder    : assumed startup time
 dtStability, dtStep, dtBorder :: DT
 dtStability = 0.60  -- stability of main signal
-dtStep      = 0.12  -- periodic event to increase stability
-dtBorder    = 0.06  -- latency added for startup (for anticipation)
-
-
+dtStep      = 0.10  -- periodic event to increase stability
+dtBorder    = 0.05  -- latency added for startup (for anticipation)
 
 -- | If you don't need to run the stepper yourself, consider use of
 -- runSireaApp. This will simply run the application until the main

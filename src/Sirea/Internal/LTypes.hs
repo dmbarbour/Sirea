@@ -302,7 +302,6 @@ sm_waiting :: SigM x y -> Bool
 sm_waiting sm = st_expect (sm_lsig sm) || st_expect (sm_rsig sm)
 
 -- stability of SigM is lesser of two stability values.
--- note: not really clear on whether I should 
 sm_stable :: SigM x y -> Maybe T
 sm_stable sm = mb lt rt
     where lt = st_stable (sm_lsig sm)
@@ -347,10 +346,10 @@ ln_withSigM' rfSigM onTouch onEmit = (lux,luy)
                     unless (sm_waiting sm) onTouch
           emit  =   readIORef rfSigM >>= \ sm ->
                     unless (sm_waiting sm) $
-                    let sm' = sm_cleanup (sm_stable sm) sm in
-                    sm' `seq` 
-                    writeIORef rfSigM sm' >>
-                    onEmit sm
+                        let sm' = sm_cleanup (sm_stable sm) sm in
+                        sm' `seq` 
+                        writeIORef rfSigM sm' >>
+                        onEmit sm
           updX su = modifyIORef rfSigM (sm_sigup_l su) >> emit
           updY su = modifyIORef rfSigM (sm_sigup_r su) >> emit
           lux =     LnkUp { ln_touch = pokeX, ln_update = updX }
