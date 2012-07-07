@@ -146,7 +146,7 @@ getPCX _ = findInPCX
 newtype GobStopper = Gob { unGob :: IORef [Stopper] }
 instance Typeable GobStopper where
     typeOf _ = mkTyConApp tycGS []
-        where tycGS = mkTyCon3 "Sirea" "Partition.Internal" "GobStopper"
+        where tycGS = mkTyCon3 "Sirea" "Sirea.Partition.Internal" "GobStopper"
 instance Resource GobStopper where
     locateResource _ = Gob <$> newIORef []
 
@@ -242,7 +242,7 @@ ob_max_in_flight = 6
 
 instance Typeable1 OutBox where
     typeOf1 _ = mkTyConApp tycOB []
-        where tycOB = mkTyCon3 "Sirea" "Partition.Internal" "OutBox"
+        where tycOB = mkTyCon3 "Sirea" "Sirea.Partition.Internal" "OutBox"
 instance (Partition p) => Resource (OutBox p) where
     locateResource _ = OutBox <$> newSemaphore ob_max_in_flight
                               <*> newIORef Nothing

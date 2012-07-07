@@ -170,12 +170,13 @@ beginApp tc0 gs rfSD lu =
     if shouldStop sd 
       then shutdownEvent tc0 gs rfSD
       else getTime >>= \ tNow ->
-           let tStart = tNow `addTime` dtBorder in
+           let tStart = tNow `addTime` dtStep in
            let tStable = tNow `addTime` dtStability in
            let su = SigUp { su_state = Just (s_always (), tStart)
                           , su_stable = Just tStable } in
+           let nextStep = maintainApp tc0 gs rfSD lu tStable in
            ln_update lu su >> -- activation!
-           schedule dtStep (addTCRecv tc0 (maintainApp tc0 gs rfSD lu tStable))
+           schedule dtStep (addTCRecv tc0 nextStep)
 
 -- schedule will delay an event then perform it in another thread.
 -- Sirea only does this with one thread at a time.
@@ -197,8 +198,9 @@ maintainApp tc0 gs rfSD lu tStable =
       else getTime >>= \ tNow ->
            let tStable' = tNow `addTime` dtStability in
            let su = SigUp { su_state = Nothing, su_stable = Just tStable' } in
+           let nextStep = maintainApp tc0 gs rfSD lu tStable' in
            ln_update lu su >>
-           schedule dtStep (addTCRecv tc0 (maintainApp tc0 gs rfSD lu tStable'))
+           schedule dtStep (addTCRecv tc0 nextStep)
 
 -- this is the last phase of shutdown - actually stopping threads
 -- and eventually calling the Stopper event for the main thread.
@@ -208,15 +210,14 @@ shutdownEvent tc0 gs rfSD = runGobStopper gs finiStop
     
 
 -- Tuning parameters for the stability maintenance tasks:
+--
 --   dtStability : how far ahead to stabilize
 --   dtStep      : period between stability updates
---   dtBorder    : assumed startup time
 --
 -- dtStep can also influence amount of computation per round.
-dtStability, dtStep, dtBorder :: DT
-dtStability = 0.70  -- stability of main signal
-dtStep      = 0.10  -- periodic event to increase stability
-dtBorder    = 0.05  -- latency added for startup (for anticipation)
+dtStability, dtStep :: DT
+dtStability = 0.32  -- stability of main signal
+dtStep      = 0.04  -- periodic event to increase stability
 
 -- | If you don't need to run the stepper yourself, consider use of
 -- runSireaApp. This will simply run the application until the main
@@ -256,21 +257,19 @@ basicSireaAppLoop rfContinue stepper =
 -- once an active signal to bUnsafeExit stabilizes. Basically a way
 -- to halt the application from within the application. Should not
 -- be used if the client plans to halt the application externally.
--- 
--- This uses a resource to ensure killThread happens only once even
--- if multiple bUnsafeExit behaviors are used. However, caution is
--- warranted: this doesn't compose very well, i.e. if two different
--- applications or agents both use bUnsafeExit, it is difficult to
--- switch between them or run them concurrently.  
 --
--- A better design is to model shutdown behavior within SireaApp, by
--- use of dynamic behaviors (bdynamic) or choice (:|:). This results
--- in more precise shutdown, and composes better. But bUnsafeExit is
--- sufficient for many apps in practice.
+-- bUnsafeExit does not stop the whole Haskell process, only the one
+-- SireaApp in which it is used. bUnsafeExit doesn't cause immediate
+-- halt; the application may continue to run for up to a few seconds
+-- to halt gracefully.  
+--
+-- For more precise and composable shutdown behavior, model shutdown
+-- explicitly using dynamic behaviors or asynchronous sums.
 --
 bUnsafeExit :: BCX w (S P0 ()) (S P0 ())
 bUnsafeExit = unsafeOnUpdateBCX $ \ cw -> 
-    let rfKilled = inExitR $ findInPCX cw in
+    let cp0 = findInPCX cw :: PCX P0 in
+    let rfKilled = inExitR $ findInPCX cp0 in
     let kill = readIORef rfKilled >>= \ bBlooded ->
                unless bBlooded $ void $ 
                    writeIORef rfKilled True >>
@@ -283,7 +282,7 @@ bUnsafeExit = unsafeOnUpdateBCX $ \ cw ->
 newtype ExitR = ExitR { inExitR :: IORef Bool }
 instance Typeable ExitR where
     typeOf _ = mkTyConApp tycExitR []
-        where tycExitR = mkTyCon3 "Sirea" "Build.Internal" "ExitR"
+        where tycExitR = mkTyCon3 "sirea-core" "Sirea.Build.Internal" "ExitR"
 instance Resource ExitR where
     locateResource _ = liftM ExitR $ newIORef False
 

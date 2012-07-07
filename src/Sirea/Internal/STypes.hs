@@ -75,15 +75,15 @@ instance (SigInP p x, SigInP p y) => SigInP p (x :|: y) where
 
 instance Typeable2 S where
     typeOf2 _ = mkTyConApp tycSig []
-        where tycSig = mkTyCon3 "Sirea" "Behavior" "S"
+        where tycSig = mkTyCon3 "sirea-core" "Sirea.Behavior" "S"
 
 instance Typeable2 (:|:) where
     typeOf2 _ = mkTyConApp tycSum []
-        where tycSum = mkTyCon3 "Sirea" "Behavior" "(:|:)"
+        where tycSum = mkTyCon3 "sirea-core" "Sirea.Behavior" "(:|:)"
 
 instance Typeable2 (:&:) where
     typeOf2 _ = mkTyConApp tycProd []
-        where tycProd = mkTyCon3 "Sirea" "Behavior" "(:&:)"
+        where tycProd = mkTyCon3 "sirea-core" "Sirea.Behavior" "(:&:)"
 
 
 

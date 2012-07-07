@@ -133,7 +133,7 @@ data Pt x
 
 instance Typeable1 Pt where
     typeOf1 _ = mkTyConApp tyConPt []
-        where tyConPt = mkTyCon3 "Sirea" "Partition" "Pt"
+        where tyConPt = mkTyCon3 "sirea-core" "Sirea.Partition" "Pt"
 instance (Typeable x) => Partition (Pt x) where
     newPartitionThread _ stepper = 
         newIORef emptyStopData >>= \ rfStop ->
@@ -147,9 +147,9 @@ instance (Typeable x) => Partition (Pt x) where
 data P0
 instance Typeable P0 where
     typeOf _ = mkTyConApp tyConP0 []
-        where tyConP0 = mkTyCon3 "Sirea" "Partition" "P0"
+        where tyConP0 = mkTyCon3 "sirea-core" "Sirea.Partition" "P0"
 instance Partition P0 where
-    newPartitionThread _ = error "cannot create main thread"
+    newPartitionThread = error "special case: main thread is not constructed"
 
 {-
 -- | Scopes are a thread-local alternative to full partitions. Scope
@@ -157,7 +157,7 @@ instance Partition P0 where
 data Scope s p
 instance Typeable2 Scope where
     typeOf2 _ = mkTyConApp tycScope []
-        where tycScope = mkTyCon3 "Sirea" "Partition" "Scope"
+        where tycScope = mkTyCon3 "sirea-core" "Sirea.Partition" "Scope"
 -}
 
 

@@ -81,7 +81,7 @@ data PCX p = PCX
 
 instance Typeable1 PCX where
     typeOf1 _ = mkTyConApp tycPCX []
-        where tycPCX = mkTyCon3 "Sirea" "PCX" "PCX"
+        where tycPCX = mkTyCon3 "sirea-core" "Sirea.PCX" "PCX"
 
 -- | pcxPath identifies a PCX relative to its initial construction,
 -- across child PCX resources. This offers resources unique, stable,

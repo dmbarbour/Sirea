@@ -92,7 +92,7 @@ newTC = TC <$> newIORef False
 
 instance Typeable TC where
     typeOf _ = mkTyConApp tycTC []
-        where tycTC = mkTyCon3 "Sirea" "Partition.Internal" "TC"
+        where tycTC = mkTyCon3 "sirea-core" "Sirea.Partition.Internal" "TC"
 instance Resource TC where
     locateResource _ = newTC
 

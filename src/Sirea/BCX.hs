@@ -67,7 +67,7 @@ newtype BCX w x y = BCX { fromBCX :: StaticB (WithPCX w) (B w) x y }
 
 instance Typeable2 (BCX w) where
     typeOf2 _ = mkTyConApp tcBCX []
-        where tcBCX = mkTyCon3 "Sirea" "Behavior" "BCX"
+        where tcBCX = mkTyCon3 "sirea-core" "Sirea.BCX" "BCX"
 
 unwrapBCX :: BCX w x y -> (PCX w -> B w x y)
 unwrapBCX = unwrapArrow . unwrapStatic . fromBCX

@@ -22,7 +22,7 @@ import Data.Typeable
 
 instance Typeable2 (B w) where
     typeOf2 _ = mkTyConApp tcB []
-        where tcB = mkTyCon3 "Sirea" "Behavior" "B"
+        where tcB = mkTyCon3 "sirea-core" "Sirea.Behavior" "B"
 
 ---------------------------
 -- Concrete Instances: B --
