@@ -75,9 +75,6 @@ unwrapBCX = unwrapArrow . unwrapStatic . fromBCX
 wrapBCX :: (PCX w -> B w x y) -> BCX w x y
 wrapBCX =  BCX . wrapStatic . WrapArrow
 
-instance BEmbed (B w) (BCX w) where
-    bembed = wrapBCX . const
-
 instance BCross (BCX w) where
     bcross = wrapBCX crossB
 

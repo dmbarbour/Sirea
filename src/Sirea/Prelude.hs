@@ -15,7 +15,7 @@ module Sirea.Prelude
 import Sirea.Behavior
 import Sirea.Build
 import Sirea.B (B)
-import Sirea.BCX (BCX)
+import Sirea.BCX (BCX, wrapBCX)
 import Sirea.Partition (BCross(..), Stepper(..), Stopper(..)
                        ,Partition(..), Pt, P0)
 import Sirea.Bdeep

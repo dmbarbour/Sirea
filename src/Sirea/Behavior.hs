@@ -24,7 +24,6 @@ module Sirea.Behavior
     , BSplit(..), bsplitWith, bunsplit
     , BTemporal(..), BPeek(..)
     , BDynamic(..)
-    , BEmbed(..)
     , Behavior
     ) where
 
@@ -420,7 +419,7 @@ class (BTemporal b) => BPeek b where
 -- It also leads to clearer disruption semantics.
 -- 
 -- All arguments for dynamic behaviors are implicitly synchronized.
-class (Behavior b, Behavior b' {-, BEmbed b' b -}) => BDynamic b b' where
+class (Behavior b) => BDynamic b where
     -- | evaluate a dynamic behavior and obtain the response. The DT
     -- argument indicates the maximum latency for dynamic behaviors,
     -- and the latency for beval as a whole. 
@@ -428,14 +427,14 @@ class (Behavior b, Behavior b' {-, BEmbed b' b -}) => BDynamic b b' where
     -- If there are any problems with the dynamic behavior, e.g. if
     -- too large for DT, you receive a `bright` error indicator.
     -- 
-    beval :: (SigInP p x) => DT -> b (S p (b' x y) :&: x) (y :|: S p ())
+    beval :: (SigInP p x) => DT -> b (S p (b x y) :&: x) (y :|: S p ())
 
     -- | bexec will eval dropping the result. The success signal is 
     -- a simple reduction of the behavior signal. 
     --
     -- The default implementation is in terms of beval; override for
     -- performance if necessary.
-    bexec :: (SigInP p x) => b (S p (b' x y) :&: x) (S p () :|: S p ())
+    bexec :: (SigInP p x) => b (S p (b x y) :&: x) (S p () :|: S p ())
     bexec = prep >>> beval 0
         where prep = bfirst (bfmap f &&& bconst ()) >>> bassocrp
               f b' = bsecond b' >>> bfst -- modifies b'
@@ -465,12 +464,6 @@ class (Behavior b, Behavior b' {-, BEmbed b' b -}) => BDynamic b b' where
 --  with type-level operators like:  (x :&: (x :&: (x :&: (x ...
 --
 
--- | BEmbed b' b - embeds b' in b
-class BEmbed b' b where
-    bembed :: b' x y -> b x y
-
-instance BEmbed b b where
-    bembed = id
 
 -- TODO: convenience operators?
 --  I've added Bdeep - eqvs. of bcadadr and setf bcadadr from Lisp
@@ -528,7 +521,17 @@ benvseq bx by = bdup >>> (bfst *** bx) >>> by
  -}
 
 
-
+-- Continuous Signals: some quirkiness when signal carries information
+-- relative to time. In particular, functions of time must be time
+-- shifted to retain their shape when viewed at a later time. Perhaps 
+-- instead what I need to model is the shape itself, with its own
+-- relative time. 
+--
+-- Alternatively, I could constrain `bdelay` to operate on values of
+-- specific types, i.e. not every value can be delayed.
+--
+-- A promising option is a behavior transform, with its own notion of
+-- delay. I.e. b => ContinuousB.
 
 
 

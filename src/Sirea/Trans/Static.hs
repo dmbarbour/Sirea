@@ -25,8 +25,6 @@ toSB :: (Applicative f) => b x y -> StaticB f b x y
 toSB = (SB . pure)
 
 -- from Sirea.Behavior
-instance (Applicative f) => BEmbed b (StaticB f b) where
-    bembed = toSB
 instance (Category b, Applicative f) => Category (StaticB f b) where
     id = toSB id
     (SB f) . (SB g) = SB $ (.) <$> f <*> g
@@ -60,14 +58,13 @@ instance (BTemporal b, Applicative f) => BTemporal (StaticB f b) where
     bsynch  = toSB bsynch
 instance (BPeek b, Applicative f) => BPeek (StaticB f b) where
     bpeek   = toSB . bpeek
-instance (BDynamic b b', Applicative f) => BDynamic (StaticB f b) b' where
-    beval   = toSB . beval
-    bexec   = toSB bexec
 instance (Behavior b, Applicative f) => Behavior (StaticB f b)
 
 -- from Sirea.Partition
 instance (BCross b, Applicative f) => BCross (StaticB f b) where
     bcross  = toSB bcross
+
+-- NOTE: BDynamic is not supported for StaticB in general. 
 
 {-
 instance (BScope b, Applicative f) => BScope (StaticB f b) where
