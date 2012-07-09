@@ -67,7 +67,7 @@ import Sirea.Signal
 -- clock signal in memory would be of a billion length and consume
 -- a few billion CPU operations per second. For precision timing, 
 -- consider combining a coarse-grained clock with animated state. 
--- Don't use high rate clocks.
+-- Don't use high-rate clocks. 
 -- 
 data ClockSpec = ClockSpec
     { clock_period :: !DT
@@ -181,9 +181,8 @@ bclockOfFreq :: (HasClock b) => Double -> b (S p ()) (S p T)
 bclockOfFreq dFreq = bclockOfFreqAndPhase dFreq 0.0
 
 -- | Frequency is updates per second, and phase how far into each
--- period we perform the update. E.g. if frequency was 1 and phase
--- is 0.5, then we update once per second at the half-second mark.
---
+-- period we perform the update. E.g. if frequency was 2 and phase
+-- is 0.5, then we update twice per second at 0.25 and 0.75. 
 -- Phase must be bounded by [0.0,1.0). 
 bclockOfFreqAndPhase :: (HasClock b) => Double -> Double -> b (S p ()) (S p T)
 bclockOfFreqAndPhase dFreq dPhase =

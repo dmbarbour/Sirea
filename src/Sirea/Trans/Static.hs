@@ -64,13 +64,9 @@ instance (Behavior b, Applicative f) => Behavior (StaticB f b)
 instance (BCross b, Applicative f) => BCross (StaticB f b) where
     bcross  = toSB bcross
 
--- NOTE: BDynamic is not supported for StaticB in general. 
+-- NOTE: BDynamic is not supported for StaticB in general.
+-- (Not every applicative can be applied to a stream of future behaviors.) 
 
-{-
-instance (BScope b, Applicative f) => BScope (StaticB f b) where
-    bpushScope = toSB bpushScope
-    bpopScope  = toSB bpopScope
--}
 
 
 

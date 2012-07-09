@@ -34,11 +34,12 @@ module Sirea.Build
     , bUnsafeExit
     ) where
 
+import Prelude hiding (catch)
 import Data.IORef
 import Data.Typeable
 import Control.Concurrent.MVar
 import Control.Monad (unless, when, void, liftM)
-import Control.Exception (finally, assert)
+import Control.Exception (catch, assert, AsyncException)
 import Control.Concurrent (myThreadId, forkIO, killThread, threadDelay)
 import Sirea.Internal.BTypes
 import Sirea.Internal.LTypes
@@ -215,15 +216,17 @@ shutdownEvent tc0 gs rfSD = runGobStopper gs finiStop
 --   dtStep      : period between stability updates
 --
 -- dtStep can also influence amount of computation per round.
+-- TODO: make configurable on command line.
 dtStability, dtStep :: DT
-dtStability = 0.32  -- stability of main signal
-dtStep      = 0.04  -- periodic event to increase stability
+dtStability = 0.40  -- stability of main signal
+dtStep      = 0.05  -- periodic event to increase stability
 
 -- | If you don't need to run the stepper yourself, consider use of
 -- runSireaApp. This will simply run the application until the main
--- thread receives a killThread signal, at which point it will try
--- to shutdown gracefully. Use of `bUnsafeExit` will cause this 
--- signal.
+-- thread receives a killThread signal or other AsyncException, such
+-- as a ctrl+c user interrupt. At that point it will try to shutdown 
+-- gracefully. Use of `bUnsafeExit` will cause this signal from
+-- within the application.
 --
 --    runSireaApp app = buildSireaApp app >>= beginSireaApp
 --
@@ -240,8 +243,14 @@ beginSireaApp so =
     newIORef True >>= \ rfContinue ->
     addStopperEvent stopper (writeIORef rfContinue False) >>
     let loop = basicSireaAppLoop rfContinue stepper in
-    loop `finally` (runStopper stopper >> loop)
+    loop `catch` \ e -> onAsyncException e (runStopper stopper >> loop)
 
+-- Haskell's exception mechanism requires a little help to derive
+-- which exceptions are processed by which handlers.
+onAsyncException :: AsyncException -> a -> a
+onAsyncException = const id
+
+-- the primary loop
 basicSireaAppLoop :: IORef Bool -> Stepper -> IO ()
 basicSireaAppLoop rfContinue stepper = 
     readIORef rfContinue >>= \ bContinue ->
@@ -253,18 +262,17 @@ basicSireaAppLoop rfContinue stepper =
           loop = basicSireaAppLoop rfContinue stepper 
     
 
--- | bUnsafeExit - use with runSireaApp, sends a killThread signal
--- once an active signal to bUnsafeExit stabilizes. Basically a way
--- to halt the application from within the application. Should not
--- be used if the client plans to halt the application externally.
+-- | bUnsafeExit - used with runSireaApp or beginSireaApp; effect is
+-- killThread on the main thread when signal becomes active. This 
+-- causes the application to begin halting gracefully. Halt a Sirea 
+-- application from within the application. Should not be used if 
+-- you plan to perform an external killThread, since second kill 
+-- will abort the graceful exit.
 --
--- bUnsafeExit does not stop the whole Haskell process, only the one
--- SireaApp in which it is used. bUnsafeExit doesn't cause immediate
--- halt; the application may continue to run for up to a few seconds
--- to halt gracefully.  
---
--- For more precise and composable shutdown behavior, model shutdown
--- explicitly using dynamic behaviors or asynchronous sums.
+-- The behavior of bUnsafeExit is not precise and not composable. If
+-- developers wish to model precise shutdown behavior, they should
+-- use dynamic behaviors and explicitly switch to shutdown behavior,
+-- which could then perform this exit (perhaps modeling a timeout).
 --
 bUnsafeExit :: BCX w (S P0 ()) (S P0 ())
 bUnsafeExit = unsafeOnUpdateBCX $ \ cw -> 
