@@ -163,7 +163,7 @@ clockSig' cs nDays nNanos =
     listToSig (Just t0) lUpd
 
 -- Times after a given time. 
--- The series of updates is provided each day. 
+-- The series of updates is repeated each day. 
 timeAfterTime :: ClockSpec -> T -> [T]
 timeAfterTime cs t0 = t0 `seq` (t1:timeAfterTime cs t1)
     where t1  = let t0' = addTime t0 (clock_period cs) in

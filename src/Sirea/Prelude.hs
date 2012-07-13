@@ -10,6 +10,7 @@ module Sirea.Prelude
     , module Sirea.Partition
     , module Sirea.Bdeep
     , module Sirea.Time
+    , module Sirea.Utility
     ) where
 
 import Sirea.Behavior
@@ -20,4 +21,5 @@ import Sirea.Partition (BCross(..), Stepper(..), Stopper(..)
                        ,Partition(..), Pt, P0)
 import Sirea.Bdeep
 import Sirea.Time (T,DT)
+import Sirea.Utility 
 

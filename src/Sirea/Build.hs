@@ -218,14 +218,14 @@ shutdownEvent tc0 gs rfSD = runGobStopper gs finiStop
 -- dtStep can also influence amount of computation per round.
 -- TODO: make configurable on command line.
 dtStability, dtStep :: DT
-dtStability = 0.40  -- stability of main signal
+dtStability = 0.35  -- stability of main signal
 dtStep      = 0.05  -- periodic event to increase stability
 
 -- | If you don't need to run the stepper yourself, consider use of
 -- runSireaApp. This will simply run the application until the main
 -- thread receives a killThread signal or other AsyncException, such
 -- as a ctrl+c user interrupt. At that point it will try to shutdown 
--- gracefully. Use of `bUnsafeExit` will cause this signal from
+-- gracefully. Use of `bUnsafeExit` may cause this signal from
 -- within the application.
 --
 --    runSireaApp app = buildSireaApp app >>= beginSireaApp
@@ -234,8 +234,8 @@ runSireaApp :: SireaApp -> IO ()
 runSireaApp app = buildSireaApp app >>= beginSireaApp
 
 -- | beginSireaApp activates a forever loop to process the SireaApp.
--- It is stopped by killing the thread. Once stopped, will continue 
--- to run up to a few seconds while everything halts.
+-- It is stopped by killing the thread. Halting is not immediate;
+-- may continue to run until all threads ready to halt.
 beginSireaApp :: SireaObject -> IO ()
 beginSireaApp so =
     let stepper = sireaStepper so in
@@ -253,12 +253,12 @@ onAsyncException = const id
 -- the primary loop
 basicSireaAppLoop :: IORef Bool -> Stepper -> IO ()
 basicSireaAppLoop rfContinue stepper = 
+    runStepper stepper >>
     readIORef rfContinue >>= \ bContinue ->
-    when bContinue (wait >> run >>= \ _ -> loop)
+    when bContinue (wait >>= \ _ -> loop)
     where wait = newEmptyMVar >>= \ mvWait  ->
                  addStepperEvent stepper (putMVar mvWait ()) >>
                  takeMVar mvWait 
-          run  = runStepper stepper
           loop = basicSireaAppLoop rfContinue stepper 
     
 
@@ -272,7 +272,7 @@ basicSireaAppLoop rfContinue stepper =
 -- The behavior of bUnsafeExit is not precise and not composable. If
 -- developers wish to model precise shutdown behavior, they should
 -- use dynamic behaviors and explicitly switch to shutdown behavior,
--- which could then perform this exit (perhaps modeling a timeout).
+-- which could then perform this exit.
 --
 bUnsafeExit :: BCX w (S P0 ()) (S P0 ())
 bUnsafeExit = unsafeOnUpdateBCX $ \ cw -> 

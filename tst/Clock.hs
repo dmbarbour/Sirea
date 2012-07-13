@@ -10,12 +10,6 @@ import Sirea.Clock
 import Sirea.Time
 import Control.Exception
 
--- simple print expression
-bprint :: (Show a, Eq a) => BCX w (S P0 a) (S P0 a)
-bprint = unsafeOnUpdateBCX mkPrinter
-    where mkPrinter _ = return printer
-          printer _ = maybe (return ()) print
-
 -- a better way to show the clock...
 timeString :: T -> String
 timeString t =
@@ -30,9 +24,9 @@ timeString t =
                     else show x
 
 -- using clock, printing based on stability. (Only works for low rate
--- clocks... up to ~20Hz).
+-- clocks... up to ~20Hz. Higher rate will update in bursts.)
 bCC :: BCX w (S P0 ()) (S P0 ())
-bCC = bvoid $ bclockSeconds >>> bfmap timeString >>> bprint
+bCC = bvoid $ bclockSeconds >>> bprint timeString
 
 main :: IO ()
 main = 

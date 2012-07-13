@@ -543,14 +543,45 @@ synchB = B_tshift doSynch
           applyGoal dtg ldt = 
             if (ldt_live ldt) then ldt { ldt_goal = dtg } else ldt
 
--- | look ahead in a signal slightly.
+-- | look ahead in a signal slightly. Reduces stability of signal,
+-- i.e. updates at time T can affect peek signal at time T-dt.
 peekB :: DT -> B w (S p x) (S p (Either x ()))
 peekB dt = mkLnkB tr_fwd peekLnk
-    where lnPeek = ln_lumap $ ln_sumap $ su_fmap $ s_peek dt
-          peekLnk = MkLnk { ln_tsen  = False
+    where peekLnk = MkLnk { ln_tsen  = False
                           , ln_peek  = dt -- to track anticipation.
-                          , ln_build = return . lnPeek
+                          , ln_build = mkLnPeek dt
                           }
+-- | Each update to mkLnPeek will correct any prior view of the
+-- future from a given update time. Peek reduces stability of the 
+-- signal by dt. 
+mkLnPeek :: DT -> Lnk (S p (Either x ())) -> IO (Lnk (S p x))
+mkLnPeek _ LnkDead = return LnkDead
+mkLnPeek dt (LnkSig lu) = 
+    newIORef s_never >>= \ rf ->
+    let lu' = lnPeek dt rf lu in
+    return (LnkSig lu')
+
+lnPeek :: DT -> IORef (Sig x) -> LnkUp (Either x ()) -> LnkUp x
+lnPeek dt rf lu = LnkUp { ln_touch = onTouch, ln_update = onUpdate }
+    where onTouch = ln_touch lu 
+          onUpdate su =
+            let tStable = (`subtractTime` dt) <$> su_stable su in
+            readIORef rf >>= \ s0 ->
+            let s' = su_apply su s0 in
+            let sCln = maybe s_never (s_trim s') tStable in
+            sCln `seq`
+            writeIORef rf sCln >>
+            case su_state su of
+                Nothing ->
+                    let su' = SigUp { su_state = Nothing, su_stable = tStable } in
+                    ln_update lu su'
+                Just (_,tu0) ->
+                    let tuf = tu0 `subtractTime` dt in
+                    let sigPk  = s_peek dt (s_trim s' tuf) in
+                    let su' = SigUp { su_state = Just (sigPk, tuf), su_stable = tStable } in
+                    tuf `seq` sigPk `seq`
+                    ln_update lu su'
+    
 
 -- | scopes are trivial variations on id
 unsafeChangeScopeB :: B w (S p1 x) (S p2 x)

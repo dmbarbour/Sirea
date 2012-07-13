@@ -130,7 +130,7 @@ runToStability rfSig rfA op su =
 --
 -- This allows tapping a signal for debugging that would otherwise
 -- be dropped by the behavior, but allows dead code elimination to
--- remove the behavior - based on whether nearby signals are dead.
+-- remove the behavior based on whether nearby signal `x` is dead.
 --
 -- In addition to the processed signal, BLN forwards an arbitrary 
 -- complex signal without processing it (not even synchronizing it)
@@ -148,9 +148,8 @@ unsafeOnUpdateBLN mkOp = bfirst (unsafeOnUpdateBL mkOp) >>> keepAliveB
 -- for duplicate effects or enforce uniqueness.
 --
 -- Note that these operate on a specific partition (PCX p) rather
--- than the world context (PCX w). Each partition and scope has a 
--- distinct set of resources, and each resource is manipulated by 
--- a single Sirea thread.
+-- than the world context (PCX w). Each partition has a distinct set
+-- of resources, which it can manipulate with the partition thread.
 unsafeOnUpdateBCX   :: (Eq a, Typeable p) => (PCX p -> IO (T -> Maybe a -> IO ())) 
                                           -> BCX w (S p a) (S p a)
 unsafeOnUpdateBCXL  :: (Eq a, Typeable p) => (PCX p -> IO (T -> Maybe a -> IO ())) 
