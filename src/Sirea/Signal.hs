@@ -244,7 +244,7 @@ s_delay :: DT -> Sig a -> Sig a
 s_delay dt s0 = mkSig (s_head s0) (ds_delay dt (s_tail s0))
 
 -- utility for s_delay (specific to DT, so in this file)
-ds_delay :: DT -> DSeq T a -> DSeq T a
+ds_delay :: DT -> DSeq a -> DSeq a
 ds_delay dt ds = DSeq $ \ tq ->
     case dstep ds (subtractTime tq dt) of
         DSDone -> DSDone

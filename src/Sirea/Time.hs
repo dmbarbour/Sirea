@@ -1,13 +1,13 @@
 
 module Sirea.Time
-  (T
- ,tmDay,tmNanos
- ,mkTime,timeFromDays
- ,getTime      
- ,DT
- ,dtToNanos,nanosToDt
- ,addTime,subtractTime,diffTime
- ) where
+    ( T
+    , tmDay,tmNanos
+    , mkTime,timeFromDays
+    , getTime      
+    , DT
+    , dtToNanos,nanosToDt
+    , addTime,subtractTime,diffTime
+    ) where
 
 import Data.Int (Int32,Int64)
 import Data.Ratio ((%),numerator,denominator)
@@ -29,7 +29,13 @@ import Control.Exception (assert)
 -- (JavaScript, most importantly). 
 -- 
 -- Construct via mkTime, fromUTC, or getTime. 
-data T = T { _tmDay :: !Int32, _tmNanos :: !Int64 }
+data T = T {-# UNPACK #-} !Int32 {-# UNPACK #-} !Int64
+
+_tmDay :: T -> Int32
+_tmDay (T d _) = d
+
+_tmNanos :: T -> Int64
+_tmNanos (T _ n) = n
 
 tmDay :: T -> Integer
 tmDay = toInteger . _tmDay
@@ -42,9 +48,9 @@ tmNanos = toInteger . _tmNanos
 mkTime :: Integer -> Integer -> T
 mkTime days nanos =
     let (q,r) = nanos `divMod` nanosInDay in
-    T { _tmDay = fromInteger (days + q)
-      , _tmNanos = fromInteger r 
-      }
+    let d = fromInteger (days + q) in
+    let n = fromInteger r in
+    T d n
 
 -- | timeFromDays will convert a Modified Julian Day, stored as a
 -- rational, to a T value. 
@@ -80,9 +86,8 @@ addTime :: T -> DT -> T
 addTime tm (DT dt) =
     let d = _tmDay tm + _tmDay dt in 
     let n = _tmNanos dt + _tmNanos tm in
-    if (n < nnid) 
-    then T { _tmDay = d, _tmNanos = n }
-    else T { _tmDay = d+1, _tmNanos = n-nnid }
+    if (n < nnid) then T d n 
+                  else T (d + 1) (n - nnid)
     where nnid = fromInteger nanosInDay
 
 -- | Subtract a difference in time from an absolute time
@@ -94,9 +99,8 @@ diffTime :: T -> T -> DT
 diffTime tm tm' =
     let d = _tmDay tm - _tmDay tm' in
     let n = _tmNanos tm - _tmNanos tm' in
-    if (n < 0)
-    then DT $ T { _tmDay = (d-1), _tmNanos = (n+nnid) }
-    else DT $ T { _tmDay = d, _tmNanos = n }
+    if (n < 0) then DT (T (d-1) (n+nnid))
+               else DT (T d n)
     where nnid = fromInteger nanosInDay
 
 nanosInDay, secondsInDay, nanosInSec :: Integer
@@ -133,10 +137,8 @@ instance Num DT where
               c = if (2 * r > nanosInSec) then 1 else 0
     negate (DT a) = 
         if (_tmNanos a == 0) 
-            then DT $ T { _tmDay   = negate (_tmDay a), 
-                          _tmNanos = 0 }
-            else DT $ T { _tmDay   = negate (_tmDay a) - 1, 
-                          _tmNanos = nnid - _tmNanos a }
+            then DT (T (negate (_tmDay a)) 0) 
+            else DT (T (negate (_tmDay a) - 1) (nnid - _tmNanos a))
         where nnid = fromInteger nanosInDay
     abs (DT a) = if (_tmDay a < 0) then negate (DT a) else (DT a)
     signum (DT a) = 

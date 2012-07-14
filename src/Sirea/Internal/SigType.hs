@@ -8,7 +8,6 @@ module Sirea.Internal.SigType
     , mkSig
     ) where
 
-import Sirea.Time
 import Sirea.Internal.DiscreteTimedSeq
 
 -- | Sig is an abstract type for discrete-varying signals in Sirea.
@@ -16,11 +15,11 @@ import Sirea.Internal.DiscreteTimedSeq
 -- dropped (collected) while the future is updated over time. 
 data Sig a = Sig 
     { s_head :: !(Maybe a) 
-    , s_tail :: !(DSeq T (Maybe a)) 
+    , s_tail :: !(DSeq (Maybe a)) 
     }
 
 -- utility
-mkSig :: Maybe a -> DSeq T (Maybe a) -> Sig a
+mkSig :: Maybe a -> DSeq (Maybe a) -> Sig a
 mkSig v0 ds = Sig { s_head = v0, s_tail = ds }
 
 -- TODO:
