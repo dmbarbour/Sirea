@@ -11,14 +11,47 @@ import Sirea.Time
 import Control.Monad (unless)
 
 -- assertions
-assertb :: (Eq a) => (a -> Bool) -> (a -> String) -> BCX w (S p a) (S p a)
-assertb test failMsg = wrapBCX . const $ unsafeOnUpdateB mkAssert 
-    where mkAssert = return doAssert
-          doAssert _ = maybe (return ()) $ \ a ->
-                           unless (test a) (doFail a)
-          doFail a = ioError (userError ("FAILURE: " ++ (failMsg a)))
+assertb :: String -> (a -> Bool) -> BCX w (S P0 a) (S P0 a)
+assertb tstName test = bvoid $ bfmap test >>> unsafeOnUpdateBCX mkAssert
+    where mkAssert _ = return doAssert
+          doAssert _ = maybe (return ()) $ \ b ->
+                        if b then putStrLn ("PASS: " ++ tstName)
+                             else ioError $ userError ("FAIL: " ++ tstName)
+
+-- test for dead code due to binl or binr - shouldn't even create bcx.
+assertDeadOnInput :: String -> BCX w (S P0 x) (S P0 x)
+assertDeadOnInput msg = bvoid $ bconst () >>> unsafeOnUpdateBCX mkAssert
+    where mkAssert _ = ioError (userError ("FAIL: " ++ msg)) >> undefined
+
+-- test for dead code on output. This requires a lazy assertion, otherwise
+-- the assertion itself would keep the behavior alive for output. 
+assertDeadOnOutput :: String -> BCX w (S P0 ()) (S P0 ())
+assertDeadOnOutput msg = bconst () >>> unsafeOnUpdateBCXL mkAssert
+    where mkAssert _ = ioError (userError ("FAIL: " ++ msg)) >> undefined
 
 
+tstConst = bvoid $ bconst 42 >>> assertb "tstConst" (== 42)
+tstFmap  = bvoid $ bconst 7 >>> bfmap (* 6) >>> assertb "tstFmap" (== 42)
+tstZip   = bvoid $ (bconst 7 &&& bconst 6) >>> bzipWith (*) >>> assertb "tstZip" (== 42)
+tstSwap  = bvoid $ bdup >>> (bconst 7 *** bconst 6) >>> bswap >>> (assertb "tstSwap1" (== 6) *** assertb "tstSwap2" (== 7))
+tstSplitL = bvoid $ bconst (Left 7) >>> bsplit >>> (assertb "tstSplitL" (== 7) +++ assertb "tstSplitL" (== 6))
+tstSplitR = bvoid $ bconst (Right 6) >>> bsplit >>> (assertb "tstSplitR" (== 7) +++ assertb "tstSplitR" (== 6))
+tstInL = bvoid $ binl >>> bright (assertDeadOnInput "tstInL lives in R") >>> bleft (assertb "tstInL" (== ()))
+tstInR = bvoid $ binr >>> bleft (assertDeadOnInput "tstInR lives in L") >>> bright (assertb "tstInR" (== ()))
+tstDeadOutput = bvoid (assertDeadOnOutput "tstDeadOutput lives") >>> assertb "tstDeadOutput" (== ())
+ 
+--tstFail = bvoid $ assertb "tstFail" (const False)
+
+tstAssocp = bvoid $ bdup >>> bsecond bdup >>> (bconst 7 *** (bconst 2 *** bconst 3)) >>>
+                    bassoclp >>> bfirst (bzipWith (*)) >>> bzipWith (*) >>> assertb "tstAssocp" (== 42)
+
+
+allTests = tstConst >>> tstFmap >>> tstZip >>> tstSwap >>> tstAssocp
+       >>> tstSplitL >>> tstSplitR >>> tstInL >>> tstInR
+       >>> tstDeadOutput
+
+--joinTests :: 
+-- seems like should have a monoid, here. 
 
 -- rotate from 0..99 then back again, quickly (every 1/10th second)
 -- this is intended to serve as a simple variable for tests.
@@ -28,15 +61,11 @@ rotateI = bclockOfFreq 10 >>> bfmap tkI
           sTen = 10000000000   -- 10 seconds
           sTenth = 100000000   -- 100 milliseconds
 
--- split integers to (Evens :|: Odds) 
-splitEvensOdds :: BCX w (S p Int) (S p Int :|: S p Int)
-splitEvensOdds = bfmap eitherEvenOrOdd >>> bsplit
-    where eitherEvenOrOdd n = if (even n) then Left n else Right n
+cascade :: BCX w (S P0 ()) (S P0 Int :|: S P0 Int)
+cascade = rotateI >>> bsplitOn (\ x -> (x `mod` 20 >= 10)) >>> (bprint show +++ bprint (\x -> "      " ++ show x))
 
--- some active tests 
-rtst0 = bvoid $ rotateI >>> bprint show
-rtst1 = bvoid $ rotateI >>> (bfmap (+1) &&& bfwd) >>> bzipWith (*) >>> bfmap (`div` 2) >>> bprint show
-rtst2 = bvoid $ rotateI >>> splitEvensOdds >>> bleft (bfmap (+10)) >>> bmerge >>> bprint show
+
+
 -- tests to perform:
 --  delay and synch
 --  
@@ -52,7 +81,7 @@ rtst2 = bvoid $ rotateI >>> splitEvensOdds >>> bleft (bfmap (+10)) >>> bmerge >>
 --  
 
 main :: IO ()
-main = runSireaApp rtst0
+main = runSireaApp $ allTests
    
 
 -- HOW will I make it convenient to write tests

@@ -5,10 +5,9 @@ module Main
     ) where
 
 import Sirea.Prelude
-import Sirea.UnsafeOnUpdate
 import Sirea.Clock
 import Sirea.Time
-import Control.Exception
+import Control.Exception (assert)
 
 -- a better way to show the clock...
 timeString :: T -> String
@@ -26,7 +25,7 @@ timeString t =
 -- using clock, printing based on stability. (Only works for low rate
 -- clocks... up to ~20Hz. Higher rate will update in bursts.)
 bCC :: BCX w (S P0 ()) (S P0 ())
-bCC = bvoid $ bclockSeconds >>> bprint timeString
+bCC = bvoid $ bclockSeconds >>> bforce (`seq` ()) >>> bprint timeString
 
 main :: IO ()
 main = 

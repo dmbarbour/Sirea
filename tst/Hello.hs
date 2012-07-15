@@ -10,7 +10,7 @@ bHelloWorld = bvoid $ bconst "Hello, World!" >>> bprint id
 
 main :: IO ()
 main = 
-    print "before hw app" >>
+    print "before hw app (ctrl+c to halt)" >>
     runSireaApp bHelloWorld >>
     print "after hw app"
    
