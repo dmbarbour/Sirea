@@ -39,6 +39,19 @@ tstSplitR = bvoid $ bconst (Right 6) >>> bsplit >>> (assertb "tstSplitR" (== 7) 
 tstInL = bvoid $ binl >>> bright (assertDeadOnInput "tstInL lives in R") >>> bleft (assertb "tstInL" (== ()))
 tstInR = bvoid $ binr >>> bleft (assertDeadOnInput "tstInR lives in L") >>> bright (assertb "tstInR" (== ()))
 tstDeadOutput = bvoid (assertDeadOnOutput "tstDeadOutput lives") >>> assertb "tstDeadOutput" (== ())
+
+tstDisjoinL = bvoid $ (bconst (Left 7) &&& bconst 6) 
+                >>> bfirst bsplit 
+                >>> bdisjoinrz 
+                >>> (bzipWith (*) +++ bzipWith (*))
+                >>> (assertb "tstDisjoinL" (== 42) +++ assertb "tstDisjoinL in R?" (const False))
+
+tstDisjoinR = bvoid $ (bconst (Right 7) &&& bconst 6) 
+                >>> bfirst bsplit 
+                >>> bdisjoinrz 
+                >>> (bzipWith (*) +++ bzipWith (*))
+                >>> (assertb "tstDisjoinR in L?" (const False) +++ assertb "tstDisjoinR" (== 42))
+
  
 --tstFail = bvoid $ assertb "tstFail" (const False)
 
@@ -48,7 +61,9 @@ tstAssocp = bvoid $ bdup >>> bsecond bdup >>> (bconst 7 *** (bconst 2 *** bconst
 
 allTests = tstConst >>> tstFmap >>> tstZip >>> tstSwap >>> tstAssocp
        >>> tstSplitL >>> tstSplitR >>> tstInL >>> tstInR
+       >>> tstDisjoinL >>> tstDisjoinR
        >>> tstDeadOutput
+       
 
 --joinTests :: 
 -- seems like should have a monoid, here. 
