@@ -42,7 +42,7 @@ import Control.Exception (assert)
 data DStep a 
     = DSDone
     | DSWait !(DSeq a)
-    | DSNext {-# UNPACK #-} !T !a !(DSeq a)
+    | DSNext {-# UNPACK #-} !T a !(DSeq a)
 
 -- | DSeq allows us to step through time. Each step gives us the
 -- next update at or before the queried instant, along with the
