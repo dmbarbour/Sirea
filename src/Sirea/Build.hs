@@ -263,11 +263,11 @@ basicSireaAppLoop rfContinue stepper =
     
 
 -- | bUnsafeExit - used with runSireaApp or beginSireaApp; effect is
--- killThread on the main thread when signal becomes active. This 
+-- killThread on the main thread after signal becomes active. This 
 -- causes the application to begin halting gracefully. Halt a Sirea 
 -- application from within the application. Should not be used if 
--- you plan to perform an external killThread, since second kill 
--- will abort the graceful exit.
+-- you plan to perform an external kill; a second kill will abort 
+-- graceful exit. 
 --
 -- The behavior of bUnsafeExit is not precise and not composable. If
 -- developers wish to model precise shutdown behavior, they should
@@ -281,8 +281,10 @@ bUnsafeExit = unsafeOnUpdateBCX $ \ cw ->
     let kill = readIORef rfKilled >>= \ bBlooded ->
                unless bBlooded $ void $ 
                    writeIORef rfKilled True >>
+                   -- note: fork to treat as async exception
+                   -- respects mask; completes current step.
                    myThreadId >>= \ tidP0 ->
-                   forkIO (killThread tidP0)
+                   forkIO (killThread tidP0) 
     in
     let op _ = maybe (return ()) (const kill) in
     return op

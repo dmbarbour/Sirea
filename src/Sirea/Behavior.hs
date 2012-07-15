@@ -19,9 +19,10 @@ module Sirea.Behavior
     , BProd(..), bsecond, bsnd, bassocrp, (***), (&&&), bvoid
     , BSum(..), bright, binr, bassocrs, (+++), (|||), bskip 
     , bconjoinl, bconjoinr
-    , BDisjoin(..), bdisjoin1
+    , BDisjoin(..), bdisjoinl, bdisjoinlz, bdisjoinlk, bdisjoinlkz
+    ,               bdisjoinr, bdisjoinrz, bdisjoinrk, bdisjoinrkz
     , BZip(..), bzipWith, bunzip
-    , BSplit(..), bsplitWith, bunsplit
+    , BSplit(..), bsplitWith, bsplitOn, bunsplit
     , BTemporal(..), BPeek(..)
     , BDynamic(..)
     , Behavior
@@ -263,39 +264,79 @@ bskip f = binr >>> bleft f >>> bmerge
 -- staticSwitch choice = if choice then binl else binr
 
 -- | bconjoin is a partial merge, extracting from a sum. 
-bconjoinl :: (BSum b, BProd b) 
-          => b ((x :&: y) :|: (x :&: z)) (x :&: (y :|: z)) 
-bconjoinr :: (BSum b, BProd b) 
-          => b ((x :&: z) :|: (y :&: z)) ((x :|: y) :&: z)
+bconjoinl :: (BSum b, BProd b) => b ((x :&: y) :|: (x :&: z)) (x :&: (y :|: z))
+bconjoinr :: (BSum b, BProd b) => b ((x :&: z) :|: (y :&: z)) ((x :|: y) :&: z)
 bconjoinl = bdup >>> (isolateX *** isolateYZ)
     where isolateX = (bfst +++ bfst) >>> bmerge
           isolateYZ = (bsnd +++ bsnd)
 bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
 
--- | Disjoin will distribute a decision. To achieve disjoin involves 
--- combining a signal representing a split with an external signal.
--- All signals must be in the same partition for disjoin to occur.
--- (Unfortunately, disjoin is not quite the dual of conjoin.)
+-- | Disjoin will propagate a split on one signal to other signals 
+-- in the asynchronous product. This doesn't happen magically; there
+-- must be a signal representing the split (only one branch needed)
+-- in the same partition as the signal being split. To distribute a 
+-- decision across multiple partitions requires explicit propagation
+-- of the signal representing the split condition, ensuring explicit
+-- communication.
 --
--- Disjoin is necessary for effective use of `choice` in RDP, i.e.
--- most design patterns using bsplit will also use bdisjoin.
+-- Disjoin is necessary for effective use of choice in RDP. Patterns
+-- using bsplit will typically need bdisjoin to access signals that
+-- are available in context. Without disjoin, one can split signals 
+-- via intermediate state (split would happen on query), but disjoin
+-- is a more primitive and pure mechanism.
+--
+-- Disjoin is dual to conjoin, though this property is obfuscated by
+-- the partition types and the explicit decision for which signal is
+-- to represent the split. Utility disjoins (bdisjoin(l|r)(k?)(z?))
+-- cover some duals to conjoin, albeit for more specific types.
+--
+--     bdisjoin - primitive disjoin; painful to use directly
+--     bdisjoin :: b (x :&: ((S p () :&: y) :|: z))
+--                   ((x :&: y) :|: (x :&: z))
+--
+--        S p () - unit signal representing split
+--        x - signal being split, may be complex
+--        y - preserved signal on left
+--        z - preserved signal on right
+--
+--   Common case splitting on the "y" signal (S p y :|: z)
+--
+--     bdisjoinl  - disjoin left on one signal
+--     bdisjoinr  - disjoin right on one signal
+--     bdisjoinlk - disjoin left on first signal of many
+--     bdisjoinrk - disjoin right on first signal of many
+--
+--   Common case splitting on the "z" signal (y :|: S p z)
+--
+--     bdisjoinlz  - disjoin left on one signal
+--     bdisjoinrz  - disjoin right on one signal
+--     bdisjoinlkz - disjoin left on first signal of many
+--     bdisjoinrkz - disjoin right on first signal of many
+--
 class (BSum b, BProd b) => BDisjoin b where
-    -- | bdisjoinl combines a signal representing the current choice
-    -- (S p ()) and a signal representing available data (S p x) in
-    -- the same partition `p`. This splits the external data.
-    -- May perform implicit logical synchronization, if necessary.
-    bdisjoin  :: (SigInP p x) 
-              => b (x :&: ((S p () :&: (      y)) :|: (      z)) )
-                          ((           (x :&: y)) :|: (x :&: z))
+    bdisjoin :: (SigInP p x) => b (x :&: ((S p () :&: y) :|: z)) ((x :&: y) :|: (x :&: z))
 
--- | bdisjoin1 preserves the choice signal to support further disjoin.
-bdisjoin1     :: (BDisjoin b, SigInP p x) 
-              => b (x :&: ((S p () :&: (      y)) :|: (      z)) )
-                          ((S p () :&: (x :&: y)) :|: (x :&: z))
-bdisjoin1 = dupChoiceSig >>> bdisjoin >>> rotChoiceSig
-    where dupChoiceSig = (bsecond . bleft) $ bfirst bdup >>> bassocrp
-          rotChoiceSig = bleft $ bassoclp >>> bfirst bswap >>> bassocrp
+bdisjoinl   :: (BDisjoin b, BFmap b, SigInP p x) => b (x :&: (S p y :|: z))  ((x :&: S p y) :|: (x :&: z))
+bdisjoinlk  :: (BDisjoin b, BFmap b, SigInP p x) => b (x :&: ((S p y :&: y') :|: z)) ((x :&: (S p y :&: y')) :|: (x :&: z))
+bdisjoinlz  :: (BDisjoin b, BFmap b, SigInP p x) => b (x :&: (y :|: S p z)) ((x :&: y) :|: (x :&: S p z))
+bdisjoinlkz :: (BDisjoin b, BFmap b, SigInP p x) => b (x :&: (y :|: (S p z :&: z'))) ((x :&: y) :|: (x :&: (S p z :&: z')))
 
+bdisjoinr   :: (BDisjoin b, BFmap b, SigInP p x) => b ((S p y :|: z) :&: x) ((S p y :&: x) :|: (z :&: x))
+bdisjoinrk  :: (BDisjoin b, BFmap b, SigInP p x) => b (((S p y :&: y') :|: z) :&: x) (((S p y :&: y') :&: x) :|: (z :&: x))
+bdisjoinrz  :: (BDisjoin b, BFmap b, SigInP p x) => b ((y :|: S p z) :&: x) ((y :&: x) :|: (S p z :&: x))
+bdisjoinrkz :: (BDisjoin b, BFmap b, SigInP p x) => b ((y :|: (S p z :&: z')) :&: x) ((y :&: x) :|: ((S p z :&: z') :&: x))
+
+bdisjoinl   = prep >>> bdisjoin
+    where prep = (bsecond . bleft) $ bdup >>> (bfirst $ bconst ())
+bdisjoinlk  = prep >>> bdisjoin
+    where prep = (bsecond . bleft) $ bfirst bdup >>> bassocrp >>> (bfirst $ bconst ())
+bdisjoinlz  = (bsecond bmirror) >>> bdisjoinl  >>> bmirror
+bdisjoinlkz = (bsecond bmirror) >>> bdisjoinlk >>> bmirror
+
+bdisjoinr   = bswap >>> bdisjoinl   >>> (bswap +++ bswap)
+bdisjoinrk  = bswap >>> bdisjoinlk  >>> (bswap +++ bswap)
+bdisjoinrz  = bswap >>> bdisjoinlz  >>> (bswap +++ bswap)
+bdisjoinrkz = bswap >>> bdisjoinlkz >>> (bswap +++ bswap)
 
 -- | BZip is a behavior for combining elements of an asynchronous 
 -- product. The main purpose is to combine them to apply a Haskell
@@ -327,7 +368,7 @@ bunzip = (bfmap fst &&& bfmap snd)
 
 -- | BSplit is how we lift decisions from data to control. It is the
 -- RDP equivalent to `if then else` expressions, except bdisjoin is
--- necessary to apply the split to any parameters. 
+-- necessary to apply the split to other values in lexical scope. 
 class (BSum b, BFmap b) => BSplit b where
     bsplit :: b (S p (Either x y)) (S p x :|: S p y)
 
@@ -335,6 +376,13 @@ class (BSum b, BFmap b) => BSplit b where
 bsplitWith :: (BSplit b) => (x -> Either y z) 
            -> b (S p x) (S p y :|: S p z)
 bsplitWith fn = bfmap fn >>> bsplit
+
+-- | bsplitOn is a convenience operation, filtering True values to
+-- the left and False values to the right.
+bsplitOn :: (BSplit b) => (x -> Bool) 
+         -> b (S p x) (S p x :|: S p x)
+bsplitOn f = bsplitWith f'
+    where f' x = if f x then Left x else Right x
 
 -- | unsplit is included for completeness.
 bunsplit :: (BSum b, BFmap b) => b (S p x :|: S p y) (S p (Either x y))
