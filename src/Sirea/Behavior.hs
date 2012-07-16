@@ -24,7 +24,7 @@ module Sirea.Behavior
     , BZip(..), bzipWith, bunzip
     , BSplit(..), bsplitWith, bsplitOn, bunsplit
     , BTemporal(..), BPeek(..)
-    , BDynamic(..)
+    , BDynamic(..), bevalOrElse
     , Behavior
     ) where
 
@@ -176,8 +176,9 @@ bstratf runF = bfmap (runF . fmap return) >>> bstrat
 --     bswap - products are commutative
 --     bassoclp - products are associative (move parens left)
 --
--- The above operations should be free at runtime. A few operations 
--- are defined based on the above. 
+-- The above operations should be free at runtime. 
+--
+-- A few operations are defined from the primitives: 
 --
 --     bsecond - operate on the second signal
 --     bsnd - keep second signal, drop first
@@ -228,7 +229,9 @@ bvoid f = bdup >>> bfirst f >>> bsnd
 -- Excepting bmerge, the above operations should be free at runtime.
 -- bmerge has an overhead similar to bzip (in some cases it might be
 -- better for performance to simply apply the same operation to left
--- and right). A few more operations are defined using bmirror.
+-- and right and forego merging). 
+--
+-- A few more utility operations are defined from the primitives:
 --
 --     bright - apply behavior only to the right path
 --     binr - constant choose right; i.e. if false
@@ -458,7 +461,8 @@ class (BTemporal b) => BPeek b where
 --
 -- Dynamic behaviors provide alternative to large (:|:) structures.
 -- This is analogous to using objects instead of case dispatch. Best
--- practices will eventually exist for choosing between them.
+-- practices will eventually exist for selecting between dynamic and
+-- choice behaviors.
 --
 -- RDP is internally stateless, and dynamic behaviors are not stored
 -- anywhere. Logically, RDP continuously expires and revokes dynamic
@@ -473,7 +477,8 @@ class (Behavior b) => BDynamic b where
     -- and the latency for beval as a whole. 
     --
     -- If there are any problems with the dynamic behavior, e.g. if
-    -- too large for DT, you receive a `bright` error indicator.
+    -- too large for DT, the error path is selected. (If I could 
+    -- statically enforce valid beval, I'd favor that option.)
     -- 
     beval :: (SigInP p x) => DT -> b (S p (b x y) :&: x) (y :|: S p ())
 
@@ -487,7 +492,18 @@ class (Behavior b) => BDynamic b where
         where prep = bfirst (bfmap f &&& bconst ()) >>> bassocrp
               f b' = bsecond b' >>> bfst -- modifies b'
 
-
+-- | bevalOrElse use the `x` signal for a fallback behavior.
+-- This performs the necessary dup and disjoin operations to
+-- make `x` available during failure cases.
+bevalOrElse :: (SigInP p x, BDynamic b) => DT -> b (S p (b x y) :&: x) (y :|: x)
+bevalOrElse dt = bsecond bdup >>> bassoclp >>> bfirst (beval dt)
+             -- now have (y :|: S p ()) :&: x 
+             >>> bfirst (bmirror >>> bleft bdup) >>> bswap 
+             -- now have x :&: ((S p () :&: S p ()) :|: y)
+             >>> bdisjoin
+             -- now have ((x :&: S p ()) :|: (x :&: y))
+             >>> bleft bfst >>> bmirror >>> bleft bsnd
+             -- now have (y :|: x)
 
 -- WISHLIST: a behavior-level map operation.
 --

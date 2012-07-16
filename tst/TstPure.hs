@@ -63,6 +63,7 @@ allTests = tstConst >>> tstFmap >>> tstZip >>> tstSwap >>> tstAssocp
        >>> tstSplitL >>> tstSplitR >>> tstInL >>> tstInR
        >>> tstDisjoinL >>> tstDisjoinR
        >>> tstDeadOutput
+       >>> bvoid (bconst "Hit Ctrl+C to End!" >>> bprint_)
        
 
 --joinTests :: 

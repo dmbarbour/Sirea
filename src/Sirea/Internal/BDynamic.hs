@@ -1,8 +1,23 @@
+{-# LANGUAGE TypeOperators #-}
 
 -- | Implementation of the Dynamic behavior type for B.
 module Sirea.Internal.BDynamic 
-    (
+    ( evalB
     ) where
+
+
+import Sirea.Internal.BTypes
+import Sirea.Internal.STypes
+import Sirea.Time
+--import Sirea.Internal.BImpl
+
+-- THE GOAL!
+-- beval :: (SigInP p x) => DT -> b (S p (b x y) :&: x) (y :|: S p ())
+
+evalB :: (SigInP p x) => DT 
+      -> B w (S p (B w x y) :&: x) (y :|: S p ())
+evalB = undefined
+
 
 
 -- The basic technique:
