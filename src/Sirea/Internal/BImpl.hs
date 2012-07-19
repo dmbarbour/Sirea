@@ -15,7 +15,7 @@ module Sirea.Internal.BImpl
     , inlB, leftB, mirrorB, assoclsB, mergeB, splitB -- BSum
     , disjoinB
     , fmapB, constB, touchB, stratB, adjeqfB -- BFmap
-    , delayB, synchB, peekB, forceDelayB -- temporal
+    , delayB, synchB, forceDelayB, peekB -- temporal
 
     -- miscellaneous
     , unsafeSigZipB
@@ -157,7 +157,7 @@ mergeB = mergeSynchB >>> latentOnTime mergeSigsB
 
 -- pre-synch for merge; minimal, does not synch with dead branches
 mergeSynchB :: B w (x :|: x) (x :|: x)
-mergeSynchB = B_tshift synchTs
+mergeSynchB = tshiftB synchTs
     where synchTs xx = 
             let synchLR = lnd_zip synchLDT (lnd_left xx) (lnd_right xx) in
             let lx = lnd_fmap fst synchLR in
@@ -223,7 +223,7 @@ buildMerge_i tl tr (LnkSig lu) =
 
 -- | disjoin will distribute a decision. This will synchronize the
 -- choice signal with the external signal (a special case for which
--- B_tshift was heavily revised) then apply the split.
+-- tshiftB was heavily revised) then apply the split.
 disjoinB :: (SigInP p x)
          => B w (x :&: ((S p () :&: y) :|: z))
                 ((x :&: y) :|: (x :&: z))
@@ -232,7 +232,7 @@ disjoinB = disjSynchB >>> latentOnTime disjSigsB
 -- pre-synch for disjoin operation
 disjSynchB :: B w (x :&: ((S p () :&: y) :|: z) ) 
                   (x :&: ((S p () :&: y) :|: z) )
-disjSynchB = B_tshift disjSynchTs
+disjSynchB = tshiftB disjSynchTs
     where disjSynchTs xuyz =
             let x   = (lnd_fst) xuyz in
             let uyz = (lnd_snd) xuyz in
@@ -526,14 +526,16 @@ adjeqfB = mkLnkB id $ mkLnkPure lnAdjeqf
 
 -- | delay a signal (logically)
 delayB :: DT -> B w x x
-delayB = B_tshift . lnd_fmap . addDelay
+delayB = tshiftB . lnd_fmap . addDelay
     where addDelay dt ldt = ldt { ldt_goal = (dt + (ldt_goal ldt)) }
 
--- | synchronize signals (logically)
+-- | synchronize signals (logically) by updating the logical time.
+-- This doesn't perform any actual synchronization.
+-- Actual synchronization happens at a tshiftB.
 -- note: ignores dead branches due to binl or binr.
 -- (This is more consistent with synch on merge and disjoin.)
 synchB :: B w x x
-synchB = B_tshift doSynch
+synchB = tshiftB doSynch
     where doSynch x = 
             assert (ldt_valid x) $
             let dtGoal = lnd_aggr max $ lnd_fmap (liveGoalOr 0) x in
@@ -542,6 +544,13 @@ synchB = B_tshift doSynch
             if (ldt_live ldt) then (ldt_goal ldt) else def
           applyGoal dtg ldt = 
             if (ldt_live ldt) then ldt { ldt_goal = dtg } else ldt
+
+-- | force aggregated lazy delays to apply at this location.
+-- This ensures the signal values are consistent with the delays.
+forceDelayB :: B w x x
+forceDelayB = tshiftB (lnd_fmap toGoal)
+    where toGoal ldt = ldt { ldt_curr = (ldt_goal ldt) }
+
 
 -- | look ahead in a signal slightly. Reduces stability of signal,
 -- i.e. updates at time T can affect peek signal at time T-dt.
@@ -561,6 +570,9 @@ mkLnPeek dt (LnkSig lu) =
     let lu' = lnPeek dt rf lu in
     return (LnkSig lu')
 
+-- If signal changes at tUpdate, then my anticipated value at 
+-- (tUpdate - dt) must always change to match the new signal. The
+-- stability is thus also reduced by dt.
 lnPeek :: DT -> IORef (Sig x) -> LnkUp (Either x ()) -> LnkUp x
 lnPeek dt rf lu = LnkUp { ln_touch = onTouch, ln_update = onUpdate }
     where onTouch = ln_touch lu 
@@ -575,11 +587,12 @@ lnPeek dt rf lu = LnkUp { ln_touch = onTouch, ln_update = onUpdate }
                 Nothing ->
                     let su' = SigUp { su_state = Nothing, su_stable = tStable } in
                     ln_update lu su'
-                Just (_,tu0) ->
-                    let tuf = tu0 `subtractTime` dt in
-                    let sigPk  = s_peek dt (s_trim s' tuf) in
-                    let su' = SigUp { su_state = Just (sigPk, tuf), su_stable = tStable } in
-                    tuf `seq` sigPk `seq`
+                Just (_,tUp) ->
+                    let tUp' = tUp `subtractTime` dt in
+                    let sigPk  = s_peek dt (s_trim s' tUp') in
+                    let st' = Just (sigPk, tUp') in
+                    let su' = SigUp { su_state = st', su_stable = tStable } in
+                    tUp `seq` sigPk `seq`
                     ln_update lu su'
     
 
@@ -590,14 +603,6 @@ unsafeChangeScopeB = mkLnkB tr_fwd $ mkLnkPure lnkFwd
 lnkFwd :: Lnk (S p1 x) -> Lnk (S p2 x)
 lnkFwd LnkDead = LnkDead
 lnkFwd (LnkSig lu) = LnkSig lu
-
--- | force aggregated lazy delays to apply at this location.
--- (unnecessary in most cases)
-forceDelayB :: B w x x
-forceDelayB = B_tshift doBar
-    where doBar = lnd_fmap $ \ ldt -> ldt { ldt_curr = (ldt_goal ldt) }
-
-
 
 -- | eqshiftB tries to push updates a bit into the future if they
 -- would otherwise be redundant, with a given limit for how far into

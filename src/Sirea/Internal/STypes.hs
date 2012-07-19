@@ -6,6 +6,7 @@ module Sirea.Internal.STypes
     , (:|:)
     , S
     , SigInP
+    , SigMembr, BuildMembr(..), buildMembr
     ) where 
 
 import Data.Typeable -- all are typeable
@@ -46,8 +47,39 @@ infixr 2 :|:
 -- extra threads should be constructed when behavior is initiated.
 data S p a
 
-{- Typeclass variation of SigInP 
-   MultiParamTypeClasses, FlexibleInstances -}
+-- might add support for continuous signals? C p x? rather not, though.
+-- might add support for collections? (L x) for list of x?
+
+
+-- | (SigMembr x) supports construction of a membrane object given
+-- only the type of signal x. This is necessary for BDynamic and
+-- possibly other generic programs that process signals without much
+-- knowledge of them. SigMembr can also enforce that a signal is a
+-- valid instance of the signal type. SigMembr is entirely defined
+-- by sirea-core, no ability to extend it in clients.
+class SigMembr x where sigMembr :: (BuildMembr m) => m x
+
+-- | (BuildMembr m) describes construction of a particular membrane.
+-- Membranes, in this case, are ignorant about their types. The
+-- membrane type determines what is constructed. Note that GADTs
+-- might be necessary to leverage this effectively. 
+--
+-- (developed for use by BDynamic, but client extensible).
+class BuildMembr m where
+    buildSigMembr :: m (S p a)
+    buildSumMembr :: m x -> m y -> m (x :|: y)
+    buildProdMembr :: m x -> m y -> m (x :&: y)
+
+instance SigMembr (S p a) where 
+    sigMembr = buildSigMembr
+instance (SigMembr x, SigMembr y) => SigMembr (x :|: y) where
+    sigMembr = buildSumMembr sigMembr sigMembr
+instance (SigMembr x, SigMembr y) => SigMembr (x :&: y) where
+    sigMembr = buildProdMembr sigMembr sigMembr
+
+-- | Function to build a membrane m for a given signal type x.
+buildMembr :: (BuildMembr m, SigMembr x) => m x
+buildMembr = sigMembr
 
 -- | (SigInP p x) constrains that complex signal x exists entirely
 -- in partition p. This avoids need for implicit bcross in disjoin
@@ -55,7 +87,7 @@ data S p a
 -- 
 -- This already has a complete definition. It is not for extension
 -- by Sirea clients.
-class SigInP p x where
+class (SigMembr x) => SigInP p x where
     proofOfSigInP :: ProofOfSigInP p x 
 
 data ProofOfSigInP p x 

@@ -59,9 +59,9 @@ compileBC0 (B_left bef) dtx =
              (B_left deadOnInputB, dtz)
 compileBC0 (B_latent fn) dtx =
     compileBC0 (fn dtx) dtx
-compileBC0 (B_tshift fn) dtx =
+compileBC0 bxx@(B_tshift fn) dtx =
     let dtx' = fn dtx in
-    (tshiftB dtx dtx', dtx')
+    (bxx, dtx')
 compileBC0 bxz@(B_mkLnk fn _) dtx =
     (bxz, fn dtx)
 
@@ -78,40 +78,10 @@ compileBC1 (B_left bef) lnz =
     return (LnkSum e (ln_right lnz))
 compileBC1 (B_latent _) _ =
     error "B_latent must be handled by compileBC0!"
-compileBC1 (B_tshift _) _ =
-    error "B_tshift must be handled by compileBC0!"
+compileBC1 (B_tshift _) ln = 
+    return ln -- no action necessary
 compileBC1 (B_mkLnk _ mkLnk) lnz =
     ln_build mkLnk lnz
-
--- | tshiftB turns a difference of `tshift` values into a MkLnk behavior.
--- This is used by the compiler to apply delays. 
-tshiftB :: LnkD LDT x -> LnkD LDT x -> B w x x
-tshiftB t0 tf = B_mkLnk id lnk
-    where build = buildTshift t0 tf
-          lnk = MkLnk { ln_build = return . build 
-                      , ln_tsen = False
-                      , ln_peek = 0
-                      }
-
--- buildTshift will apply delays based on before/after LDT values
-buildTshift :: LnkD LDT x -> LnkD LDT x -> Lnk x -> Lnk x
-buildTshift _ _ LnkDead = LnkDead
-buildTshift t0 tf (LnkProd x y) =
-    let opx = buildTshift (lnd_fst t0) (lnd_fst tf) x in
-    let opy = buildTshift (lnd_snd t0) (lnd_snd tf) y in
-    LnkProd opx opy
-buildTshift t0 tf (LnkSum x y) =
-    let opx = buildTshift (lnd_left  t0) (lnd_left  tf) x in
-    let opy = buildTshift (lnd_right t0) (lnd_right tf) y in
-    LnkSum opx opy
-buildTshift t0 tf (LnkSig lu) = 
-    let dt0 = lnd_sig t0 in
-    let dtf = lnd_sig tf in
-    let dtDiff = (ldt_curr dtf) - (ldt_curr dt0) in
-    assert (dtDiff >= 0) $
-    if (0 == dtDiff) then LnkSig lu else
-    LnkSig (ln_sumap (su_delay dtDiff) lu)
-
 
 -- | deadOnInputB simply returns LnkDead. Assumption: already have
 -- proven the input is dead. Injected by compileBC0 when B_left is

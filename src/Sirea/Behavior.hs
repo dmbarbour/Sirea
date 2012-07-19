@@ -1,5 +1,5 @@
 
-{-# LANGUAGE TypeOperators, MultiParamTypeClasses, FlexibleInstances, Rank2Types #-}
+{-# LANGUAGE TypeOperators, MultiParamTypeClasses, Rank2Types #-}
 
 -- | This module describes RDP behaviors classes in Sirea. Behaviors 
 -- are a restricted class of Arrows that transform and orchestrate 
@@ -176,7 +176,9 @@ bstratf runF = bfmap (runF . fmap return) >>> bstrat
 --     bswap - products are commutative
 --     bassoclp - products are associative (move parens left)
 --
--- The above operations should be free at runtime. 
+-- The above operations should be free at runtime (after compile).
+-- bdup has a trivial cost in Haskell (since we alias the value 
+-- representation).
 --
 -- A few operations are defined from the primitives: 
 --
@@ -315,6 +317,10 @@ bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
 --     bdisjoinrz  - disjoin right on one signal
 --     bdisjoinlkz - disjoin left on first signal of many
 --     bdisjoinrkz - disjoin right on first signal of many
+--
+-- Disjoin is moderately expensive; it requires masking signals, and
+-- which requires a some synchronization. However, you'll only pay
+-- for the resulting `x` values that it seems you might use.
 --
 class (BSum b, BProd b) => BDisjoin b where
     bdisjoin :: (SigInP p x) => b (x :&: ((S p () :&: y) :|: z)) ((x :&: y) :|: (x :&: z))
@@ -456,22 +462,39 @@ class (BTemporal b) => BPeek b where
 
 -- | Dynamic behaviors are behaviors constructed or discovered at
 -- runtime. They are useful for modeling resources, extensions,
--- service brokering, live programming, and staged computation 
--- (compilation, linking), and capability security patterns. 
+-- service brokering, dynamic configuration (from script or XML), 
+-- live programming, staged computations (compilation, linking), and
+-- capability security patterns (behaviors as capabilities). 
 --
 -- Dynamic behaviors provide alternative to large (:|:) structures.
 -- This is analogous to using objects instead of case dispatch. Best
 -- practices will eventually exist for selecting between dynamic and
 -- choice behaviors.
 --
--- RDP is internally stateless, and dynamic behaviors are not stored
--- anywhere. Logically, RDP continuously expires and revokes dynamic
--- behaviors. This simplifies security (no grandfather capabilities)
--- and garbage collection, especially in open, distributed systems.
--- It also leads to clearer disruption semantics.
+-- Dynamic behaviors cannot be stored long-term. The idea is that 
+-- old dynamic behaviors are continuously expiring. If the behavior
+-- is no longer provided by a signal, it will soon be disabled. 
+-- Behaviors may be shared through demand monitors and stateless
+-- models. Avoiding stateful aliasing simplifies RDP with respect to
+-- security, garbage collection, and resilience patterns during
+-- disruption. (Idiom to support non-volatile dynamic behavior: use
+-- a script or value that can be kept statefully; build behavior as
+-- needed; use rsynch or mirroring patterns to update state.)
+--
+-- Dynamic behaviors are expensive. Every change in dynamic behavior
+-- requires compile and install. Further, they imply requirement
+-- for every value in `x` even if those aren't used by some or most
+-- of the dynamic behaviors. (Idioms to avoid paying for everything
+-- a dynamic behavior might need: treat `x` as a context object with
+-- other dynamic behaviors for dependency injection. Or build more
+-- into the dynamic behavior so a simpler `x` type can be used.)
+-- Despite their expense, dynamic behaviors (with the right idioms
+-- and good stability) can be cheaper than a large number of rarely 
+-- used (:|:) choices.
 -- 
 -- All arguments for dynamic behaviors are implicitly synchronized.
-class (Behavior b) => BDynamic b where
+-- The `y` results are also synchronized, with a constant DT. 
+class (Behavior b, Behavior b') => BDynamic b b' where
     -- | evaluate a dynamic behavior and obtain the response. The DT
     -- argument indicates the maximum latency for dynamic behaviors,
     -- and the latency for beval as a whole. 
@@ -480,14 +503,17 @@ class (Behavior b) => BDynamic b where
     -- too large for DT, the error path is selected. (If I could 
     -- statically enforce valid beval, I'd favor that option.)
     -- 
-    beval :: (SigInP p x) => DT -> b (S p (b x y) :&: x) (y :|: S p ())
+    beval :: (SigInP p x) => DT -> b (S p (b' x y) :&: x) (y :|: S p ())
 
-    -- | bexec will eval dropping the result. The success signal is 
-    -- a simple reduction of the behavior signal. 
+    -- | bexec will eval, dropping the result. The success signal is 
+    -- a simple reduction of the behavior signal. Since the response
+    -- isn't used, there is no latency introduced for bexec in order
+    -- to obtain the response; i.e. bexec operates in parallel with
+    -- any following behaviors.
     --
     -- The default implementation is in terms of beval; override for
     -- performance if necessary.
-    bexec :: (SigInP p x) => b (S p (b x y) :&: x) (S p () :|: S p ())
+    bexec :: (SigInP p x) => b (S p (b' x y_) :&: x) (S p () :|: S p ())
     bexec = prep >>> beval 0
         where prep = bfirst (bfmap f &&& bconst ()) >>> bassocrp
               f b' = bsecond b' >>> bfst -- modifies b'
@@ -495,7 +521,7 @@ class (Behavior b) => BDynamic b where
 -- | bevalOrElse use the `x` signal for a fallback behavior.
 -- This performs the necessary dup and disjoin operations to
 -- make `x` available during failure cases.
-bevalOrElse :: (SigInP p x, BDynamic b) => DT -> b (S p (b x y) :&: x) (y :|: x)
+bevalOrElse :: (SigInP p x, BDynamic b b') => DT -> b (S p (b' x y) :&: x) (y :|: x)
 bevalOrElse dt = bsecond bdup >>> bassoclp >>> bfirst (beval dt)
              -- now have (y :|: S p ()) :&: x 
              >>> bfirst (bmirror >>> bleft bdup) >>> bswap 

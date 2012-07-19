@@ -24,8 +24,7 @@ import Control.Monad (when, liftM)
 -- console. The basic printer will print each unique message to a 
 -- line on the console. Behavior for redundant messages is up to
 -- the printer - e.g. replay after a few seconds, or skip them.
-class HasPrinter b p where
-    bprint_ :: b (S p String) (S p ())
+class HasPrinter b p where bprint_ :: b (S p String) (S p ())
 
 -- | Print allows developer to provide show function (a -> String)
 -- and preserves the type of the input. This makes it easier to
@@ -38,8 +37,7 @@ bprint showFn = bvoid $ bfmap showFn >>> bprint_
 -- reprint behavior. Could fix? but demand monitors would help.
 -- Anyhow, idea is that it will reprint messages after a few 
 -- seconds if they have not been printed recently. 
-instance HasPrinter (BCX w) P0 where
-    bprint_ = printB
+instance HasPrinter (BCX w) P0 where bprint_ = printB
 
 printB :: BCX w (S P0 String) (S P0 ())
 printB = unsafeOnUpdateBCX mkPrinter >>> bconst ()
@@ -65,11 +63,11 @@ updatelRC t msg lRC =
     let (lRC',bPrint) = foldr fn ([],True) lRC in
     if bPrint then ((t,msg):lRC',True)
               else (lRC',False)
-    where tExpire = subtractTime t dt_print_expire
-          fn (tx,mx) (l,b) =
+    where tExpire = t `subtractTime` dt_print_expire
+          fn r@(tx,mx) (l,b) =
             if (tx < tExpire) then (l,b) else
-            if (mx == msg) then ((tx,mx):l,False) else
-            ((tx,mx):l,b)
+            let b' = b && (msg /= mx) in
+            (r:l,b')
 
 newtype PrintBuffer = PrintBuffer { pb_list  :: IORef [(T,String)] }
 instance Typeable PrintBuffer where
@@ -108,8 +106,7 @@ class BUnit b x where
 -- But this would only be useful for a single output signal, and it
 -- might fail due to anticipation of a future that never stabilizes.
 -- 
-class BUndefined b where 
-    bundefined_ :: (SigInP p y) => b (S p ()) y
+class BUndefined b where bundefined_ :: (SigInP p y) => b (S p ()) y
 
 bundefined :: (BUndefined b, BFmap b, SigInP p y) => b (S p x) y
 bundefined = bconst () >>> bundefined_

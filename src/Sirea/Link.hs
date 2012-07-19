@@ -40,7 +40,7 @@ import Control.Exception (assert)
 -- is intended for building local resources: caches, resource hooks.
 --
 unsafeLinkB :: MkLnk w x y -> B w x y
-unsafeLinkB ln = bsynch >>> B_tshift xBarrier >>> B_mkLnk tr_unit ln
+unsafeLinkB ln = bsynch >>> tshiftB xBarrier >>> B_mkLnk tr_unit ln
     where xBarrier dts =
             assert (ldt_valid dts) $
             assert (ldt_minGoal dts == ldt_maxGoal dts) $ 

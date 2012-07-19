@@ -18,12 +18,12 @@ module Sirea.Internal.BTypes
     , ldt_maxGoal, ldt_minGoal
     , ldt_maxCurr, ldt_minCurr
     , ldt_anyLive, ldt_valid
-    , latentOnTime
-   
+
+    , latentOnTime, tshiftB
     ) where
 
 import Sirea.Internal.STypes (S,(:&:),(:|:))
-import Sirea.Internal.LTypes (MkLnk)
+import Sirea.Internal.LTypes 
 import Sirea.Time (DT)
 import Control.Exception (assert)
 
@@ -64,7 +64,8 @@ data B w x y where
   -- most operations
   B_mkLnk   :: (TR x y) -> (MkLnk w x y) -> B w x y
 
-  -- time modeling, logical delay, concrete delay
+  -- time modeling, logical delay; reports time shifts
+  -- (does not cause time-shift; combine with B_latent for concrete delay) 
   B_tshift  :: (TS x) -> B w x x
 
   -- category
@@ -94,6 +95,42 @@ data B w x y where
 -- | delay computation of B x y until timing info is available
 latentOnTime :: (LnkD LDT x -> B w x y) -> B w x y
 latentOnTime fn = B_latent fn
+
+
+-- | tshiftB combines B_tshift and B_latent to perform a concrete
+-- delay if the reported time-shift indicates a delay should occur.
+-- (based on ldt_curr; changes to ldt_goal don't cause computation)
+tshiftB :: TS x -> B w x x
+tshiftB fn = B_latent forceDelay `B_pipe` B_tshift fn
+    where forceDelay t0 = applyDelayB t0 (fn t0)
+
+applyDelayB :: LnkD LDT x -> LnkD LDT x -> B w x x
+applyDelayB t0 tf = B_mkLnk id lnk
+    where build = buildTshift t0 tf
+          lnk = MkLnk { ln_build = return . build 
+                      , ln_tsen = False, ln_peek = 0 }
+
+-- buildTshift will apply delays based on before/after LDT values
+--  asserts latency is non-decreasing
+--  no post-compile cost for links that aren't delayed
+buildTshift :: LnkD LDT x -> LnkD LDT x -> Lnk x -> Lnk x
+buildTshift _ _ LnkDead = LnkDead
+buildTshift t0 tf (LnkProd x y) =
+    let opx = buildTshift (lnd_fst t0) (lnd_fst tf) x in
+    let opy = buildTshift (lnd_snd t0) (lnd_snd tf) y in
+    LnkProd opx opy
+buildTshift t0 tf (LnkSum x y) =
+    let opx = buildTshift (lnd_left  t0) (lnd_left  tf) x in
+    let opy = buildTshift (lnd_right t0) (lnd_right tf) y in
+    LnkSum opx opy
+buildTshift t0 tf (LnkSig lu) = 
+    let dt0 = lnd_sig t0 in
+    let dtf = lnd_sig tf in
+    let dtDiff = (ldt_curr dtf) - (ldt_curr dt0) in
+    assert (dtDiff >= 0) $
+    if (0 == dtDiff) then LnkSig lu else
+    LnkSig (ln_sumap (su_delay dtDiff) lu)
+
 
 
 ---------------------------------------------------------
