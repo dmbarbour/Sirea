@@ -42,9 +42,9 @@ To understand Reactive Demand Programming, you must understand behaviors. To und
 Signal Values
 -------------
 
-A **Signal** is a time-varying value that represents observed state. For example, I were to continuously observe the state of the "w" key on my keyboard, it would be in an up state most of the time, and in a down state for the brief times I press the button, as when writing "down", "when", or "writing". A keystate, represented in a signal, is _not_ a keypress _event_. Events are instantaneous. A keystate will have a positive, rational duration such as 5 milliseconds.
+A **Signal** is a time-varying value that represents observed state. For example, if I were to continuously observe the state of the "w" key on my keyboard, it would be in an up state most of the time, and in a down state for the brief times I press the button, as when writing "down", "when", or "writing". A keystate, represented in a signal, is _not_ a keypress _event_. Events are instantaneous. A keystate will have a positive, rational duration in the down state, such as 5 milliseconds.
 
-When I am not observing the keyboard, I do not have access to signals representing key state. This also is modeled in RDP, by allowing any signal to switch between **active** while it is present and observed, and **inactive** while absent or unobserved. This allows me to logically and formally model all the times I'm not looking at the keyboard, including the times before the application started or before the keyboard was plugged in. (Caution: **inactive does not mean error!** RDP requires active signals to report error.)
+When I am not observing the keyboard, I do not have access to signals representing key state. This also is modeled in RDP, by allowing any signal to switch between **active** while it is present and observed, and **inactive** while absent or unobserved. This allows me to logically and formally model the times an application is not observing the keyboard, such as the time before the application started or before the keyboard was plugged in. (Caution: **inactive does not mean error!** RDP requires active signals to report error.)
 
 ### Modeling Signals
 
@@ -125,7 +125,7 @@ It is possible to _logically synchronize_ the asynchronous signals by applying a
 Introducing Behaviors
 ---------------------
 
-RDP users never touch signals directly. They can only access and manipulate signals via behaviors. Thus, even in the trivial case of observing the "w" key, one needs a behavior to obtain a signal representing that observation. The behavior will need an input signal to at least indicate the durations during which the key state is observed.
+RDP users never touch signals directly. They can only access and manipulate signals via behaviors. Even in the trivial case of observing the "w" key, one needs a behavior to obtain that signal, and an input signal for that behavior to represent durations of active observation. 
 
 A **Behavior** in RDP is a _signal transformer_ with potential for _declarative effects_.
 
@@ -137,6 +137,7 @@ A _signal transformer_ is, in general, an abstract process that takes a signal a
 All behaviors operate on _signals in space and time_. Many behaviors are data plumbing or pure operations on signals. A few examples of simple behaviors:
 
     bfmap  :: (a -> b) -> B (S p a) (S p b)
+    bconst :: b -> B (S p a) (S p b)
     bfirst :: B x x' -> B (x :&: y) (x' :&: y) 
     (>>>)  :: B x y -> B y z -> B x z
     bzip   :: B (S p a :&: S p b) (S p (a,b))
@@ -214,6 +215,7 @@ Thus, simple behaviors such as `bdup`, `bfirst`, and `bswap` ultimately allow us
 
 RDP behaviors may be effectful. Consider the following:
 
+    bgetWkey  :: B (S p ()) (S p Bool) 
     bmousepos :: B (S p ()) (S p MousePos)
     bgetfile  :: B (S p FileName) (S p FileState)
     bcamctl   :: B (S p PanTiltZoom) (S p ())
