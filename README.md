@@ -42,9 +42,9 @@ To understand Reactive Demand Programming, you must understand behaviors. To und
 Signal Values
 -------------
 
-A **Signal** is a time-varying value that represents state. For example, I were to model the `w` key on my keyboard, it would be in an `up` state most of the time, and in a `down` state for the brief times I press the button, as when writing "down", "when", or "writing". A keystate signal is _not_ a keypress _event_. A keystate will have a positive, non-transcendal duration such as 5 milliseconds.
+A **Signal** is a time-varying value that represents observed state. For example, I were to continuously observe the state of the "w" key on my keyboard, it would be in an up state most of the time, and in a down state for the brief times I press the button, as when writing "down", "when", or "writing". A keystate, represented in a signal, is _not_ a keypress _event_. Events are instantaneous. A keystate will have a positive, rational duration such as 5 milliseconds.
 
-A signal in RDP will also vary in its _presence_. This allows me to represent the times I'm not looking at the keyboard, such as the time before the application started. A signal is called **active** while it is present, and **inactive** while it is absent. Caution: **inactive does not mean error!** A lot of people seem to misunderstand that. 
+When I am not observing the keyboard, I do not have access to signals representing key state. This also is modeled in RDP, by allowing any signal to switch between **active** while it is present and observed, and **inactive** while absent or unobserved. This allows me to logically and formally model all the times I'm not looking at the keyboard, including the times before the application started or before the keyboard was plugged in. (Caution: **inactive does not mean error!** RDP requires active signals to report error.)
 
 ### Modeling Signals
 
@@ -59,11 +59,11 @@ This is very generic. It allows me to represent continuous signals such as the p
 
 To avoid this complication in the normal case, Sirea favors discrete varying signals as the primary signal model. A well behaved discrete varying signal will only change at specific times, and will hold each value for a rational period of time. (*Note:* by "discrete varying" I do not mean a continuous signal that has been discretely sampled; rather, precise representation of a signal that naturally varies discretely.) The representation in Sirea looks close to:
 
-    type Sig a = (Maybe a, \[(T,Maybe a)\]) -- not actually used
+    type Sig a = (Maybe a, [(T,Maybe a)]) -- not actually used
 
 Here the `fst` value represents the initial signal state for all history (which always starts as `Nothing` for a new RDP behavior, to indicate inactivity), and the list describes (in monotonic time order) a sequence of discrete updates. This model is much simpler to work with, but still problematic. Signals might contain redundant updates, i.e.:
 
-    \[(T0,Just True), (T1, Just True), (T3, Just True), ...\]
+    [(T0,Just True), (T1, Just True), (T3, Just True), ...]
 
 In practice, we'd want to filter these redundant updates to avoid unnecessary recomputing of signals. But filtering a list for the next non-True value could diverge (e.g. if the signal is always True) or take unpredictable time. Sirea's `Sig a` implementation uses a variation of the list structure to support filtering and precise control over evaluation.
 
@@ -125,9 +125,12 @@ It is possible to _logically synchronize_ the asynchronous signals by applying a
 Introducing Behaviors
 ---------------------
 
+RDP users never touch signals directly. They can only access and manipulate signals via behaviors. Thus, even in the trivial case of observing the "w" key, one needs a behavior to obtain a signal representing that observation. The behavior will need an input signal to at least indicate the durations during which the key state is observed.
+
 A **Behavior** in RDP is a _signal transformer_ with potential for _declarative effects_.
 
-A _signal transformer_ is an abstract process that takes a signal as input and generates a signal as output by modifying the first. Signal transformers cannot create or destroy signals - a property formalized as **duration coupling**: active periods of the output signal must correspond to active periods of the input signal. There may be a small delay between input and output. 
+A _signal transformer_ is, in general, an abstract process that takes a signal as input and generates a signal as output. Signal transformers do not need to be pure; signals can be manipulated to observe and influence external resources.  *Signal transformers cannot create or destroy signals* - a property formalized as **duration coupling**: active periods of the output signal must correspond directly to active periods of the input signal. (There may be a small, constant delay between input and output.) 
+
 
 ### Basic Behaviors
 
