@@ -17,7 +17,7 @@ Here are some features I aim to have by version 1.0:
 
 * _Declarative effects._ Effects expressed by RDP are commutative, idempotent, continuous, and concurrent. These properties offer many of the reasoning and refactoring benefits associated with _pure_ programming styles (i.e. ability to move code around, abstract it, eliminate duplicates), while also supporting open composition, encapsulation, and dynamic acquisition of resources similar to an OOP model. There is no need to pipe data all the way through the application just to raise a window or manage a widget.
 
-* _Declarative linking._ Attach your RDP behavior to the real world with a simple, type-driven resource discovery model. For example, if you need a UI you could simply `bcross` into a GLUT partition and start performing operations on windows that are named by type. Or if you need HTTP access, cross into a partition representing network access and perform a GET. The necessary resources are abstracted as pre-existing the RDP behavior (via `PCX` type) and may be implicitly accessible with a simple behavior transformer (`BCX`).
+* _Declarative linking._ Attach your RDP behavior to the real world with a simple, type-driven resource discovery model. For example, if you need a UI you could simply `bcross` into a GLUT partition and start performing operations on windows that are named by type. Or if you need HTTP access, cross into a partition representing network access and perform a GET. The necessary resources are abstracted as pre-existing the RDP behavior (via `PCX` type) and may be implicitly accessible with a simple behavior transformer (`BCX`). Declarative linking can be extended to dynamic resources via a plugins model (below).
 
 * _Predictable, composable performance._ Sirea is designed for soft real time applications. It will control the amount of in-flight or lazy computations at any given instant to keep memory footprint and incremental CPU costs under control. Sirea won't forbid expensive functions growing state, but an attentive developers should have very little difficulty managing performance and memory footprint. 
 
@@ -29,9 +29,9 @@ Here are some features I aim to have by version 1.0:
 
 * _Anticipation._ RDP does not make predictions, but it does _propagate_ them. Decent predictions at just a few locations can have a widespread effect in an RDP system, supporting optimistic computation and timely preparation of resources, e.g. loading a texture, or opening a window slightly ahead of requirement so they are available right when we need them. Anticipation is valuable even if it were only an implementation detail, but developers have access to anticipation by use of `bpeek`.
 
-* _Embeddable, Extension Language._ Sirea doesn't take over the main loop. Instead, Sirea supplies a step function for starting and maintaining the behavior. These properties also apply partition threads created by Sirea. They can do useful work, such as managing state, network, or display in addition to processing RDP communication. Sirea supplies some simple mechanisms for communicating between threads and RDP, providing a frozen snapshot view of other threads (only updated between steps). Developers also have power to create new behavior primitives to attach new resources with `unsafeLnkB`.
+* _Embeddable Extension Language._ Sirea doesn't take over the main loop. Instead, Sirea supplies a step function for starting and maintaining the behavior. These properties also apply partition threads created by Sirea. They can do useful work, such as managing state, network, or display in addition to processing RDP communication. Sirea supplies some simple mechanisms for communicating between threads and RDP, providing a frozen snapshot view of other threads (only updated between steps). Sirea developers also have power to create new behavior primitives to attach new resources with `unsafeLnkB` and abstractions built upon it.
 
-* _Extensible and Live Programming._ Sirea (via separate library, `sirea-plugin`) provides a runtime plugin framework via Haskell plugins. Plugins support _main_ behaviors (multiple behaviors run in parallel) and potential dependencies (services, resources). Plugins and their dependencies are recompiled and hot-swapped on the fly so runtime behavior is consistent with the most recently saved version of source code. Live programming provides a beautiful, more declarative alternative to REPL loops. Support for multiple _main_ behaviors supports traditional plugin patterns (e.g. extend a pipeline by publishing a dynamic behavior), and allows Sirea to serve as a full application platform. (I envision some _main_ plugins loading code of different types - DSLs, XML application specifications, etc. - and compiling them to new plugins as necessary.)
+* _Extensible and Live Programming._ Sirea (via separate library, `sirea-plugins`) provides a runtime plugin framework via Haskell plugins. Plugins support application extensions (multiple _main_ behaviors running concurrently) and dependencies (services, resources). Plugins and their dependencies are recompiled and hot-swapped on the fly so runtime behavior is consistent with the most recently saved version of source code. Live programming provides a beautiful, more declarative alternative to REPL loops. Support for extensions supports push-based plugin patterns (e.g. extend a pipeline by publishing a dynamic behavior), and allows the plugins system to serve as a complete application platform. (An application that only runs live plugins shall simply be called `sirea`, from package `sirea-app`.)
 
 
 Reactive Demand Programming (in Sirea)
@@ -44,7 +44,7 @@ Signal Values
 
 A **Signal** is a time-varying value that represents observed state. For example, if I were to continuously observe the state of the "w" key on my keyboard, it would be in an up state most of the time, and in a down state for the brief times I press the button, as when writing "down", "when", or "writing". A keystate, represented in a signal, is _not_ a keypress _event_. Events are instantaneous. A keystate will have a positive, rational duration in the down state, such as 5 milliseconds.
 
-When I am not observing the keyboard, I do not have access to signals representing key state. This also is modeled in RDP, by allowing any signal to switch between **active** while it is present and observed, and **inactive** while absent or unobserved. This allows me to logically and formally model the times an application is not observing the keyboard, such as the time before the application started or before the keyboard was plugged in. (Caution: **inactive does not mean error!** RDP requires active signals to report error.)
+When I am not observing the keyboard, I do not have access to signals representing key state. This also is modeled in RDP, by allowing any signal to switch between *active* while it is present and observed, and *inactive* while absent or unobserved. This allows me to logically and formally model the times an application is not observing the keyboard, such as the time before the application started or before the keyboard was plugged in. (Caution: *inactive does not mean error!* RDP requires active signals to report error.)
 
 ### Modeling Signals
 
@@ -55,9 +55,9 @@ A potential model of RDP signals might be:
 
 Here `Maybe a` represents activity of the signal. The signal is `Nothing` while inactive. 
 
-This is very generic. It allows me to represent continuous signals such as the position of a thrown baseball over time (including interpolation). It's actually a bit too generic, able to represent a lot of nonsense values, such as instantaneous events (which RDP forbids). Such a representation would be difficult and inefficient to work with. It takes symbolic analysis to perform precise computations on curved values. A lot of algorithms are non-deterministic on arbitrary signals due to discrete sampling (e.g. Euler method for integrals).
+This is very generic. It allows me to represent continuous signals such as the position of a thrown baseball over time (including interpolation). It's actually a bit too generic, able to represent a lot of nonsense values, such as instantaneous events (which RDP forbids). Such a representation would be difficult and inefficient to work with, and opaque to symbolic analysis. Symbolic analysis is necessary for precise computations on curvy values. A lot of algorithms are non-deterministic on continuous-valued signals due to discrete sampling (e.g. Euler method for integrals).
 
-To avoid this complication in the normal case, Sirea favors discrete varying signals as the primary signal model. A well behaved discrete varying signal will only change at specific times, and will hold each value for a rational period of time. (*Note:* by "discrete varying" I do not mean a continuous signal that has been discretely sampled; rather, precise representation of a signal that naturally varies discretely.) The representation in Sirea looks close to:
+To avoid this complication in the normal case, Sirea favors discrete varying signals as the primary signal model. A well behaved discrete varying signal will only change at specific times, and will hold each value for a rational period of time. (*Note:* by "discrete varying" I do not mean a continuous signal that has been discretely sampled; rather, precise representation of a signal that naturally varies discretely. Since many value types are discrete - e.g. strings, integers - they can only vary discretely.) The representation in Sirea looks close to:
 
     type Sig a = (Maybe a, [(T,Maybe a)]) -- not actually used
 
@@ -76,11 +76,11 @@ Sirea requires a *transparent, symbolic* model for continuous signals - sacrific
 * [trigonometric polynomials](http://en.wikipedia.org/wiki/Trigonometric_polynomial)
 * plain old [polynomials](http://en.wikipedia.org/wiki/Polynomial)
 
-Both of these admit an efficient representation as a vector of coefficients, and precise addition, negation, integral, derivative, and multiplication operations. Precise zero crossings are achievable. Both are potentially suitable for use in video shaders or parallelism with OpenCL. To support most domains, vectors and matrices of these signals would also be supported (e.g. to model a surface, position, or orientation that varies over time). 
+Both of these admit an efficient representation as a vector of coefficients, and precise addition, negation, integral, derivative, and multiplication operations. Precise zero-crossings are achievable (which allows collision detection and switching behaviors). Both are potentially suitable for use in video shaders or parallelism with OpenCL. To support most domains, vectors and matrices of these signals would also be supported (e.g. to model a surface, position, or orientation that varies over time). 
 
-This feature isn't critical to Sirea, and will be provided by a separate library. It is still of some importance since it would be valuable for a lot of user-facing applications (and a few interesting state models). 
+This feature isn't critical to Sirea, and will be provided by a separate library. It is still of some importance since it would be valuable for a lot of user-facing applications (and a few interesting continuous-varying state models). 
 
-*NOTE:* A minor difficulty is that developers need to be careful about delay or peek with piecewise continuous signals: every time the `Sig (T -> a)` is delayed, the `T -> a` values must also be delayed or the two fall out of synch. The necessary discipline can be aided by a behavior transformer. 
+*NOTE:* A minor difficulty is that developers need to be careful about delay or peek with piecewise continuous signals: every time a `Sig (T -> a)` is delayed, the `T -> a` values must also be delayed or the two fall out of synch. The necessary discipline can be aided by a behavior transformer. 
 
 ### Updating Signals
 
@@ -215,12 +215,12 @@ Thus, simple behaviors such as `bdup`, `bfirst`, and `bswap` ultimately allow us
 
 RDP behaviors may be effectful. Consider the following:
 
-    bgetWkey  :: B (S p ()) (S p Bool) 
     bmousepos :: B (S p ()) (S p MousePos)
+    bgetKeyState :: B (S p KeyCode) (S p Bool) 
     bgetfile  :: B (S p FileName) (S p FileState)
     bcamctl   :: B (S p PanTiltZoom) (S p ())
 
-Using effectful behaviors, we can observe the mouse position, obtain file states, and control a camera - just to name a few. There can be effectful behaviors for each resource, and for collections and views of resources. A consequence is a simple type such as: 
+Using effectful behaviors, we can observe the mouse position, obtain file states, and control a camera - just to name a few. (The trivial input signal for bmousepos is still relevant for specifying the duration of observation.) There can be effectful behaviors for each resource, and for collections and views of resources. A consequence is a simple type such as: 
    
     bmain     :: B (S p ()) (S p ())
 

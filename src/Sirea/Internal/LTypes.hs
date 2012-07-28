@@ -198,13 +198,14 @@ su_delay dt = if (0 == dt) then id else \ su ->
 data SigSt a = SigSt
     { st_signal :: !(Sig a)    -- signal value
     , st_stable :: !(Maybe T)  -- signal stability
-    , st_expect :: !Bool       -- recent `touch`
+    , st_expect :: !Bool       -- expecting an update?
     }
 
 -- st_zero is an initial SigSt value.
 st_zero :: SigSt a
 st_zero = SigSt { st_signal = s_never, st_stable = Nothing, st_expect = False }
 
+-- st_poke is called by ln_touch to indicate expected updates
 st_poke :: SigSt a -> SigSt a
 st_poke st = st { st_expect = True }
 
@@ -225,7 +226,7 @@ st_sigup su st =
     assert (monotonicStability oldStability newStability) $
     SigSt { st_signal = sigWithUpdate
           , st_stable = newStability
-          , st_expect = False 
+          , st_expect = False -- no longer expecting update
           } 
 
 -- for some extra validation and debugging, ensure that stability

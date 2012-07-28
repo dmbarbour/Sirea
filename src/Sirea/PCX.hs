@@ -188,7 +188,7 @@ newPCX =
 -- NOTE: it would be trivial to extend PCX with resources accessed by Ordinal.
 -- (Even via a Resource, this could be done.)
 -- Might be worth doing to support rich resources with dynamic behaviors.
- 
 
+-- TODO: maybe add support for ordinal-indexed spaces for state and demand monitors.
 
 

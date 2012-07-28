@@ -2,6 +2,8 @@
 
 module Sirea.Internal.BCompile
     ( compileB
+    , compileBC0
+    , compileBC1
 --    , latencyB
     ) where
 

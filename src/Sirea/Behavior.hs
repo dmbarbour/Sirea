@@ -268,7 +268,7 @@ bskip f = binr >>> bleft f >>> bmerge
 -- staticSwitch :: (BSum b) => Bool -> b x (x :|: x)
 -- staticSwitch choice = if choice then binl else binr
 
--- | bconjoin is a partial merge, extracting from a sum. 
+-- | bconjoin is a partial merge, factoring a common element from a sum. 
 bconjoinl :: (BSum b, BProd b) => b ((x :&: y) :|: (x :&: z)) (x :&: (y :|: z))
 bconjoinr :: (BSum b, BProd b) => b ((x :&: z) :|: (y :&: z)) ((x :|: y) :&: z)
 bconjoinl = bdup >>> (isolateX *** isolateYZ)
@@ -295,7 +295,7 @@ bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
 -- to represent the split. Utility disjoins (bdisjoin(l|r)(k?)(z?))
 -- cover some duals to conjoin, albeit for more specific types.
 --
---     bdisjoin - primitive disjoin; painful to use directly
+--     bdisjoin - primitive disjoin; often painful to use directly
 --     bdisjoin :: b (x :&: ((S p () :&: y) :|: z))
 --                   ((x :&: y) :|: (x :&: z))
 --
@@ -505,31 +505,28 @@ class (Behavior b, Behavior b') => BDynamic b b' where
     -- 
     beval :: (SigInP p x) => DT -> b (S p (b' x y) :&: x) (y :|: S p ())
 
-    -- | bexec will eval, dropping the result. The success signal is 
-    -- a simple reduction of the behavior signal. Since the response
-    -- isn't used, there is no latency introduced for bexec in order
-    -- to obtain the response; i.e. bexec operates in parallel with
-    -- any following behaviors.
-    --
-    -- The default implementation is in terms of beval; override for
-    -- performance if necessary.
-    bexec :: (SigInP p x) => b (S p (b' x y_) :&: x) (S p () :|: S p ())
-    bexec = prep >>> beval 0
-        where prep = bfirst (bfmap f &&& bconst ()) >>> bassocrp
-              f b' = bsecond b' >>> bfst -- modifies b'
+-- | bexec will eval, dropping the result. This is a very common
+-- pattern, and has the advantage of not needing a DT estimate.
+-- The response is simple reduction from the signal carrying b'.
+bexec :: (BDynamic b b', SigInP p x) => b (S p (b' x y_) :&: x) (S p ())
+bexec = bsynch >>> bprep >>> bvoid (beval 0) >>> bsnd >>> bfst
+    where -- (x~>y & x) ~> ((u&x)~>u & (u&x))
+          bprep = bfirst bdup >>> (bfmap modb *** bconst ()) >>> bassocrp 
+          -- (x~>y) -> ((u&x)~>u); guarantees 0 delay
+          modb b' = bsecond b' >>> bfst
 
 -- | bevalOrElse use the `x` signal for a fallback behavior.
 -- This performs the necessary dup and disjoin operations to
 -- make `x` available during failure cases.
-bevalOrElse :: (SigInP p x, BDynamic b b') => DT -> b (S p (b' x y) :&: x) (y :|: x)
-bevalOrElse dt = bsecond bdup >>> bassoclp >>> bfirst (beval dt)
+bevalOrElse :: (SigInP p x, BDynamic b b') => DT -> b (S p (b' x y) :&: x) (y :|: (S p () :&: x))
+bevalOrElse dt = bsynch >>> bsecond bdup >>> bassoclp >>> bfirst (beval dt)
              -- now have (y :|: S p ()) :&: x 
              >>> bfirst (bmirror >>> bleft bdup) >>> bswap 
              -- now have x :&: ((S p () :&: S p ()) :|: y)
              >>> bdisjoin
              -- now have ((x :&: S p ()) :|: (x :&: y))
-             >>> bleft bfst >>> bmirror >>> bleft bsnd
-             -- now have (y :|: x)
+             >>> bleft bswap >>> bmirror >>> bleft bsnd
+             -- now have (y :|: (S p () :&: x))
 
 -- WISHLIST: a behavior-level map operation.
 --
@@ -540,20 +537,24 @@ bevalOrElse dt = bsecond bdup >>> bassoclp >>> bfirst (beval dt)
 --  
 --  Currently this can be achieved with beval, but would not be very 
 --  efficient since it may need to rebuilt whenever an element in a
---  collection is modified.  
+--  collection is modified. Native support could make it efficient.
 --
 --  I'm not sure HOW to do much better, except maybe to create types
---  for collections of behaviors. If SL is a set of complex signals
+--  for collections of behaviors. If V is a vector of complex signals
 --  of a common type:
---     map       :: B x y -> B (SL x) (SL y)
---     singleton :: B x (SL x)
---     cons      :: B (x :&: SL x) (SL x)
---     foldl     :: B (y :&: x) y -> B (y :&: SL x) y
+--     map       :: B x y -> B (V x) (V y)
+--     singleton :: B x (V x)
+--     cons      :: B (x :&: V x) (V x)
+--     append    :: B (V x :&: V x) (V x)
+--     foldl     :: B (y :&: x) y -> B (y :&: V x) y
 --  But I don't want to complicate Sirea with a new signal type, and
 --  it isn't clear that this would help. Might be better to stick
 --  with type-level operators like:  (x :&: (x :&: (x :&: (x ...
 --
-
+--  Even without vector support like this, we can achieve efficient
+--  large collections processing if we use intermediate state to 
+--  index and restructure big data into a stable tree. I.e. then we
+--  only need to rebuild small sections of that tree. 
 
 -- TODO: convenience operators?
 --  I've added Bdeep - eqvs. of bcadadr and setf bcadadr from Lisp

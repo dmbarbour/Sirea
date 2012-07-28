@@ -15,7 +15,7 @@ module Sirea.Internal.BImpl
     , inlB, leftB, mirrorB, assoclsB, mergeB, splitB -- BSum
     , disjoinB
     , fmapB, constB, touchB, stratB, adjeqfB -- BFmap
-    , delayB, synchB, forceDelayB, peekB -- temporal
+    , tshiftB, tshiftB', delayB, synchB, forceDelayB, peekB -- temporal
 
     -- miscellaneous
     , unsafeSigZipB
@@ -27,6 +27,7 @@ module Sirea.Internal.BImpl
     , undeadB
     , keepAliveB
     , unsafeAutoSubscribeB, OnSubscribe, UnSubscribe
+    , builtTshift -- for BDynamic
     ) where
 
 import Prelude hiding (id,(.))
@@ -523,6 +524,42 @@ unwrapStrat (Just x) = runEval (Just <$> x)
 adjeqfB :: (Eq x) => B w (S p x) (S p x)
 adjeqfB = mkLnkB id $ mkLnkPure lnAdjeqf
     where lnAdjeqf = ln_lumap $ ln_sumap $ su_fmap $ s_adjeqf (==)
+
+
+-- | tshiftB achieves a declarative delay, via B_latent and B_mkLnk.
+-- The given function not only computes the delay, it applies the
+-- delay if there is a change in ldt_curr values.
+tshiftB :: TS x -> B w x x
+tshiftB = latentOnTime . tshiftB' 
+
+tshiftB' :: TS x -> LnkD LDT x -> B w x x
+tshiftB' fn t0 = B_mkLnk fn lnk
+    where tf  = fn t0
+          lnk = MkLnk { ln_build = return . buildTshift t0 tf
+                      , ln_tsen = False, ln_peek = 0 }
+
+-- buildTshift will apply delays based on before/after LDT values
+--  asserts latency is non-decreasing
+--  no post-compile cost for links that aren't delayed
+buildTshift :: LnkD LDT x -> LnkD LDT x -> Lnk x -> Lnk x
+buildTshift _ _ LnkDead = LnkDead
+buildTshift t0 tf (LnkProd x y) =
+    let opx = buildTshift (lnd_fst t0) (lnd_fst tf) x in
+    let opy = buildTshift (lnd_snd t0) (lnd_snd tf) y in
+    LnkProd opx opy
+buildTshift t0 tf (LnkSum x y) =
+    let opx = buildTshift (lnd_left  t0) (lnd_left  tf) x in
+    let opy = buildTshift (lnd_right t0) (lnd_right tf) y in
+    LnkSum opx opy
+buildTshift t0 tf (LnkSig lu) = 
+    let dt0 = lnd_sig t0 in
+    let dtf = lnd_sig tf in
+    let dtDiff = (ldt_curr dtf) - (ldt_curr dt0) in
+    assert (dtDiff >= 0) $
+    if (0 == dtDiff) then LnkSig lu else
+    LnkSig (ln_sumap (su_delay dtDiff) lu)
+
+
 
 -- | delay a signal (logically)
 delayB :: DT -> B w x x

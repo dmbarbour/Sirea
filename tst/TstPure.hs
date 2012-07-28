@@ -74,13 +74,25 @@ allTests = tstConst >>> tstFmap >>> tstZip >>> tstSwap >>> tstAssocp
 rotateI :: BCX w (S p ()) (S p Int)
 rotateI = bclockOfFreq 10 >>> bfmap tkI
     where tkI = fromInteger . (`div` sTenth) . (`mod` sTen) . tmNanos
-          sTen = 10000000000   -- 10 seconds
-          sTenth = 100000000   -- 100 milliseconds
+          sTen   = 10000000000   -- 10 seconds
+          sTenth =   100000000   -- 100 milliseconds
 
 cascade :: BCX w (S P0 ()) (S P0 Int :|: S P0 Int)
-cascade = rotateI >>> bsplitOn (\ x -> (x `mod` 20 >= 10)) >>> (bprint show +++ bprint (\x -> "      " ++ show x))
+cascade = rotateI >>> bsplitOn (\ x -> (x `mod` 20 < 10)) >>> (bprint show +++ bprint (\x -> "      " ++ show x))
 
-
+-- maybe a behavior that uses anticipation:
+--  rotateI, anticipate at 0.12, 0.24, 0.36.
+--           print sequences of four values, one per line.
+--seqmon :: BCX w (S P0 ()) (S P0 ()) 
+seqmon :: BCX w (S P0 ()) (S P0 ())
+seqmon = bvoid $ rotateI >>> takeFour >>> joinFour >>> bprint show
+    where takeFour = bfmap Left &&& (bpeek 0.12 &&& (bpeek 0.24 &&& bpeek 0.36))
+          j4 (Left x1) (Left x2) (Left x3) (Left x4) = [x1,x2,x3,x4]
+          j4 _ _ _ _ = []
+          joinFour = bfirst (bfmap j4) >>>
+                     bassoclp >>> bfirst bzap >>>
+                     bassoclp >>> bfirst bzap >>> bzap 
+                              
 
 -- tests to perform:
 --  delay and synch
