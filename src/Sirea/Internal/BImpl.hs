@@ -11,8 +11,8 @@
 -- Exposed behaviors for users will be re-exported elsewhere.
 module Sirea.Internal.BImpl
     ( fwdB
-    , fstB, firstB, swapB, assoclpB, dupB, zapB -- BProd 
-    , inlB, leftB, mirrorB, assoclsB, mergeB, splitB -- BSum
+    , s1iB, s1eB, trivialB, firstB, swapB, assoclpB, dupB, zapB -- BProd 
+    , s0iB, s0eB, vacuousB, leftB, mirrorB, assoclsB, mergeB, splitB -- BSum
     , disjoinB
     , fmapB, constB, touchB, stratB, adjeqfB -- BFmap
     , tshiftB, tshiftB', delayB, synchB, forceDelayB, peekB -- temporal
@@ -75,10 +75,34 @@ mkLnkB = B_mkLnk
 fwdB :: B w x x 
 fwdB = mkLnkB id $ mkLnkPure id
 
--- in fstB, snd output is dead. 
-fstB :: B w (x :&: y) x
-fstB = mkLnkB lnd_fst $ mkLnkPure lnFst
-    where lnFst ln = LnkProd ln LnkDead 
+-- introduce S1. This creates an imaginary signal out of nothing.
+s1iB :: B w x (S1 :&: x)
+s1iB = mkLnkB trTriv $ mkLnkPure lnTriv
+    where trTriv tx =
+            let t1 = LnkDUnit $ LDT { ldt_curr = ldt_maxCurr tx
+                                    , ldt_goal = ldt_maxGoal tx
+                                    , ldt_live = ldt_anyLive tx }
+            in LnkDProd t1 tx
+          lnTriv ln =
+            let ln1 = ln_fst ln in
+            let lnx = ln_snd ln in
+            assert (ln_dead ln1) lnx
+            
+-- eliminate S1
+s1eB :: B w (S1 :&: x) x
+s1eB = mkLnkB trTriv $ mkLnkPure lnTriv
+    where trTriv = lnd_snd
+          lnTriv x = LnkProd LnkDead x
+
+-- trivialB - S1 is a final state; anything else should be dead
+-- code, so go ahead and validate this property.
+trivialB :: B w x S1
+trivialB = mkLnkB trTriv $ mkLnkPure lnTriv
+    where trTriv x = LnkDUnit $ LDT { ldt_curr = ldt_maxCurr x
+                                    , ldt_goal = ldt_maxGoal x
+                                    , ldt_live = ldt_anyLive x }
+          lnTriv ln1 = assert (ln_dead ln1) LnkDead 
+
 
 -- simple swap on Lnk sinks
 swapB :: B w (x :&: y) (y :&: x)
@@ -126,10 +150,37 @@ lnDeepDup (LnkSum x1 y1) xy2 =
 lnDeepDup (LnkSig x) rhs = 
     LnkSig (ln_append x (ln_lnkup rhs))
            
--- if inl, can ignore the right bucket
+{-- if inl, can ignore the right bucket
 inlB :: B w x (x :|: y)
 inlB = mkLnkB trinl $ mkLnkPure ln_left
-    where trinl tr = LnkDSum tr (tr_dead tr)
+    where trinl tr = LnkDSum tr (tr_dead tr) -}
+
+-- introduce a vacuous signal (old role of inlB)
+s0iB :: B w x (S0 :|: x)
+s0iB = mkLnkB trVac $ mkLnkPure lnVac
+    where trVac tx = LnkDSum (tr_dead tx) tx
+          lnVac ln =
+            let l0 = ln_left ln in
+            let lx = ln_right ln in
+            assert (ln_dead l0) lx
+
+-- eliminate a vacuous signal (implicitly performed by mergeB)
+s0eB :: B w (S0 :|: x) x
+s0eB = mkLnkB trVac $ mkLnkPure lnVac
+    where trVac t0x =
+            let t0 = lnd_left t0x in
+            let tx = lnd_right t0x in
+            assert ((not . ldt_live . lnd_sig) t0) tx
+          lnVac lx = LnkSum LnkDead lx
+
+-- prove anything from nothing
+vacuousB :: B w S0 x
+vacuousB = mkLnkB trVac $ mkLnkPure lnVac
+    where trVac t0 = 
+            let ldt = lnd_sig t0 in
+            assert ((not . ldt_live) t0) $
+            LnkDUnit ldt
+          lnVac lx = assert (ln_dead lx) LnkDead
 
 -- simple rearrangement
 mirrorB :: B w (x :|: y) (y :|: x)

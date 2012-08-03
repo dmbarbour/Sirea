@@ -121,6 +121,69 @@ evalSynched ldt =
     (ldt_maxGoal ldt == ldt_minCurr ldt)
 
     
+mkLnkEval :: (SigMembr x) => MkLnk w (S p (B w x y) :&: x) y
+mkLnkEval = MkLnk { ln_build = buildEval
+                  , ln_tsen = True, ln_peek = 0 }
+
+buildEval :: (SigMembr x) => Lnk y -> IO (Lnk ((S p (B w x y)) :&: x)
+buildEval lnyFinal = 
+    -- I cannot use lny directly; I need to merge the inputs from
+    -- each dynamic behavior. So I construct many lny values, one
+    -- for each behavior, that merge into lny.
+    mkMergeLnkFactory lnyFinal >>= \ lnyFac ->
+    newIORef 0 >>= \ rfIdx ->
+    let mkLny = takeIdx rfIdx >>= lnyFac in
+    let compile b = mkLny >>= compileBC1 b in
+
+    -- I'll certainly need a record of the compiled behaviors.
+    -- This will be [(T,Lnk x)], with the last signal in the
+    -- list always receiving the full future of the `x` input
+    -- signals. We'll anticipate several seconds of future for
+    -- dynamic behaviors.
+    newIORef [] >>= \ rfBLnk -> 
+
+    -- TODO: I generically need a membrane for the full set of `x`
+    -- inputs (and may as well include the B w x y input...). This
+    -- membrane must indicate for each signal:
+    --  the current record of that signal
+    --  the update time for that signal (if updated since last send)
+    --  whether signal has been touched
+    -- For simplicity, go ahead and delay updates of `beval` until
+    -- all input signals are available. 
+    --  whether the signal has been 
+
+    -- I need a few records with respect to Sig (B w x y) in 
+    -- particular:
+    --  (a) of the current and future behavior signal (SigSt)
+    --  (b) of the currently compiled, active behaviors [(T,Lnk x)]
+    -- After any update to (a) I'll generally need to update every
+    -- element in (b). 
+    newIORef st_zero >>= \ rfBSig ->
+    newIORef [] >>= \ rfBComp ->
+
+    -- only need to compile the last phase of the
+    -- behaviors (compileBC0 is performed by evalB).
+
+    -- I need to store some information about 
+    newIORef st_zero
+
+
+        
+     
+                
+    
+
+    -- 
+    undefined
+    
+
+-- a trivial function for sequential indexes
+takeIdx :: IORef Int -> IO Int
+takeIdx rf =
+    readIORef rf >>= \ n0 ->
+    let n = succ n0 in
+    writeIORef rf n >>
+    return $! n
 
 
 
@@ -253,11 +316,6 @@ fnModifyEvaluationIdx idx fn (x@(n,st):r) =
     (n,fn st):r
  
 
--- NOTE: remember to `touch` multiple signals for updates on dynamic input to eval
-
-
-emitEvalResult :: IORef [(_, SigSt a)] -> LnkUp a -> IO ()
-            
             
 -- CONCERN:
 --   At moment, don't have any way to produce an `Lnk x` from

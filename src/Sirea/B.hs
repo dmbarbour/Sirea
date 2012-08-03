@@ -48,14 +48,20 @@ instance BFmap (B w) where
 instance BProd (B w) where
     bfirst   = firstB
     bdup     = dupB
-    bfst     = fstB
+    --bfst     = fstB
+    b1i      = s1iB
+    b1e      = s1eB
+    btrivial = trivialB
     bswap    = swapB
     bassoclp = assoclpB
 instance BSum (B w) where
     bleft    = leftB
     bmirror  = mirrorB
     bmerge   = mergeB
-    binl     = inlB
+    --binl     = inlB
+    b0i      = s0iB
+    b0e      = s0eB
+    bvacuous = vacuousB
     bassocls = assoclsB
 instance BZip (B w) where
     bzap     = zapB

@@ -12,15 +12,16 @@
 -- For concrete behavior types, see Sirea.B or Sirea.BCX. 
 -- For partition management behaviors, see Sirea.Partition.
 module Sirea.Behavior  
-    ( (:&:), (:|:), S, SigInP
+    ( (:&:), (:|:), S, S0, S1, SigInP
     , (>>>) -- from Control.Category
     , bfwd
     , BFmap(..), bforce, bspark, bstratf
-    , BProd(..), bsecond, bsnd, bassocrp, (***), (&&&), bvoid
-    , BSum(..), bright, binr, bassocrs, (+++), (|||), bskip 
+    , BProd(..), bfst, bsecond, bsnd, bassocrp, (***), (&&&), bvoid
+    , BSum(..), binl, bright, binr, bassocrs, (+++), (|||), bskip 
     , bconjoinl, bconjoinr
     , BDisjoin(..), bdisjoinl, bdisjoinlz, bdisjoinlk, bdisjoinlkz
     ,               bdisjoinr, bdisjoinrz, bdisjoinrk, bdisjoinrkz
+    , bIfThenElse, bUnless, bWhen -- utility
     , BZip(..), bzipWith, bunzip
     , BSplit(..), bsplitWith, bsplitOn, bunsplit
     , BTemporal(..), BPeek(..)
@@ -172,18 +173,22 @@ bstratf runF = bfmap (runF . fmap return) >>> bstrat
 --
 --     bfirst - operate on the first signal
 --     bdup - duplicate any signal, new parallel pipeline
---     bfst - keep the first signal, drop the second.
 --     bswap - products are commutative
 --     bassoclp - products are associative (move parens left)
+--     b1i - introduce an S1 signal (identity for :&:)
+--     b1e - eliminate an S1 signal
+--     btrivial - convert anything to the S1 signal
 --
 -- The above operations should be free at runtime (after compile).
 -- bdup has a trivial cost in Haskell (since we alias the value 
--- representation).
+-- representation). The last three are to match categories, but
+-- you'll typically use bfst or bsnd instead.
 --
 -- A few operations are defined from the primitives: 
 --
---     bsecond - operate on the second signal
+--     bfst - keep the first signal, drop the second.
 --     bsnd - keep second signal, drop first
+--     bsecond - operate on the second signal
 --     bassocrp - products are associative (move parens right)
 --     (***) - operate on first and second in parallel
 --     (&&&) - create and define multiple pipelines at once
@@ -192,20 +197,24 @@ bstratf runF = bfmap (runF . fmap return) >>> bstrat
 class (Category b) => BProd b where
     bfirst   :: b x x' -> b (x :&: y) (x' :&: y)
     bdup     :: b x (x :&: x)
-    bfst     :: b (x :&: y) x
     bswap    :: b (x :&: y) (y :&: x)
     bassoclp :: b (x :&: (y :&: z)) ((x :&: y) :&: z)
+    b1i      :: b x (S1 :&: x)
+    b1e      :: b (S1 :&: x) x
+    btrivial :: b x S1
 
+bfst     :: (BProd b) => b (x :&: y) x
 bsecond  :: (BProd b) => b y y' -> b (x :&: y) (x :&: y')
 bsnd     :: (BProd b) => b (x :&: y) y
 bassocrp :: (BProd b) => b ((x :&: y) :&: z) (x :&: (y :&: z))
 (***)    :: (BProd b) => b x x' -> b y y' -> b (x :&: y) (x' :&: y')
 (&&&)    :: (BProd b) => b x y  -> b x z  -> b x (y :&: z)
 bswap3   :: (BProd b) => b ((x :&: y) :&: z) (z :&: (y :&: x))
-bvoid    :: (BProd b) => b x y  -> b x x
+bvoid    :: (BProd b) => b x y -> b x x
 
 bsecond f = bswap >>> bfirst f >>> bswap
-bsnd = bswap >>> bfst
+bsnd = bfirst btrivial >>> b1e
+bfst = bswap >>> bsnd
 bassocrp = bswap3 >>> bassoclp >>> bswap3
 bswap3 = bfirst bswap >>> bswap
 (***) f g = bfirst f >>> bsecond g
@@ -224,9 +233,11 @@ bvoid f = bdup >>> bfirst f >>> bsnd
 --
 --     bleft - apply behavior only to left path.
 --     bmerge - combine elements of a sum (implicit synch)
---     binl - constant choose left; i.e. if true
 --     bmirror - sums are commutative; flip left and right
 --     bassocls - sums are associative (shift parens left)
+--     b0i - introduce the S0 signal (identity for :|:)
+--     b0e - eliminate the S0 signal
+--     bvacuous - convert S0 signal into anything
 --
 -- Excepting bmerge, the above operations should be free at runtime.
 -- bmerge has an overhead similar to bzip (in some cases it might be
@@ -235,8 +246,9 @@ bvoid f = bdup >>> bfirst f >>> bsnd
 --
 -- A few more utility operations are defined from the primitives:
 --
---     bright - apply behavior only to the right path
+--     binl - constant choose left; i.e. if true
 --     binr - constant choose right; i.e. if false
+--     bright - apply behavior only to the right path
 --     bassocrs - sums are associative (shift parens right)
 --     (+++) - apply operations to both paths 
 --     (|||) - apply operations to both paths then merge them
@@ -246,19 +258,24 @@ class (Category b) => BSum b where
     bleft    :: b x x' -> b (x :|: y) (x' :|: y)
     bmirror  :: b (x :|: y) (y :|: x)
     bmerge   :: b (x :|: x) x
-    binl     :: b x (x :|: y)
     bassocls :: b (x :|: (y :|: z)) ((x :|: y) :|: z)
+    b0i      :: b x (S0 :|: x)
+    b0e      :: b (S0 :|: x) x
+    bvacuous :: b S0 x
 
-bright   :: (BSum b) => b y y' -> b (x :|: y) (x :|: y')
+
+binl     :: (BSub b) => b x (x :|: y)
 binr     :: (BSum b) => b y (x :|: y)
+bright   :: (BSum b) => b y y' -> b (x :|: y) (x :|: y')
 bassocrs :: (BSum b) => b ((x :|: y) :|: z) (x :|: (y :|: z))
 (+++)    :: (BSum b) => b x x' -> b y y' -> b (x :|: y) (x' :|: y')
 (|||)    :: (BSum b) => b x z  -> b y z  -> b (x :|: y) z
 bmirror3 :: (BSum b) => b ((x :|: y) :|: z) (z :|: (y :|: x))
 bskip    :: (BSum b) => b y x -> b x x
 
+binr = b0i >>> bleft bvacuous
+binl = binr >>> bmirror
 bright f = bmirror >>> bleft f >>> bmirror
-binr = binl >>> bmirror
 bassocrs = bmirror3 >>> bassocls >>> bmirror3
 (+++) f g = bleft f >>> bright g
 (|||) f g = (f +++ g) >>> bmerge
@@ -268,7 +285,8 @@ bskip f = binr >>> bleft f >>> bmerge
 -- staticSwitch :: (BSum b) => Bool -> b x (x :|: x)
 -- staticSwitch choice = if choice then binl else binr
 
--- | bconjoin is a partial merge, factoring a common element from a sum. 
+-- | bconjoin (aka "factor") is a partial merge, factoring a common 
+-- element from a sum. (The name refers to conjunctive form.)
 bconjoinl :: (BSum b, BProd b) => b ((x :&: y) :|: (x :&: z)) (x :&: (y :|: z))
 bconjoinr :: (BSum b, BProd b) => b ((x :&: z) :|: (y :&: z)) ((x :|: y) :&: z)
 bconjoinl = bdup >>> (isolateX *** isolateYZ)
@@ -276,19 +294,15 @@ bconjoinl = bdup >>> (isolateX *** isolateYZ)
           isolateYZ = (bsnd +++ bsnd)
 bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
 
--- | Disjoin will propagate a split on one signal to other signals 
--- in the asynchronous product. This doesn't happen magically; there
--- must be a signal representing the split (only one branch needed)
--- in the same partition as the signal being split. To distribute a 
--- decision across multiple partitions requires explicit propagation
--- of the signal representing the split condition, ensuring explicit
--- communication.
+-- | Disjoin (aka "distribute") will apply a split across elements
+-- that are outside of that split. This doesn't happen magically; a
+-- signal representing the split must start in the *same partition*
+-- as the signals being split, i.e. a spatial constraint. 
 --
--- Disjoin is necessary for effective use of choice in RDP. Patterns
--- using bsplit will typically need bdisjoin to access signals that
--- are available in context. Without disjoin, one can split signals 
--- via intermediate state (split would happen on query), but disjoin
--- is a more primitive and pure mechanism.
+-- I favor the word `disjoin` (refering to disjunctive form) because
+-- distribution has other connotations for spatial semantics. To
+-- perform disjoin across partitions requires explicit distribution
+-- of the signal representing the split.
 --
 -- Disjoin is dual to conjoin, though this property is obfuscated by
 -- the partition types and the explicit decision for which signal is
@@ -299,8 +313,8 @@ bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
 --     bdisjoin :: b (x :&: ((S p () :&: y) :|: z))
 --                   ((x :&: y) :|: (x :&: z))
 --
---        S p () - unit signal representing split
---        x - signal being split, may be complex
+--        S p () - unit signal representing split 
+--        x - signal being split, may be complex (for x in p)
 --        y - preserved signal on left
 --        z - preserved signal on right
 --
@@ -346,6 +360,46 @@ bdisjoinr   = bswap >>> bdisjoinl   >>> (bswap +++ bswap)
 bdisjoinrk  = bswap >>> bdisjoinlk  >>> (bswap +++ bswap)
 bdisjoinrz  = bswap >>> bdisjoinlz  >>> (bswap +++ bswap)
 bdisjoinrkz = bswap >>> bdisjoinlkz >>> (bswap +++ bswap)
+
+-- | bIfThenElse expresses a common pattern seen in many functional
+-- languages, but in the context of continuous RDP signals. It will
+-- test a condition in an environment `x`, choose the left or right
+-- path (onTrue +++ onFalse), then merge the results. This is a lot
+-- of responsibilities; often, it would be preferable to keep an 
+-- open conditional expression (y :|: y), or to preserve information
+-- computed while testing the condition. However, when we want a
+-- quick and dirty conditional, this can be convenient.
+bIfThenElse :: (BDisjoin b, SigInP p x)
+            => b x (S p () :|: S p ()) -- decision
+            -> b x y -- onTrue
+            -> b x y -- onFalse
+            -> b x y -- total bIfThenElse expression
+bIfThenElse cond onTrue onFalse =
+    bdup >>> bfirst (cond >>> bleft (b1i >>> bswap)) >>> bswap >>> 
+    -- at (x :&: ((S p () :&: S1) :|: S p ())
+    bdisjoin >>> (bfst +++ bfst)
+    -- at (x :&: S1) :|: (x :&: S p ())
+    (bfst +++ bfst) >>>
+    -- at (x :|: x)
+    (onTrue +++ onFalse) >>>
+    -- at (y :|: y)
+    bmerge -- at y
+    
+-- | bUnless and bWhen serve a similar role to the unless and when
+-- operations defined in Control.Monad. They are performed for
+-- continuous side-effects based on a condition.
+bUnless, bWhen :: (BDisjoin b, SigInP p x)
+        => b x (S p () :|: S p ()) -- decision
+        -> b x y_ -- action; drops response
+        -> b x x -- unless or when operation
+bUnless cond = bWhen (bmirror . cond) 
+bWhen cond action = bvoid $
+    bdup >>> bfirst (cond >>> bleft (b1i >>> bswap)) >>> bswap >>>
+    -- at (x :&: ((S p () :&: S1) :|: S p ())
+    bdisjoin >>>
+    -- at (x :&: S1) :|: (x :&: S p ())
+    bleft (bfirst action)
+
 
 -- | BZip is a behavior for combining elements of an asynchronous 
 -- product. The main purpose is to combine them to apply a Haskell
@@ -494,6 +548,13 @@ class (BTemporal b) => BPeek b where
 -- 
 -- All arguments for dynamic behaviors are implicitly synchronized.
 -- The `y` results are also synchronized, with a constant DT. 
+--
+-- NOTE: BDynamic has two behavior types, b b'. This is primarily
+-- to support arrow transforms; not every transformed behavior type
+-- can be used as dynamic behavior. For other behavior wrappers or
+-- DSLs, I suggest compilation behavior separate from evaluation.
+-- E.g. compile to `B w x y`, compose further if desired, then use
+-- `beval` to execute.  
 class (Behavior b, Behavior b') => BDynamic b b' where
     -- | evaluate a dynamic behavior and obtain the response. The DT
     -- argument indicates the maximum latency for dynamic behaviors,

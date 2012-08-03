@@ -4,7 +4,7 @@
 module Sirea.Internal.STypes
     ( (:&:)
     , (:|:)
-    , S
+    , S, S0, S1
     , SigInP
     , SigMembr, BuildMembr(..), buildMembr
     ) where 
@@ -47,6 +47,25 @@ infixr 2 :|:
 -- extra threads should be constructed when behavior is initiated.
 data S p a
 
+-- a local version of Void (not exported)
+data Void
+
+-- | S0 is the identity type for (:|:). It is a signal that is never
+-- active. There are no valid values for it, so it cannot be active.
+-- Its existence is for type-level operations, and match signatures
+-- to various category and arrow models that need sum identity.
+--
+-- S0 is an non-existent signal. 
+type S0 = S () Void
+
+-- | S1 is the identity type for (:&:). It is a signal that is never
+-- utilized. It's stuck in a limbo partition, so cannot be accessed.
+-- Its existence is for type-level operations, and match signatures
+-- to various category and arrow models that need product identity.
+--
+-- S1 is an imaginary signal.
+type S1 = S Void ()
+
 -- might add support for continuous signals? C p x? rather not, though.
 -- might add support for collections? (L x) for list of x?
 
@@ -84,24 +103,17 @@ buildMembr = sigMembr
 -- | (SigInP p x) constrains that complex signal x exists entirely
 -- in partition p. This avoids need for implicit bcross in disjoin
 -- and eval behaviors, while allowing them to be reasonably generic.
--- 
--- This already has a complete definition. It is not for extension
--- by Sirea clients.
-class (SigMembr x) => SigInP p x where
-    proofOfSigInP :: ProofOfSigInP p x 
+--
+-- Not intended for extension by clients of Sirea.
+class (SigMembr x, HasSigInP p x) => SigInP p x
+instance SigInP p (S p x)
+instance (SigInP p x, SigInP p y) => SigInP p (x :&: y)
+instance (SigInP p x, SigInP p y) => SigInP p (x :|: y)
 
-data ProofOfSigInP p x 
-trivialSigInP :: ProofOfSigInP p x
-trivialSigInP = undefined
-
-instance SigInP p (S p x) where
-    proofOfSigInP = trivialSigInP
-
-instance (SigInP p x, SigInP p y) => SigInP p (x :&: y) where
-    proofOfSigInP = trivialSigInP
-
-instance (SigInP p x, SigInP p y) => SigInP p (x :|: y) where
-    proofOfSigInP = trivialSigInP
+-- would like something that `selects` a signal in p, and extracts a
+-- unit signal, in a generic way... that would certainly make disjoin
+-- easier to express. This sort of type-driven program would be easy
+-- to express in Coq...
 
 -- Data.Typeable support. 
 
