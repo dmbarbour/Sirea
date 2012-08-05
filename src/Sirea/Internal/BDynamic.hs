@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeOperators, GADTs #-}
 
 -- | Implementation of the Dynamic behavior type for B.
 -- Evaluation will logically sync the inputs, then 
@@ -19,8 +19,10 @@ import Data.Maybe (isNothing)
 import Sirea.Internal.BTypes
 import Sirea.Internal.STypes
 import Sirea.Internal.LTypes
-import Sirea.Internal.BImpl (synchB, forceDelayB)
+import Sirea.Internal.BImpl 
+import Sirea.Internal.BCompile
 import Sirea.Time
+import Sirea.Signal
 --import Sirea.Internal.BImpl
 
 -- Evaluate a behavior provided dynamically.
@@ -46,20 +48,27 @@ import Sirea.Time
 -- 
 evalB :: (SigInP p x) => DT -> B w (S p (B w x y) :&: x) (y :|: S p ())
 evalB dt = 
-    synchB >>> forceDelayB >>> 
-    -- now have nice, cleanly synched behaviors
-    (B_latent . B_first . fmapB . evalPrep dt . lnd_snd) >>>
-    -- after evPrep, have (S p (Either (B w x y) ()) :&: x)
+    -- synchronization and preparation (& initial compile step)
+    synchB >>> forceDelayB >>> evalPrepB dt >>>
+    -- after evalPrep, have (S p (Either (B w x y) ()) :&: x)
     B_first (splitB >>> mirrorB >>> B_left dupB) >>> swapB >>>
-    -- have ((S p (B w x y) :|: S p ()) :&: x)
-    B_first (mirrorB >>> B_left dupB) >>> swapB >>> 
     -- have (x :&: ((S p () :&: S p ()) :|: S p (B w x y)))
     disjoinB >>>
     -- have ((x :&: S p ()) :|: (x :&: S p (B w x y))
-    B_left (swapB >>> fstB) >>> mirrorB >>> B_left swapB >>> 
-    -- now have (S p (B w x y) :&: x) :|: S p ()
-    -- time for the real eval workhorse...
+    B_left sndB >>> mirrorB >>> B_left swapB >>> 
+    -- now have (S p (B w x y) :&: x) :|: S p (); will eval on left
     B_left (B_mkLnk (trEval dt) mkLnkEval)
+
+-- apply first compilation stage to the input behavior, and filter
+-- behaviors that won't fit into given time `dt`.
+evalPrepB :: DT -> B w (S p (B w x y) :&: x) ((S p (Either (B w x y) ())) :&: x)
+evalPrepB dt = B_latent $ \ tbx ->
+    let tx = lnd_snd tbx in
+    B_first (fmapB (evalPrep dt tx))
+
+-- local implementation of sndB (lack access to Sirea.Behavior)
+sndB :: B w (x :&: y) y
+sndB = B_first trivialB >>> s1eB
 
 -- trEval reports the delay incurred by the eval process
 -- i.e. so that operations using `y` are properly timed
@@ -125,7 +134,7 @@ mkLnkEval :: (SigMembr x) => MkLnk w (S p (B w x y) :&: x) y
 mkLnkEval = MkLnk { ln_build = buildEval
                   , ln_tsen = True, ln_peek = 0 }
 
-buildEval :: (SigMembr x) => Lnk y -> IO (Lnk ((S p (B w x y)) :&: x)
+buildEval :: (SigMembr x) => Lnk y -> IO (Lnk (S p (B w x y) :&: x))
 buildEval lnyFinal = 
     -- I cannot use lny directly; I need to merge the inputs from
     -- each dynamic behavior. So I construct many lny values, one
@@ -141,6 +150,9 @@ buildEval lnyFinal =
     -- signals. We'll anticipate several seconds of future for
     -- dynamic behaviors.
     newIORef [] >>= \ rfBLnk -> 
+    undefined
+
+{-
 
     -- TODO: I generically need a membrane for the full set of `x`
     -- inputs (and may as well include the B w x y input...). This
@@ -165,7 +177,7 @@ buildEval lnyFinal =
     -- behaviors (compileBC0 is performed by evalB).
 
     -- I need to store some information about 
-    newIORef st_zero
+    newIORef st_zero >>
 
 
         
@@ -175,15 +187,16 @@ buildEval lnyFinal =
 
     -- 
     undefined
-    
+    -}
 
 -- a trivial function for sequential indexes
 takeIdx :: IORef Int -> IO Int
 takeIdx rf =
     readIORef rf >>= \ n0 ->
     let n = succ n0 in
+    n `seq` 
     writeIORef rf n >>
-    return $! n
+    return n
 
 
 
@@ -259,7 +272,7 @@ fnMergeEvaluator idx rfSt rfT lu = LnkUp { ln_touch = touch, ln_update = update 
             writeIORef rfSt lSt' >>
             -- track the earliest update time for all updates
             readIORef rfT >>= \ tUp ->
-            let tu = snd <$> su_update su in 
+            let tu = snd <$> su_state su in 
             let tUp' = leastTime tUp tu in
             writeIORef rfT tUp' >>
             -- if no longer expecting updates, emit merged signal

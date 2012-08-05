@@ -19,6 +19,7 @@ module Sirea.Link
 
 import Sirea.Internal.LTypes
 import Sirea.Internal.BTypes
+import Sirea.Internal.BImpl (tshiftB)
 import Sirea.Behavior
 import Sirea.B()
 import Sirea.BCX

@@ -19,7 +19,7 @@ module Sirea.Internal.BTypes
     , ldt_maxCurr, ldt_minCurr
     , ldt_anyLive, ldt_valid
 
-    , latentOnTime, tshiftB
+    , latentOnTime
     ) where
 
 import Sirea.Internal.STypes (S,(:&:),(:|:))
@@ -62,7 +62,7 @@ import Control.Exception (assert)
 -- coupling. 
 data B w x y where
   -- most operations:
-  --   TR to report induced delays or transform of delay
+  --   TR to report induced delays or transform of latency
   --   MkLnk to apply effects
   B_mkLnk   :: (TR x y) -> (MkLnk w x y) -> B w x y
 

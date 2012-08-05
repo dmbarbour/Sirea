@@ -27,7 +27,7 @@ module Sirea.Internal.BImpl
     , undeadB
     , keepAliveB
     , unsafeAutoSubscribeB, OnSubscribe, UnSubscribe
-    , builtTshift -- for BDynamic
+    , buildTshift -- for BDynamic
     ) where
 
 import Prelude hiding (id,(.))
@@ -103,7 +103,6 @@ trivialB = mkLnkB trTriv $ mkLnkPure lnTriv
                                     , ldt_live = ldt_anyLive x }
           lnTriv ln1 = assert (ln_dead ln1) LnkDead 
 
-
 -- simple swap on Lnk sinks
 swapB :: B w (x :&: y) (y :&: x)
 swapB = mkLnkB trSwap $ mkLnkPure lnSwap
@@ -178,7 +177,7 @@ vacuousB :: B w S0 x
 vacuousB = mkLnkB trVac $ mkLnkPure lnVac
     where trVac t0 = 
             let ldt = lnd_sig t0 in
-            assert ((not . ldt_live) t0) $
+            assert ((not . ldt_live) ldt) $
             LnkDUnit ldt
           lnVac lx = assert (ln_dead lx) LnkDead
 

@@ -19,13 +19,13 @@ module Sirea.Behavior
     , BProd(..), bfst, bsecond, bsnd, bassocrp, (***), (&&&), bvoid
     , BSum(..), binl, bright, binr, bassocrs, (+++), (|||), bskip 
     , bconjoinl, bconjoinr
-    , BDisjoin(..), bdisjoinl, bdisjoinlz, bdisjoinlk, bdisjoinlkz
-    ,               bdisjoinr, bdisjoinrz, bdisjoinrk, bdisjoinrkz
+    , BDisjoin(..), bdisjoinly, bdisjoinlz, bdisjoinlyy, bdisjoinlzz
+    ,               bdisjoinry, bdisjoinrz, bdisjoinryy, bdisjoinrzz
     , bIfThenElse, bUnless, bWhen -- utility
     , BZip(..), bzipWith, bunzip
     , BSplit(..), bsplitWith, bsplitOn, bunsplit
     , BTemporal(..), BPeek(..)
-    , BDynamic(..), bevalOrElse
+    , BDynamic(..), bexec, bevalOrElse
     , Behavior
     ) where
 
@@ -33,8 +33,7 @@ import Prelude hiding (id,(.))
 import Control.Category
 import Control.Parallel (pseq, par)
 import Control.Parallel.Strategies (Eval, runEval)
-
-import Sirea.Internal.STypes ((:&:),(:|:),S,SigInP)
+import Sirea.Internal.STypes 
 import Sirea.Time (DT)
 
 infixr 3 ***
@@ -264,7 +263,7 @@ class (Category b) => BSum b where
     bvacuous :: b S0 x
 
 
-binl     :: (BSub b) => b x (x :|: y)
+binl     :: (BSum b) => b x (x :|: y)
 binr     :: (BSum b) => b y (x :|: y)
 bright   :: (BSum b) => b y y' -> b (x :|: y) (x :|: y')
 bassocrs :: (BSum b) => b ((x :|: y) :|: z) (x :|: (y :|: z))
@@ -320,17 +319,17 @@ bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
 --
 --   Common case splitting on the "y" signal (S p y :|: z)
 --
---     bdisjoinl  - disjoin left on one signal
---     bdisjoinr  - disjoin right on one signal
---     bdisjoinlk - disjoin left on first signal of many
---     bdisjoinrk - disjoin right on first signal of many
+--     bdisjoinly  - disjoin left on y signal
+--     bdisjoinry  - disjoin right on y signal
+--     bdisjoinlyy - disjoin left on first y signal of many
+--     bdisjoinryy - disjoin right on first y signal of many
 --
 --   Common case splitting on the "z" signal (y :|: S p z)
 --
---     bdisjoinlz  - disjoin left on one signal
---     bdisjoinrz  - disjoin right on one signal
---     bdisjoinlkz - disjoin left on first signal of many
---     bdisjoinrkz - disjoin right on first signal of many
+--     bdisjoinlz  - disjoin left on z signal
+--     bdisjoinrz  - disjoin right on z signal
+--     bdisjoinlzz - disjoin left on first z signal of many
+--     bdisjoinrzz - disjoin right on first z signal of many
 --
 -- Disjoin is moderately expensive; it requires masking signals, and
 -- which requires a some synchronization. However, you'll only pay
@@ -339,36 +338,36 @@ bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
 class (BSum b, BProd b) => BDisjoin b where
     bdisjoin :: (SigInP p x) => b (x :&: ((S p () :&: y) :|: z)) ((x :&: y) :|: (x :&: z))
 
-bdisjoinl   :: (BDisjoin b, BFmap b, SigInP p x) => b (x :&: (S p y :|: z))  ((x :&: S p y) :|: (x :&: z))
-bdisjoinlk  :: (BDisjoin b, BFmap b, SigInP p x) => b (x :&: ((S p y :&: y') :|: z)) ((x :&: (S p y :&: y')) :|: (x :&: z))
+bdisjoinly  :: (BDisjoin b, BFmap b, SigInP p x) => b (x :&: (S p y :|: z))  ((x :&: S p y) :|: (x :&: z))
+bdisjoinlyy :: (BDisjoin b, BFmap b, SigInP p x) => b (x :&: ((S p y :&: y') :|: z)) ((x :&: (S p y :&: y')) :|: (x :&: z))
 bdisjoinlz  :: (BDisjoin b, BFmap b, SigInP p x) => b (x :&: (y :|: S p z)) ((x :&: y) :|: (x :&: S p z))
-bdisjoinlkz :: (BDisjoin b, BFmap b, SigInP p x) => b (x :&: (y :|: (S p z :&: z'))) ((x :&: y) :|: (x :&: (S p z :&: z')))
+bdisjoinlzz :: (BDisjoin b, BFmap b, SigInP p x) => b (x :&: (y :|: (S p z :&: z'))) ((x :&: y) :|: (x :&: (S p z :&: z')))
 
-bdisjoinr   :: (BDisjoin b, BFmap b, SigInP p x) => b ((S p y :|: z) :&: x) ((S p y :&: x) :|: (z :&: x))
-bdisjoinrk  :: (BDisjoin b, BFmap b, SigInP p x) => b (((S p y :&: y') :|: z) :&: x) (((S p y :&: y') :&: x) :|: (z :&: x))
+bdisjoinry  :: (BDisjoin b, BFmap b, SigInP p x) => b ((S p y :|: z) :&: x) ((S p y :&: x) :|: (z :&: x))
+bdisjoinryy :: (BDisjoin b, BFmap b, SigInP p x) => b (((S p y :&: y') :|: z) :&: x) (((S p y :&: y') :&: x) :|: (z :&: x))
 bdisjoinrz  :: (BDisjoin b, BFmap b, SigInP p x) => b ((y :|: S p z) :&: x) ((y :&: x) :|: (S p z :&: x))
-bdisjoinrkz :: (BDisjoin b, BFmap b, SigInP p x) => b ((y :|: (S p z :&: z')) :&: x) ((y :&: x) :|: ((S p z :&: z') :&: x))
+bdisjoinrzz :: (BDisjoin b, BFmap b, SigInP p x) => b ((y :|: (S p z :&: z')) :&: x) ((y :&: x) :|: ((S p z :&: z') :&: x))
 
-bdisjoinl   = prep >>> bdisjoin
+bdisjoinly   = prep >>> bdisjoin
     where prep = (bsecond . bleft) $ bdup >>> (bfirst $ bconst ())
-bdisjoinlk  = prep >>> bdisjoin
+bdisjoinlyy  = prep >>> bdisjoin
     where prep = (bsecond . bleft) $ bfirst bdup >>> bassocrp >>> (bfirst $ bconst ())
-bdisjoinlz  = (bsecond bmirror) >>> bdisjoinl  >>> bmirror
-bdisjoinlkz = (bsecond bmirror) >>> bdisjoinlk >>> bmirror
+bdisjoinlz   = (bsecond bmirror) >>> bdisjoinly  >>> bmirror
+bdisjoinlzz  = (bsecond bmirror) >>> bdisjoinlyy >>> bmirror
 
-bdisjoinr   = bswap >>> bdisjoinl   >>> (bswap +++ bswap)
-bdisjoinrk  = bswap >>> bdisjoinlk  >>> (bswap +++ bswap)
-bdisjoinrz  = bswap >>> bdisjoinlz  >>> (bswap +++ bswap)
-bdisjoinrkz = bswap >>> bdisjoinlkz >>> (bswap +++ bswap)
+bdisjoinry   = bswap >>> bdisjoinly  >>> (bswap +++ bswap)
+bdisjoinryy  = bswap >>> bdisjoinlyy >>> (bswap +++ bswap)
+bdisjoinrz   = bswap >>> bdisjoinlz  >>> (bswap +++ bswap)
+bdisjoinrzz  = bswap >>> bdisjoinlzz >>> (bswap +++ bswap)
 
 -- | bIfThenElse expresses a common pattern seen in many functional
--- languages, but in the context of continuous RDP signals. It will
+-- languages, but in the context of RDP's reactive model. It will
 -- test a condition in an environment `x`, choose the left or right
 -- path (onTrue +++ onFalse), then merge the results. This is a lot
 -- of responsibilities; often, it would be preferable to keep an 
 -- open conditional expression (y :|: y), or to preserve information
 -- computed while testing the condition. However, when we want a
--- quick and dirty conditional, this can be convenient.
+-- quick and convenient conditional, this is available.
 bIfThenElse :: (BDisjoin b, SigInP p x)
             => b x (S p () :|: S p ()) -- decision
             -> b x y -- onTrue
@@ -377,7 +376,7 @@ bIfThenElse :: (BDisjoin b, SigInP p x)
 bIfThenElse cond onTrue onFalse =
     bdup >>> bfirst (cond >>> bleft (b1i >>> bswap)) >>> bswap >>> 
     -- at (x :&: ((S p () :&: S1) :|: S p ())
-    bdisjoin >>> (bfst +++ bfst)
+    bdisjoin >>> 
     -- at (x :&: S1) :|: (x :&: S p ())
     (bfst +++ bfst) >>>
     -- at (x :|: x)
@@ -570,10 +569,8 @@ class (Behavior b, Behavior b') => BDynamic b b' where
 -- pattern, and has the advantage of not needing a DT estimate.
 -- The response is simple reduction from the signal carrying b'.
 bexec :: (BDynamic b b', SigInP p x) => b (S p (b' x y_) :&: x) (S p ())
-bexec = bsynch >>> bprep >>> bvoid (beval 0) >>> bsnd >>> bfst
-    where -- (x~>y & x) ~> ((u&x)~>u & (u&x))
-          bprep = bfirst bdup >>> (bfmap modb *** bconst ()) >>> bassocrp 
-          -- (x~>y) -> ((u&x)~>u); guarantees 0 delay
+bexec = bsynch >>> bprep >>> beval 0 >>> bmerge
+    where bprep = bfirst (bfmap modb &&& bconst ()) >>> bassocrp 
           modb b' = bsecond b' >>> bfst
 
 -- | bevalOrElse use the `x` signal for a fallback behavior.
@@ -626,10 +623,6 @@ bevalOrElse dt = bsynch >>> bsecond bdup >>> bassoclp >>> bfirst (beval dt)
 --      ktake,kput
 --  Maybe some support for data-driven dynamic patterns.
 --      folds, recursion
---
--- support for bcar, bcdr, bcadr, bcddr, bcdar, bcaar, etc. from Lisp
---    plus variations for first, second (application to elements)
--- rotations, deep copies of elements, etc.
 --  
 
 

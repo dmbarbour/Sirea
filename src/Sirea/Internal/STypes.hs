@@ -105,7 +105,7 @@ buildMembr = sigMembr
 -- and eval behaviors, while allowing them to be reasonably generic.
 --
 -- Not intended for extension by clients of Sirea.
-class (SigMembr x, HasSigInP p x) => SigInP p x
+class (SigMembr x) => SigInP p x
 instance SigInP p (S p x)
 instance (SigInP p x, SigInP p y) => SigInP p (x :&: y)
 instance (SigInP p x, SigInP p y) => SigInP p (x :|: y)

@@ -30,6 +30,8 @@
 -- Values generated on a given seed and clockspec will be consistent
 -- even across processes. If unique values are needed, construct the
 -- seed as a unique function of the application or process instance.
+-- It may also vary with version of sirea-core, but should be stable
+-- for most versions.
 --
 -- The basic random types for RandomOnClock are Bool and Double:
 --
@@ -44,18 +46,18 @@
 module Sirea.RandomOnClock
     ( brandom, brandomSeed, brandomClockSeed
     , bRandMClockSeed, bRandMDynClockSeed
-    , RandM, Rand(..), randSplit
+    , RandM, Rand(..), randD, randB, randSplit
     , rgenOnClock
     , RGen, integerToRGen, rgenToInteger, runRandM
     ) where
 
-import Control.Arrow
+import Control.Arrow (first)
 import Control.Applicative
-import Control.Monad
 import Control.Exception (assert)
-import Data.Typeable
+import Data.Int (Int32)
 import Sirea.Behavior
 import Sirea.Clock
+import Sirea.Time
 
 -- | brandom: a "default" pseudorandom stream (for convenience)
 -- Generates one pseudorandom value per second. All observers will
@@ -85,32 +87,69 @@ bRandMClockSeed rm cs sd = rgenOnClock cs sd >>> bfmap (runRandM rm >>> fst)
 -- runtime, e.g. as a function of other inputs.
 bRandMDynClockSeed :: (Behavior b, HasClock b) 
                    => ClockSpec -> Integer -> b (S p (RandM a)) (S p a)
-bRandMDynClockSeed cs sd = bdup >>> bleft prep >>> bzap
-    where prep = bconst () >>> rgenOnClock cs sd >>> bfmap applyRGen
-          applyRGen = flip runRandM >>> fst
+bRandMDynClockSeed cs sd = (bfmap run &&& load) >>> bzap 
+    where run rm rg = fst (runRandM rm rg)
+          load = bconst () >>> rgenOnClock cs sd
 
 -- | rgenOnClock: generates an RGen at every clock step based
 -- on the ClockSpec, the given seed, and the reported time.
 rgenOnClock :: (Behavior b, HasClock b) 
             => ClockSpec -> Integer -> b (S p ()) (S p RGen)
+rgenOnClock cs nSeed = rgenOnClock' cs hseed
+    where hseed   = hashInteger hperiod nSeed
+          hperiod = hashInteger hoffset $ dtToNanos $ clock_period cs
+          hoffset = hashInteger hsInit $ dtToNanos $ clock_offset cs 
+
+
+-- rgenOnClock after translating cs and seed into an initial hash
+rgenOnClock' :: (Behavior b, HasClock b)
+             => ClockSpec -> HS -> b (S p ()) (S p RGen)
+rgenOnClock' !cs !h0 = bclock cs >>> bfmap tmToRGen
+    where tmToRGen tm = 
+            let hd = hashInteger h0 (tmDay tm) in
+            let hn = hashInteger hd (tmNanos tm) in
+            let (HS a b _) = hsFini hn in
+            let s1 = a `mod` 2147483562 in
+            let s2 = b `mod` 2147483398 in
+            RGen (1 + s1) (1 + s2)
+
+
 -- technique: hash clockspec, seed, and time. 
 -- to consider: generate RGen on clock (simple, but expensive)
 
--- a simple, insecure hash to build the RGen in each instant.
-data HS = HS { hs1 :: {-# UNPACK #-} !Int32
-             , hs2 :: {-# UNPACK #-} !Int32
-             , hs3 :: {-# UNPACK #-} !Int32
-             }
--- a couple sentences from the Haskell 98 report to obfuscate the seed
-hsBefore, hsAfter :: String
-hsBefore = "An expression evaluates to a value and has a static type."
-hsAfter = "Expressions are at the heart of Haskell programming 'in the small.'"
+-- a simple hash to build a fresh RGen when it is needed.
+data HS = HS {-# UNPACK #-} !Int32 {-# UNPACK #-} !Int32 {-# UNPACK #-} !Int32 
 
+-- mix in a little noise to start
 hsInit :: HS
-hsInit = hashString (HS 0 0 0) hsBefore
-hsFini :: HS -> HS
-hsFini hs0 = hashString hs0 hsAfter
+hsInit = HS 35899 25577 70717
 
+-- avalanche the last few entries.
+hsFini :: HS -> HS
+hsFini hs@(HS a b c) = hc
+    where h0 = hashInt32 hs 0
+          ha = hashInt32 h0 a
+          hb = hashInt32 ha b
+          hc = hashInt32 hb c
+
+
+-- hopefully this is a decent hash (wrgt. security, if not speed).
+-- rgen on clock doesn't need to be secure, but it'd be better if
+-- seeds cannot be easily computed. Might need to switch to secure
+-- random generator.
+hashInt32 :: HS -> Int32 -> HS
+hashInt32 (HS a b c) !n = HS a' b' c'
+    where a' = n + a * 11 + b * 557 - c * 3119
+          b' = 1 + b * 37 + c * 701 - a * 5477
+          c' =     c * 23 + a * 421 - b * 7151
+
+
+hashInteger :: HS -> Integer -> HS
+hashInteger h !n =
+    if (abs n) < 91019 then hashInt32 h (fromIntegral n) else
+    let (q,r) = n `divMod` 91019 in
+    hashInt32 (hashInteger h q) (fromIntegral r)
+    
 
 
 -- used as the internal time-sequence between clock steps.
@@ -177,25 +216,35 @@ instance (Rand a) => Rand (Maybe a) where
     -- basically `Left a | Right ()`
     rand = rand >>= \ choice ->
            if choice then Just <$> rand
-                     else Nothing 
+                     else pure Nothing 
 instance Rand Double where
-    -- analogy: roll two ten-sided dice (values 0 to 9)
-    --   multiply first by 0.1
-    --   multiply second by 0.01
-    --   add for uniform random value from 0.0 to 0.99
-    -- here, we use 2147483563-sided dice.
-    rand = RandM $ \ g0 ->
-        let (a,ga) = rgenNext g0 in
-        let (b,gb) = rgenNext gb in
-        let d1 = fromIntegral a * rgenFirstDigit in
-        let d2 = fromIntegral b * rgenSecondDigit in
-        let d = d1 + d2 in
-        d `seq` gb `seq` (d,gb)
+    rand = randD
 instance Rand Bool where
-    rand = RandM $ \ g0 ->
-        let (a,ga) = rgenNext g0 in
-        let b = even a in
-        b `seq` ga `seq` (b,ga)
+    rand = randB
+
+-- analogy: roll two ten-sided dice (values 0 to 9)
+--   multiply first by 0.1
+--   multiply second by 0.01
+--   add for uniform random value from 0.0 to 0.99
+-- here, we use 2147483563-sided dice.
+randD :: RandM Double
+randD = RandM $ \ g0 ->
+    let (a,ga) = rgenNext g0 in
+    let (b,gb) = rgenNext ga in
+    let d1 = fromIntegral a * rgenFirstDigit in
+    let d2 = fromIntegral b * rgenSecondDigit in
+    let roll = d1 + d2 in
+    roll `seq` gb `seq` (roll,gb)
+
+-- this isn't a perfectly fair roll, but it is fair within a few
+-- parts in a billion.
+randB :: RandM Bool
+randB = RandM $ \ g0 ->
+    let (a,ga) = rgenNext g0 in
+    let b = even a in
+    b `seq` ga `seq` (b,ga)
+
+
 
 -- rsr, just shorthand for creating a random value on a separate generator.
 rsr :: Rand a => RandM a 
@@ -242,8 +291,8 @@ preventsRoundingToOne k =
     let maxD1    = fromInteger (d - 1) * rgenFirstDigit in
     let sndDigit = 1.0 / fromInteger ((d*d)+k) in
     let maxD2    = fromInteger (d - 1) * sndDigit in
-    let d        = maxD1 + maxD2 in
-    (d < 1.0)
+    let total    = maxD1 + maxD2 in
+    (total < 1.0)
 
 -- | randSplit will separate RandM computations by splitting the
 -- underlying generator. This reduces sequential dependency between
@@ -337,7 +386,7 @@ randSplit ra = RandM $ \ g0 ->
 
 -- | RGen is a pseudorandom number generator (abstract)
 -- (Use RGen to obtain RandM values)
-data RGen {-# UNPACK #-} !Int32 {-# UNPACK #-} !Int32
+data RGen = RGen {-# UNPACK #-} !Int32 {-# UNPACK #-} !Int32
 
 -- | Construct an RGen from an Integer
 integerToRGen :: Integer -> RGen
@@ -348,7 +397,9 @@ integerToRGen s = RGen (1 + fromInteger s1) (1 + fromInteger s2)
 -- | Extract an Integer from an RGen
 --   integerToRGen . rgenToInteger = id
 rgenToInteger :: RGen -> Integer
-rgenToInteger (RGen s1 s2) = ((s2 - 1) * 2147483562) + (s1 - 1)
+rgenToInteger (RGen s1 s2) = ((n2 - 1) * 2147483562) + (n1 - 1)
+    where n1 = toInteger s1
+          n2 = toInteger s2
 
 
 rgenNext :: RGen -> (Int32, RGen)

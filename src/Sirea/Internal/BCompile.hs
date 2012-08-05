@@ -61,9 +61,6 @@ compileBC0 (B_left bef) dtx =
              (B_left deadOnInputB, dtz)
 compileBC0 (B_latent fn) dtx =
     compileBC0 (fn dtx) dtx
-compileBC0 bxx@(B_tshift fn) dtx =
-    let dtx' = fn dtx in
-    (bxx, dtx')
 compileBC0 bxz@(B_mkLnk fn _) dtx =
     (bxz, fn dtx)
 
@@ -80,8 +77,6 @@ compileBC1 (B_left bef) lnz =
     return (LnkSum e (ln_right lnz))
 compileBC1 (B_latent _) _ =
     error "B_latent must be handled by compileBC0!"
-compileBC1 (B_tshift _) ln = 
-    return ln -- no action necessary
 compileBC1 (B_mkLnk _ mkLnk) lnz =
     ln_build mkLnk lnz
 
