@@ -4,7 +4,7 @@
 
 -- | Efficient pseudorandom data is convenient for many systems and
 -- applications - probabilistic models, simulations and games, and
--- providing test data to hammer at a system. 
+-- providing test data to hammer at a system.
 --
 -- Traditional techniques for random data are stateful and eventful: 
 -- keep a pseudorandom number generator, ask it for a value, receive
@@ -42,6 +42,9 @@
 -- This was chosen for simplicity, ease of use, and performance.
 -- No need to manage random ranges, easy multiply-and-floor 
 -- functions to understand ranges, etc.
+--
+-- NOTE: RandomOnClock is not currently exported by sirea-core.
+-- More work needs to be done for initializing the random generator.
 --
 module Sirea.RandomOnClock
     ( brandom, brandomSeed, brandomClockSeed
@@ -100,38 +103,47 @@ rgenOnClock cs nSeed = rgenOnClock' cs hseed
           hperiod = hashInteger hoffset $ dtToNanos $ clock_period cs
           hoffset = hashInteger hsInit $ dtToNanos $ clock_offset cs 
 
-
 -- rgenOnClock after translating cs and seed into an initial hash
 rgenOnClock' :: (Behavior b, HasClock b)
              => ClockSpec -> HS -> b (S p ()) (S p RGen)
-rgenOnClock' !cs !h0 = bclock cs >>> bfmap tmToRGen
-    where tmToRGen tm = 
-            let hd = hashInteger h0 (tmDay tm) in
-            let hn = hashInteger hd (tmNanos tm) in
-            let (HS a b _) = hsFini hn in
-            let s1 = a `mod` 2147483562 in
-            let s2 = b `mod` 2147483398 in
-            RGen (1 + s1) (1 + s2)
+rgenOnClock' !cs !h0 = bHashRandomOnly
+    where bHashRandomOnly = bclock cs >>> bfmap (htToRGen h0)
+{-
+    let nPeriodSecs = cs_period cs `div` 1000000000 in
+    let nReps = if nPeriodSecs > 300 then 1 else
+                if nPeriodSecs > 60 then 5 else
+                if nPeriodSecs > 10 then 30 else
+                300
+    in
+    let period' = nReps * cs_period cs in
+    let cs' = cs { cs_period = period' } in
+    
+    
+    let nReps = if cs_period cs
+    if cs_period cs > (60 * nSeconds) then
+ -}    
+          
 
+htToRGen :: HS -> T -> RGen 
+htToRGen !h0 !tm = rg
+    where hd = hashInteger h0 (tmDay tm)
+          hn = hashInteger hd (tmNanos tm) 
+          (HS a b _) = hashInt32 hn 0
+          s1 = a `mod` 2147483562 
+          s2 = b `mod` 2147483398
+          rg = RGen (1 + s1) (1 + s2)
 
 -- technique: hash clockspec, seed, and time. 
 -- to consider: generate RGen on clock (simple, but expensive)
 
 -- a simple hash to build a fresh RGen when it is needed.
+-- TODO: switch to a validated hash by someone else, perhaps SHA1. 
+--       or switch to 
 data HS = HS {-# UNPACK #-} !Int32 {-# UNPACK #-} !Int32 {-# UNPACK #-} !Int32 
 
 -- mix in a little noise to start
 hsInit :: HS
-hsInit = HS 35899 25577 70717
-
--- avalanche the last few entries.
-hsFini :: HS -> HS
-hsFini hs@(HS a b c) = hc
-    where h0 = hashInt32 hs 0
-          ha = hashInt32 h0 a
-          hb = hashInt32 ha b
-          hc = hashInt32 hb c
-
+hsInit = HS (35899*75253*12113) (25577*93229*7937) (70717*53831*18433)
 
 -- hopefully this is a decent hash (wrgt. security, if not speed).
 -- rgen on clock doesn't need to be secure, but it'd be better if
@@ -139,10 +151,9 @@ hsFini hs@(HS a b c) = hc
 -- random generator.
 hashInt32 :: HS -> Int32 -> HS
 hashInt32 (HS a b c) !n = HS a' b' c'
-    where a' = n + a * 11 + b * 557 - c * 3119
-          b' = 1 + b * 37 + c * 701 - a * 5477
-          c' =     c * 23 + a * 421 - b * 7151
-
+    where a' = n + a * 85843 + b * 18191 + c * 38737
+          b' = 1 + b * 81199 + c * 19207 + a * 38183
+          c' =     c * 85577 + a * 18899 + b * 37951 
 
 hashInteger :: HS -> Integer -> HS
 hashInteger h !n =
@@ -252,8 +263,9 @@ rsr = randSplit rand
 
 rgenFirstDigit, rgenSecondDigit :: Double
 rgenFirstDigit  = 1.0 / fromInteger (d) 
-rgenSecondDigit = assert (k < 10000) $ 1.0 / fromInteger ((d * d) + k)
+rgenSecondDigit = 1.0 / fromInteger ((d * d) + k)
     where k = leastValueThat preventsRoundingToOne
+        -- k = 730144476616 on at least one system
 
 d :: Integer
 d = 2147483563 -- from RGen
@@ -281,11 +293,8 @@ leastValueThat passesTest = fn 0 (ub 1)
 -- ((d*d)+k) for the least such k that prevents rounding up to 1.0.
 --
 -- Rather than trying to compute this by hand, I'll let Haskell
--- run the tests itself.
---
--- Sanity check: least k should be less than 10000, since we're 
--- cutting only 3-4 digits. Effect on observable distribution is
--- negligible.
+-- run the tests itself. On at least one system, the result of
+-- this test is k=730144476616, or a little over 340*d.
 preventsRoundingToOne :: Integer -> Bool
 preventsRoundingToOne k =
     let maxD1    = fromInteger (d - 1) * rgenFirstDigit in
