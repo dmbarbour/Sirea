@@ -76,7 +76,8 @@ type S1 = S Void ()
 -- knowledge of them. SigMembr can also enforce that a signal is a
 -- valid instance of the signal type. SigMembr is entirely defined
 -- by sirea-core, no ability to extend it in clients.
-class SigMembr x where sigMembr :: (BuildMembr m) => m x
+class SigMembr x where 
+    sigMembr :: (BuildMembr m) => m x
 
 -- | (BuildMembr m) describes construction of a particular membrane.
 -- Membranes, in this case, are ignorant about their types. The

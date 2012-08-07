@@ -389,7 +389,7 @@ bIfThenElse cond onTrue onFalse =
 -- continuous side-effects based on a condition.
 bUnless, bWhen :: (BDisjoin b, SigInP p x)
         => b x (S p () :|: S p ()) -- decision
-        -> b x y_ -- action; drops response
+        -> b x y_ -- action (drops response)
         -> b x x -- unless or when operation
 bUnless cond = bWhen (bmirror . cond) 
 bWhen cond action = bvoid $

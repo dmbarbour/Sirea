@@ -57,14 +57,22 @@ evalB dt =
     -- have ((x :&: S p ()) :|: (x :&: S p (B w x y))
     B_left sndB >>> mirrorB >>> B_left swapB >>> 
     -- now have (S p (B w x y) :&: x) :|: S p (); will eval on left
-    B_left (B_mkLnk (trEval dt) mkLnkEval)
+    B_left (evalFinalB dt)
 
 -- apply first compilation stage to the input behavior, and filter
 -- behaviors that won't fit into given time `dt`.
 evalPrepB :: DT -> B w (S p (B w x y) :&: x) ((S p (Either (B w x y) ())) :&: x)
 evalPrepB dt = B_latent $ \ tbx ->
+    assert (evalSynched tbx) $
     let tx = lnd_snd tbx in
     B_first (fmapB (evalPrep dt tx))
+
+-- primary evaluation behavior; at this point we know the behavior
+-- is valid (fits `dt`)
+evalFinalB :: (SigMembr x) => DT -> B w (S p (B w x y) :&: x) y
+evalFinalB dt = B_latent $ \ tbx ->
+    let tx = lnd_snd tbx in
+    B_mkLnk (trEval dt) (mkLnkEval tx)
 
 -- local implementation of sndB (lack access to Sirea.Behavior)
 sndB :: B w (x :&: y) y
@@ -108,7 +116,7 @@ evalFitDelay dtf (b,t0) =
           lnkDTF = MkLnk { ln_build = return . buildTshift t0 tf
                          , ln_tsen = False, ln_peek = 0 }
 
--- delay to fit a particular time
+-- "delay to fit" a particular time
 trDTF :: DT -> LnkD LDT x -> LnkD LDT y
 trDTF dtf t0 = 
     assert (ldt_valid t0) $
@@ -130,27 +138,106 @@ evalSynched ldt =
     (ldt_maxGoal ldt == ldt_minCurr ldt)
 
     
-mkLnkEval :: (SigMembr x) => MkLnk w (S p (B w x y) :&: x) y
-mkLnkEval = MkLnk { ln_build = buildEval
-                  , ln_tsen = True, ln_peek = 0 }
+mkLnkEval :: (SigMembr x) => LnkD LDT x -> MkLnk w (S p (B w x y) :&: x) y
+mkLnkEval dtx = MkLnk { ln_build = buildEval dtx
+                      , ln_tsen = True, ln_peek = 0 }
 
-buildEval :: (SigMembr x) => Lnk y -> IO (Lnk (S p (B w x y) :&: x))
-buildEval lnyFinal = 
+buildEval :: (SigMembr x) => LnkD LDT x -> Lnk y -> IO (Lnk (S p (B w x y) :&: x))
+buildEval dtx lnyFinal = 
+    assert (evalSynched dtx) $
+
     -- I cannot use lny directly; I need to merge the inputs from
-    -- each dynamic behavior. So I construct many lny values, one
-    -- for each behavior, that merge into lny.
+    -- each dynamic behavior. I construct intermediate structures,
+    -- one for each dynamic behavior, that merge into lny.
     mkMergeLnkFactory lnyFinal >>= \ lnyFac ->
     newIORef 0 >>= \ rfIdx ->
     let mkLny = takeIdx rfIdx >>= lnyFac in
     let compile b = mkLny >>= compileBC1 b in
 
-    -- I'll certainly need a record of the compiled behaviors.
-    -- This will be [(T,Lnk x)], with the last signal in the
-    -- list always receiving the full future of the `x` input
-    -- signals. We'll anticipate several seconds of future for
-    -- dynamic behaviors.
+    -- I'll certainly need a record of the compiled behaviors,
+    -- type [(T,Lnk x)], with the last Lnk x receiving the full 
+    -- future of x inputs. This is anticipated several seconds
+    -- ahead of stability (ideally based on actual stability).
+    -- GC'd over time, based on stability of all input signals.
     newIORef [] >>= \ rfBLnk -> 
+
+    -- I need a record of the input behaviors, for touch and signals
+    mkDD >>= \ ddB ->
+    mkLDD dtx >>= \ lddX ->
+    let lddBX = LnkProd (LnkSig ddB) lddX in
+
+    -- now for some tricky bits:
+    --   when I touch a particular update, I need to:
+    --     record the touch
+    --     touch the *corresponding elements* in rfBLnk?
+    --   Should I delay touch on the inner elements? 
+    --     probably not; touch can propagate to `y` behaviors.
+    --   when I receive
+
+    -- Now let's assume a primary `emit` operation. 
+    -- we want to build a bunch of individual `update` operations.
+    
+
+    -- With LDD and rfBLink, I can build operations for
+    -- proper touch and update models. 
+
+    -- Now I need to 
+
     undefined
+
+-- Build the LDD, and filter for dead-on-input
+mkLDD :: (SigMembr x) => LnkD LDT x -> IO (LDD x)
+mkLDD dtxF = filterLS dtxF <$> runMkLDD buildMembr
+
+-- filter x membrane for liveness of input source.
+-- (It is possible that some inputs are dead, due to
+-- binl/binr, though this should be rare for dynamic
+-- behaviors.)
+filterLS :: LnkD LDT x -> LnkW dd x -> LnkW dd x
+filterLS (LnkDProd dt1 dt2) xy =
+    let x' = filterLS dt1 $ ln_fst xy in
+    let y' = filterLS dt2 $ ln_snd xy in
+    LnkProd x' y'
+filterLS (LnkDSum dtl dtr) xy =
+    let x' = filterLS dtl $ ln_left xy in
+    let y' = filterLS dtr $ ln_right xy in
+    LnkSum x' y'
+filterLS (LnkDUnit dtx) x =
+    if (ldt_live dtx) then x else LnkDead
+
+
+-- For each concrete signal in `x`, I need:
+--   a SigSt 
+--   time of most recent update (for post-touch processing)
+--
+-- GC happens at the time-scale of the slower of the DD and the runtime behaviors.
+-- Touches happen at the scale of the whole DD. I.e. we'll delay all updates based
+-- on any updates. (The main reason here is to avoid wasted updates to dynamic 
+-- behaviors that are no longer used based on updates to the first signal.
+-- 
+--   to track touch, so I know when to process all the updates.
+--   
+--   to store that signal's value, so I can split it across multiple dynamic futures.
+--   
+--  
+data DD a = DD 
+    { dd_sigst :: IORef (SigSt a)
+    , dd_tmupd :: IORef (Maybe T)
+    }
+mkDD :: IO (DD a)
+mkDD = DD <$> newIORef (st_poke st_zero)
+          <*> newIORef Nothing
+type LDD a = LnkW DD a  
+newtype MkLDD x = MkLDD { runMkLDD :: IO (LDD x) }  
+
+instance BuildMembr MkLDD where
+    buildSigMembr = MkLDD buildLDD
+        where buildLDD = LnkSig <$> mkDD
+    buildSumMembr (MkLDD mkLHS) (MkLDD mkRHS) = MkLDD buildSum
+        where buildSum = LnkSum <$> mkLHS <*> mkRHS
+    buildProdMembr (MkLDD mkFST) (MkLDD mkSND) = MkLDD buildProd
+        where buildProd = LnkProd <$> mkFST <*> mkSND
+
 
 {-
 
