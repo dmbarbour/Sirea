@@ -108,6 +108,7 @@ evalPrep dt ldtx =
 -- entering `y`. It may fail if the behavior is too large for dtf.
 evalFitDelay :: DT -> (B w x y, LnkD LDT y) -> Either (B w x y) ()
 evalFitDelay dtf (b,t0) =
+    assert (ldt_valid t0) $
     if (ldt_maxGoal t0 > dtf) 
         then Right () -- cannot fit to delay
         else Left (b >>> delayToFit) 
@@ -142,6 +143,8 @@ mkLnkEval :: (SigMembr x) => LnkD LDT x -> MkLnk w (S p (B w x y) :&: x) y
 mkLnkEval dtx = MkLnk { ln_build = buildEval dtx
                       , ln_tsen = True, ln_peek = 0 }
 
+
+-- buildEval prepares the evaluator to receive and process inputs.
 buildEval :: (SigMembr x) => LnkD LDT x -> Lnk y -> IO (Lnk (S p (B w x y) :&: x))
 buildEval dtx lnyFinal = 
     assert (evalSynched dtx) $
@@ -154,40 +157,41 @@ buildEval dtx lnyFinal =
     let mkLny = takeIdx rfIdx >>= lnyFac in
     let compile b = mkLny >>= compileBC1 b in
 
-    -- I'll certainly need a record of the compiled behaviors,
-    -- type [(T,Lnk x)], with the last Lnk x receiving the full 
-    -- future of x inputs. This is anticipated several seconds
-    -- ahead of stability (ideally based on actual stability).
-    -- GC'd over time, based on stability of all input signals.
-    newIORef [] >>= \ rfBLnk -> 
-
-    -- I need a record of the input behaviors, for touch and signals
-    mkDD >>= \ ddB ->
-    mkLDD dtx >>= \ lddX ->
-    let lddBX = LnkProd (LnkSig ddB) lddX in
-
-    -- now for some tricky bits:
-    --   when I touch a particular update, I need to:
-    --     record the touch
-    --     touch the *corresponding elements* in rfBLnk?
-    --   Should I delay touch on the inner elements? 
-    --     probably not; touch can propagate to `y` behaviors.
-    --   when I receive
-
-    -- Now let's assume a primary `emit` operation. 
-    -- we want to build a bunch of individual `update` operations.
+    -- I need a record of future dynamic behaviors.
+    -- The result of compiling these behaviors will be divided
+    -- among the corresponding `x` signal elements
+    newIORef st_zero >>= \ rfBSig ->
     
-
-    -- With LDD and rfBLink, I can build operations for
-    -- proper touch and update models. 
-
-    -- Now I need to 
-
+    -- To receive `x` signals I need to a place to store them and
+    -- information about how to process them. 
+    mkDyn dtx >>= \ dynX ->
     undefined
 
--- Build the LDD, and filter for dead-on-input
-mkLDD :: (SigMembr x) => LnkD LDT x -> IO (LDD x)
-mkLDD dtxF = filterLS dtxF <$> runMkLDD buildMembr
+mkDyn :: (SigMembr x) => LnkD LDT x -> IO (LnkW Dyn x)
+mkDyn dtx = filterLS dtx <$> runMkDyn buildMembr
+
+-- Dyn and DynSt are internal structures used for dynamic behaviors.
+-- Each Dyn will join the input signal `x` with the active dynamic
+-- behaviors.
+newtype Dyn a = Dyn { dyn_ref :: IORef (DynSt a) }
+data DynSt a = DynSt 
+    { dyn_sigst :: SigSt a       -- concrete input signal
+    , dyn_blink :: [(T,LnkUp a)] -- active links to receive signals
+    , dyn_bpoke :: Bool          -- expecting update to active links?
+    }
+
+dyn_zero :: DynSt a
+dyn_zero = DynSt { dyn_sigst = st_poke st_zero
+                 , dyn_blink = []
+                 , dyn_bpoke = True }
+
+newtype MkDyn a = MkDyn { runMkDyn :: IO (LnkW Dyn a) }
+instance BuildMembr MkDyn where
+    buildSigMembr = MkDyn $ LnkSig <$> buildDyn
+        where buildDyn = Dyn <$> newIORef dyn_zero
+    buildSumMembr (MkDyn x) (MkDyn y) = MkDyn $ LnkSum <$> x <*> y
+    buildProdMembr (MkDyn x) (MkDyn y) = MkDyn $ LnkProd <$> x <*> y
+
 
 -- filter x membrane for liveness of input source.
 -- (It is possible that some inputs are dead, due to
@@ -205,77 +209,6 @@ filterLS (LnkDSum dtl dtr) xy =
 filterLS (LnkDUnit dtx) x =
     if (ldt_live dtx) then x else LnkDead
 
-
--- For each concrete signal in `x`, I need:
---   a SigSt 
---   time of most recent update (for post-touch processing)
---
--- GC happens at the time-scale of the slower of the DD and the runtime behaviors.
--- Touches happen at the scale of the whole DD. I.e. we'll delay all updates based
--- on any updates. (The main reason here is to avoid wasted updates to dynamic 
--- behaviors that are no longer used based on updates to the first signal.
--- 
---   to track touch, so I know when to process all the updates.
---   
---   to store that signal's value, so I can split it across multiple dynamic futures.
---   
---  
-data DD a = DD 
-    { dd_sigst :: IORef (SigSt a)
-    , dd_tmupd :: IORef (Maybe T)
-    }
-mkDD :: IO (DD a)
-mkDD = DD <$> newIORef (st_poke st_zero)
-          <*> newIORef Nothing
-type LDD a = LnkW DD a  
-newtype MkLDD x = MkLDD { runMkLDD :: IO (LDD x) }  
-
-instance BuildMembr MkLDD where
-    buildSigMembr = MkLDD buildLDD
-        where buildLDD = LnkSig <$> mkDD
-    buildSumMembr (MkLDD mkLHS) (MkLDD mkRHS) = MkLDD buildSum
-        where buildSum = LnkSum <$> mkLHS <*> mkRHS
-    buildProdMembr (MkLDD mkFST) (MkLDD mkSND) = MkLDD buildProd
-        where buildProd = LnkProd <$> mkFST <*> mkSND
-
-
-{-
-
-    -- TODO: I generically need a membrane for the full set of `x`
-    -- inputs (and may as well include the B w x y input...). This
-    -- membrane must indicate for each signal:
-    --  the current record of that signal
-    --  the update time for that signal (if updated since last send)
-    --  whether signal has been touched
-    -- For simplicity, go ahead and delay updates of `beval` until
-    -- all input signals are available. 
-    --  whether the signal has been 
-
-    -- I need a few records with respect to Sig (B w x y) in 
-    -- particular:
-    --  (a) of the current and future behavior signal (SigSt)
-    --  (b) of the currently compiled, active behaviors [(T,Lnk x)]
-    -- After any update to (a) I'll generally need to update every
-    -- element in (b). 
-    newIORef st_zero >>= \ rfBSig ->
-    newIORef [] >>= \ rfBComp ->
-
-    -- only need to compile the last phase of the
-    -- behaviors (compileBC0 is performed by evalB).
-
-    -- I need to store some information about 
-    newIORef st_zero >>
-
-
-        
-     
-                
-    
-
-    -- 
-    undefined
-    -}
-
 -- a trivial function for sequential indexes
 takeIdx :: IORef Int -> IO Int
 takeIdx rf =
@@ -284,7 +217,6 @@ takeIdx rf =
     n `seq` 
     writeIORef rf n >>
     return n
-
 
 
 -- RESULTS LINK FACTORY.

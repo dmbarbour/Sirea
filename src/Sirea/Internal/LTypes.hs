@@ -11,6 +11,7 @@ module Sirea.Internal.LTypes
     , SigM(..), sm_zero, sm_update_l, sm_sigup_l, sm_update_r, sm_sigup_r
     , sm_waiting, sm_stable, sm_emit, sm_cleanup
     , ln_withSigM
+    , ln_terminate, ln_touchAll
     ) where
 
 import Sirea.Internal.STypes
@@ -144,6 +145,24 @@ ln_sumap fn ln = LnkUp
 ln_lumap :: (LnkUp x -> LnkUp y) -> Lnk (S p x) -> Lnk (S p y)
 ln_lumap _ LnkDead = LnkDead
 ln_lumap fn (LnkSig l) = LnkSig (fn l)
+
+-- | apply a termination signal every element in a link
+ln_terminate :: T -> Lnk x -> IO ()
+ln_terminate _ LnkDead = return ()
+ln_terminate tm (LnkProd x y) = ln_touchAll y >> ln_terminate tm x >> ln_terminate tm y 
+ln_terminate tm (LnkSum x y) = ln_touchAll y >> ln_terminate tm x >> ln_terminate tm y
+ln_terminate tm (LnkSig lu) = ln_update lu suTerm
+    where suTerm = SigUp { su_state = Just (s_never, tm)
+                         , su_stable = Nothing -- nothing is forever 
+                         }
+
+-- | touch every element in a link
+ln_touchAll :: Lnk x -> IO ()
+ln_touchAll LnkDead = return ()
+ln_touchAll (LnkProd x y) = ln_touchAll x >> ln_touchAll y
+ln_touchAll (LnkSum x y) = ln_touchAll x >> ln_touchAll y
+ln_touchAll (LnkSig lu) = ln_touch lu
+
 
 -- | Each signal update carries:
 --    state - the new state of the signal, starting at a given time

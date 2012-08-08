@@ -111,6 +111,7 @@ tcToStepper tc = Stepper
  
 runTCStep :: TC -> IO ()
 runTCStep tc = mask_ $
+    runTCWork (tc_work tc) >>
     runTCRecv (tc_recv tc) >>
     runTCWork (tc_work tc) >>
     runTCSend (tc_send tc)
