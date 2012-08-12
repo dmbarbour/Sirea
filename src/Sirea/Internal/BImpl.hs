@@ -158,10 +158,7 @@ inlB = mkLnkB trinl $ mkLnkPure ln_left
 s0iB :: B w x (S0 :|: x)
 s0iB = mkLnkB trVac $ mkLnkPure lnVac
     where trVac tx = LnkDSum (tr_dead tx) tx
-          lnVac ln =
-            let l0 = ln_left ln in
-            let lx = ln_right ln in
-            assert (ln_dead l0) lx
+          lnVac = ln_right
 
 -- eliminate a vacuous signal (implicitly performed by mergeB)
 s0eB :: B w (S0 :|: x) x
@@ -179,7 +176,7 @@ vacuousB = mkLnkB trVac $ mkLnkPure lnVac
             let ldt = lnd_sig t0 in
             assert ((not . ldt_live) ldt) $
             LnkDUnit ldt
-          lnVac lx = assert (ln_dead lx) LnkDead
+          lnVac _ = LnkDead
 
 -- simple rearrangement
 mirrorB :: B w (x :|: y) (y :|: x)

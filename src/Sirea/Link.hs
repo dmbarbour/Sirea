@@ -31,10 +31,9 @@ import Control.Exception (assert)
 -- unnecessary; even for FFI and legacy adapters, support for a few
 -- common patterns would be sufficient.
 --
--- unsafeLinkB is, as the name indicates, unsafe. It can violate RDP 
--- properties: spatial commutativity, spatial idempotence, duration
--- coupling, locally stateless and eventless behavior. Caution is
--- recommended. 
+-- unsafeLinkB is unsafe. Discipline is necessary to avoid violating 
+-- RDP invariants: spatial commutativity and idempotence, duration
+-- coupling, locally stateless and eventless behavior. 
 --
 -- Construction of links should have no observable side effects. Any
 -- effects should wait for an active input signal. IO to build links
