@@ -159,7 +159,7 @@ buildEval dtx lnyFinal =
     let arbitraryStartingIndex = 10000 in
     newIORef arbitraryStartingIndex >>= \ rfIdx -> 
     mkMergeLnkFactory lnyFinal >>= \ mkLny ->
-    let compile b = (takeIdx rfIdx >>= mkLny) >>= compileBC1 b in
+    let compile b = takeIdx rfIdx >>= compileBC1 b . mkLny in
     let compileE (t,mb) =
             maybe (return LnkDead) compile mb >>= \ lx ->
             return (t,lx)
@@ -200,12 +200,14 @@ buildUpdateRange rfTt tu st' =
     let tUpper = fmap (`addTime` dt_compile_future) (tStable <|> tu) in
     writeIORef rfTt tUpper >>
     let times = (,) <$> tLower <*> tUpper in
-    case times of
-        Just (tLo,tHi) ->
-            if (tLo > tHi) then [] else
-            let sl = sigToList (st_signal st') tLo tHi in
-            if (tu == tLower) then sl else tail sl
-        Nothing -> []
+    let range = case times of
+            Just (tLo,tHi) ->
+                if (tLo > tHi) then [] else
+                let sl = sigToList (st_signal st') tLo tHi in
+                if (tu == tLower) then sl else tail sl
+            Nothing -> []
+    in 
+    return range
 
 -- build a complex dynamic behavior state that reflects the signal type
 -- (including LnkDead for cases where the input signal is dead-on-input)
@@ -241,7 +243,7 @@ dyn_zero = DynSt { dyn_sigst = st_poke st_zero
                  , dyn_bstable = Nothing
                  , dyn_btouch = True 
                  }
-newDyn :: Dyn a
+newDyn :: IO (Dyn a)
 newDyn = Dyn <$> newIORef dyn_zero
 
 newtype MkDyn a = MkDyn { runMkDyn :: IO (LnkW Dyn a) }
@@ -257,8 +259,8 @@ dynBTouch = ln_forEach $ \ (Dyn rf) ->
     unless (dyn_btouch dyn) $
         let dyn' = dyn { dyn_btouch = True } in
         writeIORef rf dyn' >>
-        unless ((st_expect . dyn_sigst) dyn') $
-            mapM_ (ln_touch . snd) (dyn_blink dyn')
+        unless ((st_expect . dyn_sigst) dyn') 
+            (mapM_ (ln_touch . snd) (dyn_blink dyn'))
 
 -- touch for signal updates in dynamic behavior
 dynSigTouch :: Dyn a -> IO ()
@@ -268,8 +270,8 @@ dynSigTouch (Dyn rf) =
         let sigst' = (st_poke . dyn_sigst) dyn in
         let dyn' = dyn { dyn_sigst = sigst' } in
         writeIORef rf dyn' >>
-        unless (dyn_btouch dyn') $
-            mapM_ (ln_touch . snd) (dyn_blink dyn')
+        unless (dyn_btouch dyn')
+            (mapM_ (ln_touch . snd) (dyn_blink dyn'))
 
 dynSigUpdate :: Dyn a -> SigUp a -> IO ()
 dynSigUpdate (Dyn rf) su =
@@ -309,7 +311,7 @@ dynBUpdateLinks tStable [] rf =
     writeIORef rf dyn'
 dynBUpdateLinks tStable bl@((tu,_):_) rf =
     readIORef rf >>= \ dyn ->
-    let tmupd' = leastTime tu (dyn_tmupd dyn) in
+    let tmupd' = leastTime (Just tu) (dyn_tmupd dyn) in
     let blink' = updateList (dyn_blink dyn) tu bl in
     let oldTail = filter ((> tu) . fst) (dyn_blink dyn) in
     let dyn' = dyn { dyn_bstable = tStable
@@ -317,8 +319,12 @@ dynBUpdateLinks tStable bl@((tu,_):_) rf =
                    , dyn_blink = blink'
                    , dyn_tmupd = tmupd'   } in
     writeIORef rf dyn' >>
-    let tTerm = leastTime tu tStable in
-    mapM_ (ln_terminate tTerm . snd) oldTail
+    mapM_ (terminate tu . snd) oldTail
+
+terminate :: T -> LnkUp x -> IO ()
+terminate tm lu = ln_update lu sigTerminate
+    where sigTerminate = SigUp { su_state = Just (s_never,tm)
+                               , su_stable = Nothing }
 
 updateList :: (Ord t) => [(t,a)] -> t -> [(t,a)] -> [(t,a)]
 updateList [] _ nt = nt
@@ -400,23 +406,26 @@ takeIdx rf =
 -- with a slight variation that we'd be creating URLs/IDs for remote
 -- hosts (with special support for merge-links). Authorizations and
 -- expirations for those links could be achieved by HMAC provided on
--- establishing the merge-link.
-mkMergeLnkFactory :: Lnk y -> IO (Int -> IO (Lnk y))
+-- establishing the merge-link. (RDP is intended to set up without 
+-- any round-trip handshaking.)
+mkMergeLnkFactory :: Lnk y -> IO (Int -> Lnk y)
 mkMergeLnkFactory LnkDead = 
-    return (const $ return LnkDead)
+    return (const LnkDead)
 mkMergeLnkFactory (LnkProd f s) = 
     mkMergeLnkFactory f >>= \ mkF ->
     mkMergeLnkFactory s >>= \ mkS ->
-    let mkProd n = mkF n >>= \ f' ->
-                   mkS n >>= \ s' ->
-                   return (LnkProd f' s')
+    let mkProd n = 
+            let f' = mkF n in
+            let s' = mkS n in
+            (LnkProd f' s')
     in return mkProd
 mkMergeLnkFactory (LnkSum l r) =
     mkMergeLnkFactory l >>= \ mkL ->
     mkMergeLnkFactory r >>= \ mkR ->
-    let mkSum n = mkL n >>= \ l' ->
-                  mkR n >>= \ r' ->
-                  return (LnkSum l' r')
+    let mkSum n = 
+            let l' = mkL n in
+            let r' = mkR n in
+            (LnkSum l' r')
     in return mkSum
 mkMergeLnkFactory (LnkSig lu) =
     mkMergeLnk >>= \ mln -> -- state to perform the merges.
@@ -446,13 +455,13 @@ mln_put mln n st = void $ HT.update (mln_table mln) n st
 mln_touch :: MergeLnk a -> Int -> IO Bool
 mln_touch mln n =
     mln_get mln n >>= \ st ->
-    unless (st_expect st) $
-        let st' = st_poke st in
-        mln_put mln n st' >>
-        readIORef (mln_touch_ct mln) >>= \ ct ->
-        let ct' = succ ct in
-        writeIORef (mln_touch_ct mln) ct' >>
-        (return $! (1 == ct'))
+    if (st_expect st) then return False else
+    let st' = st_poke st in
+    mln_put mln n st' >>
+    readIORef (mln_touch_ct mln) >>= \ ct ->
+    let ct' = succ ct in
+    writeIORef (mln_touch_ct mln) ct' >>
+    (return $! (1 == ct'))
 
 -- update, and return whether this is the last expected update
 mln_update :: MergeLnk a -> Int -> SigUp a -> IO Bool
@@ -466,9 +475,9 @@ mln_update mln n su =
     let tm' = leastTime tm (fmap snd (su_state su)) in
     tm' `seq` writeIORef (mln_tmupd mln) tm' >>
     -- test touch count, potentially update if was touched.
-    readIORef (mln_touch_ct) >>= \ ct ->
+    readIORef (mln_touch_ct mln) >>= \ ct ->
     let ct' = if (st_expect st) then (pred ct) else ct in
-    writeIORef (mln_touch_ct) ct' >>
+    writeIORef (mln_touch_ct mln) ct' >>
     (return $! (0 == ct'))
 
 -- merge signals from present and future dynamic behaviors
@@ -522,7 +531,8 @@ mergeEvalGC mln (Just tm) (idx,st) =
     if (isNothing x && s_is_final s' tm)
         then HT.delete (mln_table mln) idx
         else let st' = st { st_signal = s' } in
-             st' `seq` HT.update (mln_table mln) idx st' 
+             st' `seq` 
+             void (HT.update (mln_table mln) idx st')
 
 
 -- leastTime where `Nothing` is forever (upper bound)
