@@ -1,4 +1,4 @@
-{-# LANGUAGE GADTs, TypeOperators #-}
+{-# LANGUAGE GADTs, TypeOperators, Rank2Types #-}
 
 -- Types for FRP.Sirea.Link (here to avoid cyclic dependencies)
 -- plus related utilities
@@ -10,8 +10,8 @@ module Sirea.Internal.LTypes
     , SigSt(..), st_zero, st_poke, st_clear, st_sigup
     , SigM(..), sm_zero, sm_update_l, sm_sigup_l, sm_update_r, sm_sigup_r
     , sm_waiting, sm_stable, sm_emit, sm_cleanup
+    , ln_forEach, ln_terminate, ln_freeze, ln_touchAll
     , ln_withSigM
-    , ln_terminate, ln_touchAll
     ) where
 
 import Sirea.Internal.STypes
@@ -20,6 +20,8 @@ import Sirea.Signal
 import Control.Exception (assert)
 import Control.Monad (unless)
 import Control.Arrow (first)
+import Control.Applicative
+import Data.Monoid
 import Data.IORef
 
 -- | MkLnk - constructors and metadata for including a new behavior
@@ -146,22 +148,34 @@ ln_lumap :: (LnkUp x -> LnkUp y) -> Lnk (S p x) -> Lnk (S p y)
 ln_lumap _ LnkDead = LnkDead
 ln_lumap fn (LnkSig l) = LnkSig (fn l)
 
+-- | apply operation over each element.
+ln_forEach :: (Applicative m, Monoid a) => (forall x . s x -> m a) -> LnkW s y -> m a
+ln_forEach _ LnkDead = pure mempty
+ln_forEach fn (LnkProd x y) = mappend <$> ln_forEach fn x <*> ln_forEach fn y
+ln_forEach fn (LnkSum x y) = mappend <$> ln_forEach fn x <*> ln_forEach fn y
+ln_forEach fn (LnkSig lu) = fn lu
+
+
 -- | apply a termination signal every element in a link
 ln_terminate :: T -> Lnk x -> IO ()
-ln_terminate _ LnkDead = return ()
-ln_terminate tm (LnkProd x y) = ln_touchAll y >> ln_terminate tm x >> ln_terminate tm y 
-ln_terminate tm (LnkSum x y) = ln_touchAll y >> ln_terminate tm x >> ln_terminate tm y
-ln_terminate tm (LnkSig lu) = ln_update lu suTerm
-    where suTerm = SigUp { su_state = Just (s_never, tm)
-                         , su_stable = Nothing -- nothing is forever 
-                         }
+ln_terminate t = ln_forEach (terminate t)
 
--- | touch every element in a link
+terminate :: T -> LnkUp x -> IO ()
+terminate tm lu = ln_update lu sigTerm
+    where sigTerm = SigUp { su_state = Just (s_never, tm)
+                          , su_stable = Nothing }
+
+-- | freeze the current signals on a link
+ln_freeze :: Lnk x -> IO ()
+ln_freeze = ln_forEach freeze
+
+freeze :: LnkUp x -> IO ()
+freeze lu = ln_update lu sigFreeze
+    where sigFreeze = SigUp { su_state = Nothing
+                            , su_stable = Nothing }
+
 ln_touchAll :: Lnk x -> IO ()
-ln_touchAll LnkDead = return ()
-ln_touchAll (LnkProd x y) = ln_touchAll x >> ln_touchAll y
-ln_touchAll (LnkSum x y) = ln_touchAll x >> ln_touchAll y
-ln_touchAll (LnkSig lu) = ln_touch lu
+ln_touchAll = ln_forEach ln_touch
 
 
 -- | Each signal update carries:

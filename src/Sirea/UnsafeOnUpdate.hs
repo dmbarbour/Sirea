@@ -108,7 +108,6 @@ runToStability rfSig rfA op su =
     let tLower = t0 <|> tUpd in
     let tUpper = tf <|> ((`addTime` dtFinal) <$> (tUpd <|> t0)) in
     case (,) <$> tLower <*> tUpper of
-        Nothing -> return ()
         Just (tL,tU) ->
             unless (tL == tU) $ assert (tL < tU) $
                 let lsigs = sigToList sf tL tU in
@@ -120,6 +119,7 @@ runToStability rfSig rfA op su =
                                 op t a
                 in 
                 mapM_ action lsigs
+        Nothing -> return ()
 
 -- | unsafeOnUpdateBLN - perform IO effects if any of many signals
 -- are used later in the pipeline. A Goldilocks solution:

@@ -112,7 +112,7 @@ s_sample_d s0 tLower tUpper =
 -- least one value for the signal's state at the lower bound time.
 sigToList :: Sig a -> T -> T -> [(T, Maybe a)]
 sigToList s0 tLower tUpper =
-    assert (tLower < tUpper) $
+    assert (tLower <= tUpper) $
     let (x,xs) = ds_query (s_head s0) tLower (s_tail s0) in
     (tLower,x):(ds_takeList tUpper xs)
 
