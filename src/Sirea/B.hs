@@ -1,4 +1,6 @@
 
+{-# LANGUAGE MultiParamTypeClasses #-}
+
 -- | `B w x y` is the raw, primitive behavior type in Sirea. 
 --
 -- `B` assumes that necessary hooks (into environment and resources)
@@ -18,6 +20,7 @@ import Sirea.Behavior
 -- import Sirea.Partition
 import Sirea.Internal.BTypes
 import Sirea.Internal.BImpl
+import Sirea.Internal.BDynamic
 import Data.Typeable
 
 instance Typeable2 (B w) where
@@ -76,11 +79,8 @@ instance BPeek (B w) where
     bpeek    = peekB
 instance Behavior (B w)
 
-{-
-instance BDynamic (B w) where
-    beval    = evalB
-    bexec    = execB
--}
+instance BDynamic (B w) (B w) where
+    beval dt  = evalB dt >>> bright bfst
 
 -- note: B does not support `bcross`, since B cannot 
 -- track which partitions are in use. Need BCX for

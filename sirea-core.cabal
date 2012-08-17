@@ -42,9 +42,9 @@ build-type: Simple
 
 Library
   hs-Source-Dirs: src
-  Build-Depends: base (>= 4.5 && < 5)
-    ,parallel (>= 3.0 && < 4)
-    ,time (>= 1.4 && < 2)
+  Build-Depends: base (>= 4.5)
+    ,parallel (>= 3.0)
+    ,time (>= 1.4)
 
   Exposed-Modules:
     Sirea.Prelude

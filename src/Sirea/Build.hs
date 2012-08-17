@@ -188,6 +188,8 @@ schedule dt op = assert (usec > 0) $ void $
 
 -- regular maintenance operation, simply increases stability of the
 -- active signal on a regular basis; performed within main thread.
+-- At any given time, one maintenance operation is either queued in
+-- the main thread or delayed by a 'schedule' thread.
 maintainApp :: TC -> GobStopper -> IORef StopData -> LnkUp () -> T -> IO ()
 maintainApp tc0 gs rfSD lu tStable =
     readIORef rfSD >>= \ sd ->
@@ -218,8 +220,8 @@ shutdownEvent tc0 gs rfSD = runGobStopper gs finiStop
 -- dtStep can also influence amount of computation per round.
 -- TODO: make configurable on command line.
 dtStability, dtStep :: DT
-dtStability = 0.35  -- stability of main signal
-dtStep      = 0.07  -- periodic event to increase stability
+dtStability = 0.21  -- stability of main signal
+dtStep      = 0.03  -- periodic event to increase stability
 
 -- | If you don't need to run the stepper yourself, consider use of
 -- runSireaApp. This will simply run the application until the main

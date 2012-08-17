@@ -36,9 +36,9 @@ import Control.Exception (assert)
 -- coupling, locally stateless and eventless behavior. 
 --
 -- Construction of links should have no observable side effects. Any
--- effects should wait for an active input signal. IO to build links
--- is intended for building local resources: caches, resource hooks.
---
+-- observable effect should wait for active signal. At construction,
+-- IO is used to create local state for caches or connections with
+-- external resources. (The resources should be accessed via PCX.)
 unsafeLinkB :: MkLnk w x y -> B w x y
 unsafeLinkB ln = bsynch >>> tshiftB xBarrier >>> B_mkLnk tr_unit ln
     where xBarrier dts =
@@ -51,11 +51,9 @@ unsafeLinkB ln = bsynch >>> tshiftB xBarrier >>> B_mkLnk tr_unit ln
     -- xBarrier actually applies the updates (sets ldt_curr) if necessary.
 
 
--- | unsafeLinkBCX provides access to PCX, which is a good place to
--- keep any "shared" state associated with a link. If otherwise you 
--- would need global state, please use unsafeLinkBCX instead and put
--- state in the PCX. Make the state specific to a partition, esp. if
--- it must be manipulated by the partition thread.
+-- | unsafeLinkBCX provides access to PCX, which models resources
+-- that may be shared between links. If otherwise you would need 
+-- global state, please use unsafeLinkBCX and put state in the PCX. 
 unsafeLinkBCX :: (PCX w -> MkLnk w x y) -> BCX w x y
 unsafeLinkBCX = wrapBCX . (unsafeLinkB .)
 

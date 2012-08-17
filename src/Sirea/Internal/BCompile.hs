@@ -35,8 +35,7 @@ compileB bxy dtx lny =
 
 -- | This is an initial left-to-right compile within a behavior. It
 -- computes the timing properties of the resulting signal, applies 
--- time-dependent transforms (B_latent), and eliminates dead code on
--- input (at B_left).
+-- time-dependent transforms (B_latent).
 compileBC0 :: B w x z -> LnkD LDT x -> (B w x z, LnkD LDT z)
 compileBC0 (B_pipe bxy byz) dtx =
     let (bxy', dty) = compileBC0 bxy dtx in
