@@ -568,8 +568,8 @@ class (Behavior b, Behavior b') => BDynamic b b' where
 -- | bexec will eval, dropping the result. This is a very common
 -- pattern, and has the advantage of not needing a DT estimate.
 -- The response is simple reduction from the signal carrying b'.
-bexec :: (BDynamic b b', SigInP p x) => b (S p (b' x y_) :&: x) (S p ())
-bexec = bsynch >>> bprep >>> beval 0 >>> bmerge
+bexec :: (BDynamic b b', SigInP p x) => b (S p (b' x y_) :&: x) (S p () :|: S p ())
+bexec = bsynch >>> bprep >>> beval 0
     where bprep = bfirst (bfmap modb &&& bconst ()) >>> bassocrp 
           modb b' = bsecond b' >>> bfst
 

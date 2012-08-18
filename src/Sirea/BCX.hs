@@ -62,8 +62,8 @@ type WithPCX w = WrappedArrow (->) (PCX w)
 -- (GCX w) to represent or proxy resources in that world. 
 newtype BCX w x y = BCX { fromBCX :: StaticB (WithPCX w) (B w) x y } 
     deriving ( Category, BFmap, BProd, BSum, BDisjoin
-             , BZip, BSplit, BTemporal, BPeek, Behavior {-, BScope -} )
-    -- NOT deriving: BDynamic, BCross, BEmbed
+             , BZip, BSplit, BTemporal, BPeek, Behavior )
+    -- NOT deriving: BDynamic, BCross
 
 instance Typeable2 (BCX w) where
     typeOf2 _ = mkTyConApp tcBCX []
@@ -78,6 +78,12 @@ wrapBCX =  BCX . wrapStatic . WrapArrow
 instance BCross (BCX w) where
     bcross = wrapBCX crossB
 
+instance BDynamic (BCX w) (B w) where
+    beval = wrapBCX . const . beval
+
+instance BDynamic (BCX w) (BCX w) where
+    beval dt = wrapBCX $ \ cw -> 
+        bfirst (bfmap (`unwrapBCX` cw)) >>> beval dt
 
 -- | onNextStepBCX will delay processing until the next runStepper
 -- event, and processes updates as though from a remote partition.
