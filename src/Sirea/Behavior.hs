@@ -25,7 +25,8 @@ module Sirea.Behavior
     , BZip(..), bzipWith, bunzip
     , BSplit(..), bsplitWith, bsplitOn, bunsplit
     , BTemporal(..), BPeek(..)
-    , BDynamic(..), bexec, bevalOrElse
+    , BDynamic(..), bexecb', bevalb'OrElse
+    , bevalb, bexecb, bevalbOrElse
     , Behavior
     ) where
 
@@ -563,21 +564,31 @@ class (Behavior b, Behavior b') => BDynamic b b' where
     -- too large for DT, the error path is selected. (If I could 
     -- statically enforce valid beval, I'd favor that option.)
     -- 
-    beval :: (SigInP p x) => DT -> b (S p (b' x y) :&: x) (y :|: S p ())
+    bevalb' :: (SigInP p x) => DT -> b (S p (b' x y) :&: x) (y :|: S p ())
 
--- | bexec will eval, dropping the result. This is a very common
--- pattern, and has the advantage of not needing a DT estimate.
--- The response is simple reduction from the signal carrying b'.
-bexec :: (BDynamic b b', SigInP p x) => b (S p (b' x y_) :&: x) (S p () :|: S p ())
-bexec = bsynch >>> bprep >>> beval 0
+-- | beval is same as bevalb', except that it constrains the inner
+-- behavior type to be the same as the outer behavior type. This 
+-- is useful to avoid an explicit type signature, e.g. for `B w` or
+-- `BCX w`, because the `w` type cannot be inferred.
+bevalb :: (BDynamic b b, SigInP p x) => DT -> b (S p (b x y) :&: x) (y :|: S p ())
+bevalb = bevalb'
+
+-- | evaluate, but drop the result. This is a common pattern with an
+-- advantage of not needing a DT estimate. The response is reduction 
+-- from the signal carrying b'.
+bexecb' :: (BDynamic b b', SigInP p x) => b (S p (b' x y_) :&: x) (S p () :|: S p ())
+bexecb' = bsynch >>> bprep >>> bevalb' 0
     where bprep = bfirst (bfmap modb &&& bconst ()) >>> bassocrp 
           modb b' = bsecond b' >>> bfst
 
--- | bevalOrElse use the `x` signal for a fallback behavior.
--- This performs the necessary dup and disjoin operations to
--- make `x` available during failure cases.
-bevalOrElse :: (SigInP p x, BDynamic b b') => DT -> b (S p (b' x y) :&: x) (y :|: (S p () :&: x))
-bevalOrElse dt = bsynch >>> bsecond bdup >>> bassoclp >>> bfirst (beval dt)
+-- | bexec serves similar to beval, constraining the b types to be
+-- the same.
+bexecb :: (BDynamic b b, SigInP p x) => b (S p (b x y_) :&: x) (S p () :|: S p ())
+bexecb = bexecb'
+
+-- | provides the `x` signal again for use with a fallback behavior.
+bevalb'OrElse :: (SigInP p x, BDynamic b b') => DT -> b (S p (b' x y) :&: x) (y :|: (S p () :&: x))
+bevalb'OrElse dt = bsynch >>> bsecond bdup >>> bassoclp >>> bfirst (bevalb' dt)
              -- now have (y :|: S p ()) :&: x 
              >>> bfirst (bmirror >>> bleft bdup) >>> bswap 
              -- now have x :&: ((S p () :&: S p ()) :|: y)
@@ -585,6 +596,9 @@ bevalOrElse dt = bsynch >>> bsecond bdup >>> bassoclp >>> bfirst (beval dt)
              -- now have ((x :&: S p ()) :|: (x :&: y))
              >>> bleft bswap >>> bmirror >>> bleft bsnd
              -- now have (y :|: (S p () :&: x))
+
+bevalbOrElse :: (SigInP p x, BDynamic b b) => DT -> b (S p (b x y) :&: x) (y :|: (S p () :&: x))
+bevalbOrElse = bevalb'OrElse
 
 -- WISHLIST: a behavior-level map operation.
 --

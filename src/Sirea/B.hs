@@ -80,7 +80,8 @@ instance BPeek (B w) where
 instance Behavior (B w)
 
 instance BDynamic (B w) (B w) where
-    beval dt  = evalB dt >>> bright bfst
+    bevalb' dt = -- bfirst (bforce (`seq` ())) >>> 
+                 evalB dt >>> bright bfst
 
 -- note: B does not support `bcross`, since B cannot 
 -- track which partitions are in use. Need BCX for

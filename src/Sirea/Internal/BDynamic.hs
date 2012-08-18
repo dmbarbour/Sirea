@@ -25,6 +25,7 @@ import Sirea.Internal.BImpl
 import Sirea.Internal.BCompile
 import Sirea.Time
 import Sirea.Signal
+
 --import Sirea.Internal.BImpl
 
 -- how far ahead should we establish behaviors?
@@ -54,7 +55,7 @@ dt_compile_future = 6 -- seconds into future
 -- consequently, eval tends to hinder optimizations.
 -- 
 evalB :: (SigInP p x) => DT -> B w (S p (B w x y) :&: x) (y :|: (S p () :&: x))
-evalB dt = 
+evalB dt = --trace "evalB" $
     -- synchronization and preparation (& initial compile step)
     synchB >>> forceDelayB >>> evalPrepB dt >>>
     -- after evalPrep, have (S p (Either (B w x y) ()) :&: x)
@@ -70,6 +71,7 @@ evalB dt =
 -- behaviors that won't fit into given time `dt`.
 evalPrepB :: DT -> B w (S p (B w x y) :&: x) ((S p (Either (B w x y) ())) :&: x)
 evalPrepB dt = B_latent $ \ tbx ->
+    --trace "evalPrepB" $
     assert (evalSynched tbx) $
     let tx = lnd_snd tbx in
     B_first (fmapB (evalPrep dt tx))
@@ -77,6 +79,7 @@ evalPrepB dt = B_latent $ \ tbx ->
 -- final evaluation step; assumes input B is valid at this point.
 evalFinalB :: (SigMembr x) => DT -> B w (S p (B w x y) :&: x) y
 evalFinalB dt = B_latent $ \ tbx ->
+    --trace "evalFinalB" $
     let tx = lnd_snd tbx in
     B_mkLnk (trEval dt) (mkLnkEval tx)
 
@@ -86,6 +89,7 @@ evalFinalB dt = B_latent $ \ tbx ->
 -- Here, the delay is only reported.)
 trEval :: DT -> LnkD LDT x -> LnkD LDT y
 trEval dt t0 = 
+    --trace "trEval" $
     assert (evalSynched t0) $
     let dt0 = ldt_maxCurr t0 in
     let dtf = dt0 + dt in
@@ -101,6 +105,7 @@ trEval dt t0 =
 -- Basically, the `B` after this point is highly context dependent.
 evalPrep :: DT -> LnkD LDT x -> B w x y -> Either (B w x y) ()
 evalPrep dt ldtx =
+    --trace "evalPrep" $
     assert (evalSynched ldtx) $
     evalFitDelay dtf . precompile
     where dt0 = ldt_maxCurr ldtx
@@ -112,6 +117,7 @@ evalPrep dt ldtx =
 -- entering `y`. It may fail if the behavior is too large for dtf.
 evalFitDelay :: DT -> (B w x y, LnkD LDT y) -> Either (B w x y) ()
 evalFitDelay dtf (b,t0) =
+    --trace "evalFitDelay" $
     assert (ldt_valid t0) $
     if (ldt_maxGoal t0 > dtf) 
         then Right () -- cannot fit to delay
@@ -124,6 +130,7 @@ evalFitDelay dtf (b,t0) =
 -- "delay to fit" a particular time
 trDTF :: DT -> LnkD LDT x -> LnkD LDT y
 trDTF dtf t0 = 
+    --trace "trDTF" $
     assert (ldt_valid t0) $
     assert (dtf >= ldt_maxGoal t0) $
     LnkDUnit $ LDT { ldt_curr = dtf
@@ -146,7 +153,8 @@ mkLnkEval dtx = MkLnk { ln_build = buildEval dtx
 
 -- buildEval prepares the evaluator to receive and process inputs.
 buildEval :: (SigMembr x) => LnkD LDT x -> Lnk y -> IO (Lnk (S p (B w x y) :&: x))
-buildEval dtx lnyFinal = 
+buildEval dtx lnyFinal =
+    --trace "buildEval start" $ 
     assert (evalSynched dtx) $
     -- need to store the input signals
     newIORef st_zero >>= \ rfBSig -> -- present and future dynamic behaviors
@@ -159,22 +167,27 @@ buildEval dtx lnyFinal =
     mkMergeLnkFactory lnyFinal >>= \ mkLny ->
     let compile b = takeIdx rfIdx >>= compileBC1 b . mkLny in
     let compileE (t,mb) =
+            --trace ("compileE init " ++ show t) $
             maybe (return LnkDead) compile mb >>= \ lx ->
+            --trace "compileE fini" $
             return (t,lx)
     in  
     -- install updates to the dynamic behavior
     let touch_bsig = 
             readIORef rfBSig >>= \ st ->
             unless (st_expect st) $ -- prevent double touch
+                --trace "touch_bsig" $
                 let st' = st_poke st in
                 writeIORef rfBSig st' >>
                 dynBTouch dynX
     in
     let update_bsig su = 
+            --trace "update_bsig" $
             touch_bsig >> -- touch (in case not already touched)
             stSigupRef rfBSig su >>= \ st' -> -- update signal & clear touch
             let tu = fmap snd (su_state su) in
             buildUpdateRange rfTt tu st' >>= \ range -> -- compute compilation target
+            --trace ("update range: " ++ show (map fst range)) $
             mapM compileE range >>= \ dynLnks -> -- [(T,Lnk x)]
             dynBUpdate (su_stable su) dynLnks dynX 
     in
@@ -186,13 +199,14 @@ stSigupRef :: IORef (SigSt a) -> SigUp a -> IO (SigSt a)
 stSigupRef rf su = 
     readIORef rf >>= \ st ->
     let st' = st_sigup su st in -- st' is updated; stc is GC'd
-    let stc = maybe st_zero (`st_clear` stc) (st_stable st') in
+    let stc = maybe st_zero (`st_clear` st') (su_stable su) in
     st' `seq` stc `seq` writeIORef rf stc >>
     return st'
 
 -- compute which elements to compile based on time and update time
 buildUpdateRange :: IORef (Maybe T) -> (Maybe T) -> SigSt a -> IO [(T,Maybe a)]
 buildUpdateRange rfTt tu st' =
+    --trace ("buildUpdateRange") $
     readIORef rfTt >>= \ tUpperLast ->
     let tStable = st_stable st' in
     let tLower = leastTime tUpperLast tu in
@@ -204,8 +218,10 @@ buildUpdateRange rfTt tu st' =
                 if (tLo > tHi) then [] else
                 let sl = sigToList (st_signal st') tLo tHi in
                 if (tu == tLower) then sl else tail sl
-            Nothing -> []
+            Nothing -> 
+                []
     in 
+    range `seq`
     return range
 
 -- build a complex dynamic behavior state that reflects the signal type
@@ -257,6 +273,7 @@ instance BuildMembr MkDyn where
 -- touch all signals in a complex dynamic behavior
 dynBTouch :: LnkW Dyn a -> IO ()
 dynBTouch = ln_forEach $ \ (Dyn rf) ->
+    --trace "dynBTouch" $
     readIORef rf >>= \ dyn ->
     unless (dyn_btouch dyn) $
         let dyn' = dyn { dyn_btouch = True } in
@@ -267,6 +284,7 @@ dynBTouch = ln_forEach $ \ (Dyn rf) ->
 -- touch for signal updates in dynamic behavior
 dynSigTouch :: Dyn a -> IO ()
 dynSigTouch (Dyn rf) = 
+    --trace "dynSigTouch" $
     readIORef rf >>= \ dyn ->
     unless ((st_expect . dyn_sigst) dyn) $
         let sigst' = (st_poke . dyn_sigst) dyn in
@@ -277,6 +295,7 @@ dynSigTouch (Dyn rf) =
 
 dynSigUpdate :: Dyn a -> SigUp a -> IO ()
 dynSigUpdate (Dyn rf) su =
+    --trace "dynSigUpdate" $
     readIORef rf >>= \ dyn ->
     let sigst' = (st_sigup su . dyn_sigst) dyn in
     let tmupd' = leastTime (dyn_tmupd dyn) ((fmap snd . su_state) su) in
@@ -299,6 +318,7 @@ dynBUpdate tm bl (LnkSum dynX dynY) =
     dynBUpdate tm blX dynX >>
     dynBUpdate tm blY dynY
 dynBUpdate tm bl (LnkSig (Dyn rf)) =
+    --trace "dynBUpdate" $
     let blu = map (second ln_lnkup) bl in
     dynBUpdateLinks tm blu rf >>
     dynMaybeEmit rf
@@ -324,7 +344,9 @@ dynBUpdateLinks tStable bl@((tu,_):_) rf =
     mapM_ (terminate tu . snd) oldTail
 
 terminate :: T -> LnkUp x -> IO ()
-terminate tm lu = ln_update lu sigTerminate
+terminate tm lu = 
+    --trace ("terminate") $
+    ln_update lu sigTerminate
     where sigTerminate = SigUp { su_state = Just (s_never,tm)
                                , su_stable = Nothing }
 
@@ -343,6 +365,7 @@ dynMaybeEmit rf =
     let bExpectSig = (st_expect . dyn_sigst) dyn in
     let bExpectB = dyn_btouch dyn in
     unless (bExpectSig || bExpectB) $
+        --trace ("emit init") $ 
         let st = dyn_sigst dyn in
         let bl = dyn_blink dyn in
         let tUpdate = dyn_tmupd dyn in
@@ -384,8 +407,8 @@ bl_signal tu sk (tLo:tHi:ts) = -- internal signal
 -- all signals have the same stability, independent of update.
 bl_stable :: (Ord t) => t -> [t] -> [Maybe t]
 bl_stable _ [] = []
-bl_stable tStable (tf:[]) = (Just tStable):[]
-bl_stable tStable (tLo:tHi:ts) =
+bl_stable tStable (_:[]) = (Just tStable):[]
+bl_stable tStable (_:tHi:ts) =
     let more = bl_stable tStable (tHi:ts) in
     if (tStable >= tHi) then Nothing:more
                         else (Just tStable):more
