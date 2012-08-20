@@ -94,6 +94,30 @@ instance BDynamic (BCX w) (BCX w) where
 onNextStepBCX :: (Partition p) => BCX w (S p x) (S p x)
 onNextStepBCX = wrapBCX $ \ cw -> stepDelayB cw >>> phaseDelayB cw
 
+{-
+
+-- | getContextBCX will lift a partition context into an RDP signal.
+-- This is probably a bad idea, since there is very little we can
+-- do with most resources except via conventional IO. However, it
+-- may be convenient when modeling dynamic behaviors.
+--
+getContextBCX :: (Typeable p) => BCX w (S p ()) (S p (PCX p))
+getContextBCX = wrapBCX $ bconst . findInPCX
+
+-- | loadResourceBCX will a partition resource into an RDP value.
+-- The resource is selected by both `p` and `r`. 
+--
+--     loadResourceBCX = getContextBCX >>> bfmap findInPCX
+--
+loadResourceBCX :: (Resource r, Typeable p) => BCX w (S p ()) (S p r)
+loadResourceBCX = wrapBCX $ bconst . findInPCX . loadPCX
+    where loadPCX :: PCX w -> PCX p
+          loadPCX = findInPCX
+
+-- | getGlobalContextBCX will lift the global context into an RDP
+-- signal. This is almost certainly a bad idea.
+getGlobalContextBCX :: BCX w (S p ()) (S p (PCX w))
+-}
 
 -- Idea: Wrap the `PCX w` into a `GCX w` for global context. 
 --   Idea is (1) to associate resources only with partition contexts.

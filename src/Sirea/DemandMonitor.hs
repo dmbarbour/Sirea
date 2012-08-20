@@ -1,31 +1,44 @@
 
--- | RDP behaviors are effectful, and one of the simplest effects is
--- to observe concurrent demands. The simplest approach, though not
--- the most efficient, is to simply return a set of active demands.
--- Ability to observe concurrent demands is valuable for blackboard
--- systems, publish-subscribe models, registries, and other shared
--- environments for multi-agent systems. 
+-- | RDP behaviors are effectful, albeit in a constrained manner to
+-- support declarative reasoning about and composition of effects. 
+-- RDP can influence a resource via the set of active signals to the
+-- resource at any given instant. (Signals in this influential role 
+-- are called demands, thus the name Reactive Demand Programming.)
 --
--- Demand monitors serve this role. Demand monitors are modeled as a
--- tightly coupled pair of behaviors:
+-- Among the simplest useful resources for RDP is a demand monitor.
+-- A demand monitor allows developers to observe the set of active
+-- demands. Demand monitors are volatile; when a demand halts, it
+-- cannot be monitored.
 --
---    * one behavior to publish the "demand" signals
---    * one behavior to subscribe and "monitor" collective demand
+-- This allows indirect communication, one-to-many or many-to-many.
+-- It is analogous to a bulletin board or registry, albeit without 
+-- persistent state. Demand monitors are also a suitable primitive
+-- for explaining many-to-one observation of demands by a resource.
+-- Demand monitors are useful for open or extensible systems, where
+-- new agents can join and contribute behaviors.
 --
--- The basic monitors respond with the set of demands. Specialized
--- demand monitors exist, responding with minimum demand or whether 
--- demand is present. The specializations can improve efficiency and
--- stability, albeit at significant cost to expressiveness. 
+-- Every demand monitor has two associated behaviors: one to publish
+-- demand, one to monitor it. These are called the demand facet and
+-- the monitor facet, respectively. Using dynamic behaviors, it is
+-- possible to separate these facets to enforce secure communication
+-- patterns (cf. object capability model). 
 --
--- Demand monitors do introduce a volatile state concept, which can
--- be achieved by clever use of `bdelay` to feed a demand monitor's
--- past into its future. This technique is unstable, inefficient,
--- and risks feedback cycles. Other packages provide more effective 
--- state models for RDP.
+-- A difficulty with demand monitors is that they are very unstable.
+-- When demands change at independent frequency, the set of demands
+-- fluctuates more rapidly than any individual demand. Consequently,
+-- demand monitors are most suitable for highly stable demands, or
+-- for relatively few publishers (few-to-many). When RDP developers 
+-- need stability, alternatives exist: state models can be stable, 
+-- and stateless logics can leverage non-determinism for stability. 
 --
 module Sirea.DemandMonitor 
     (
     ) where
+
+-- NOTE: I'm not entirely sure what I want for a generic demand
+-- monitor interface, so I'll start with a concrete model and see
+-- where I end up. 
+
 
 -- DESIGN CONSIDERATION: Should demand monitors also be named by
 -- unique string? (e.g. URL?) or by Typeable Ordinal?

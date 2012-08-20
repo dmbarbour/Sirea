@@ -1,6 +1,7 @@
 {-# LANGUAGE MultiParamTypeClasses, TypeOperators, GADTs #-}
 
--- | Utility behaviors that lack a better home.
+-- | Utility behaviors that lack a better home. Anything here could
+-- have been written by a Sirea client.
 module Sirea.Utility
     ( HasPrinter(..), bprint
     , BUndefined(..), bundefined, bundefinedk

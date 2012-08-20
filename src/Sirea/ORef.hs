@@ -21,7 +21,6 @@ module Sirea.ORef
 --   * Demand Monitors
 --   * Reactive State Models
 --   * Filesystem Observers (named by values other than types...)
---   
 
 import Data.Typeable
 import Data.IORef
