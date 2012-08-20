@@ -15,7 +15,7 @@ import Sirea.Time
 
 
 rotate567 :: BCX w (S p ()) (S p Int :&: S p Int :&: S p Int)
-rotate567 = bclockOfFreq 0.5 >>> bfmap tmNanos >>> bfmap (`div` 2000000000) >>>
+rotate567 = bclockOfFreq 3 >>> bfmap tmNanos >>> bfmap (`div` 333333333) >>>
             (bfmap (`mod` 5) &&& bfmap (`mod` 6) &&& bfmap (`mod` 7)) >>>
             (bfmap fromInteger *** bfmap fromInteger *** bfmap fromInteger)
 

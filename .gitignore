@@ -5,3 +5,4 @@ tmp/
 *.o
 src/FRP/Sirea/BdeepGen
 cabal-dev/
+.shelly
