@@ -56,6 +56,7 @@ import Sirea.Time
 import Data.Typeable
 import Data.IORef
 import Control.Concurrent (forkIO)
+import GHC.Conc (labelThread)
 import Control.Applicative
 
 -- | Cross between partitions. Note that this behavior requires the
@@ -95,11 +96,8 @@ class BScope b where
 -- otherwise there is no clear way to hook up to behaviors. 
 --
 class (Typeable p) => Partition p where
-    -- | create a new partition thread. The default implementation
-    -- creates a thread with forkIO that will simply run RDP events
-    -- until stopped. 
-    -- 
-    -- PCX supports communication between threads and RDP behaviors. 
+    -- | create a new partition thread, with access to partition
+    -- resources via PCX. (Recommend use of GHC.Conc.labelThread.)
     newPartitionThread :: PCX p -> Stepper -> IO Stopper
 
 
@@ -167,11 +165,16 @@ instance Typeable1 Pt where
     typeOf1 _ = mkTyConApp tyConPt []
         where tyConPt = mkTyCon3 "sirea-core" "Sirea.Partition" "Pt"
 instance (Typeable x) => Partition (Pt x) where
-    newPartitionThread _ stepper = 
+    newPartitionThread cp stepper = 
         newIORef emptyStopData >>= \ rfStop ->
-        forkIO (simplePartitionLoop rfStop stepper) >>
+        forkIO (simplePartitionLoop rfStop stepper) >>= \ tid ->
+        labelThread tid (getLabel cp) >>
         return (makeStopper rfStop)
 
+getLabel :: (Typeable x) => PCX x -> String
+getLabel = show . typeOf . getPTX 
+    where getPTX :: PCX x -> Pt x
+          getPTX _ = undefined
 
 -- | P0 is the initial or main partition for a Sirea application. It
 -- has a thread, but one controlled by the Sirea client rather than

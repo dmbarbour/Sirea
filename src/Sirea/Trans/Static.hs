@@ -53,7 +53,6 @@ instance (BSum b, Applicative f) => BSum (StaticB f b) where
 instance (BDisjoin b, Applicative f) => BDisjoin (StaticB f b) where
     bdisjoin= toSB bdisjoin
 instance (BZip b, Applicative f) => BZip (StaticB f b) where
-    bzip    = toSB bzip
     bzap    = toSB bzap
 instance (BSplit b, Applicative f) => BSplit (StaticB f b) where
     bsplit  = toSB bsplit

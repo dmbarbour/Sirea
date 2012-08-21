@@ -22,7 +22,7 @@ module Sirea.Behavior
     , BDisjoin(..), bdisjoinly, bdisjoinlz, bdisjoinlyy, bdisjoinlzz
     ,               bdisjoinry, bdisjoinrz, bdisjoinryy, bdisjoinrzz
     , bIfThenElse, bUnless, bWhen -- utility
-    , BZip(..), bzipWith, bunzip
+    , BZip(..), bzip, bzipWith, bunzip
     , BSplit(..), bsplitWith, bsplitOn, bunsplit
     , BTemporal(..), BPeek(..)
     , BDynamic(..), bexecb', bevalb'OrElse
@@ -409,17 +409,16 @@ bWhen cond action = bvoid $
 -- At least one of bzip or bzap must be defined.
 --
 class (BProd b, BFmap b) => BZip b where
-    -- | bzip is a traditional zip, albeit between signals. Values
-    -- of the same times are combined.
-    bzip :: b (S p x :&: S p y) (S p (x,y))
-    bzip = bzipWith (,)
-    
     -- | bzap describes an applicative structure. It applies a
     -- function while zipping the two signals. Usefully, this can
     -- support some partial reuse optimizations if the left element
     -- changes slower than the right element.
     bzap :: b (S p (x -> y) :&: S p x) (S p y)
-    bzap = bzip >>> bfmap (uncurry ($))
+
+-- | bzip is a traditional zip, albeit between signals. Values
+-- of the same times are combined.
+bzip :: (BZip b) => b (S p x :&: S p y) (S p (x,y))
+bzip = bzipWith (,)
 
 -- | A common pattern - zip with a particular function.
 bzipWith :: (BZip b) => (x -> y -> z) -> b (S p x :&: S p y) (S p z)

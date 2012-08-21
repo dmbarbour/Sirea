@@ -61,12 +61,19 @@ Library
     Sirea.BCX
 
     Sirea.Link
+    Sirea.DemandMonitor
     Sirea.ORef
     Sirea.UnsafeOnUpdate
     Sirea.Clock
     Sirea.Utility
 
     Sirea.Trans.Static
+    Sirea.Trans.Error
+    Sirea.Trans.Skipper
+    Sirea.Trans.Reader
+    Sirea.Trans.Writer
+    Sirea.Trans.State
+    Sirea.Trans.Bypass
 
     Sirea.Internal.STypes
     Sirea.Internal.DiscreteTimedSeq

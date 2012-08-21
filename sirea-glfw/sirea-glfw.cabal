@@ -1,0 +1,66 @@
+Name: sirea-glfw
+Version: 0.1
+Cabal-Version: >= 1.2
+Synopsis: Joystick, Keyboard, Mouse, and an OpenGL window in Sirea
+Category: Sirea
+Description:
+  This project is a simple adapter to GLFW in Sirea. GLFW provides
+  simplified, portable access to joystick, keyboard, mouse, and an
+  OpenGL window. It is comparable to SDL, but without sound support.
+  
+  All resources in GLFW are provided in a single partition, which is
+  bound to an OS level thread. One thread for many responsibilities
+  is not to my preference, but GLFW conveniently achieves useful and
+  portable behaviors in a hurry. Sirea-glfw will use only the GLFW
+  features demanded of it, e.g. it will not query for joystic state
+  if nobody is listening, and will raise a window only when there is
+  something to render.
+ 
+  Keyboard, Joystick, and Mouse adapt quite easily to the RDP model.
+  Keys are modeled statefully, but are observed using GLFW callbacks
+  to ensure every intermediate keystate is represented, and that all
+  overlapping keypresses are properly observable as overlapping.
+  
+  A weakness of GLFW is that it does not report the OS event times,
+  thus Sirea must make best-effort estimates, which adds error and
+  variance to user-input latency. Also, GLFW does supports only
+  one mouse and one keyboard.
+  
+  GLFW is designed with an assumption that there is only one render
+  function. RDP is designed to be extensible and pluggable; there
+  may be many concurrent render demands, with new demands introduced
+  dynamically. To accommodate the needs of both RDP and GLFW, the
+  sirea-glfw module asks for a little extra metadata to support 
+  rendering to subwindows, layout and layering. 
+  
+  Essentially, sirea-glfw models a simplistic window manager within
+  a GLFW window. It is reasonably expressive, leverages stable logic
+  to minimize disruptions in the face of changing constraints. But
+  developers who desire precise control should take the expedient
+  route of ensuring they are the only behavior writing to that GLFW
+  resource, and shift any cooperation to a pre-render model.
+
+Author: David Barbour
+Maintainer: dmbarbour@gmail.com
+Homepage: http://github.com/dmbarbour/Sirea
+Package-Url: 
+Copyright: (c) 2012 by David Barbour
+License: BSD3
+Stability: experimental
+build-type: Simple
+
+Library
+  hs-Source-Dirs: src
+  Build-Depends: base (>=4.5),
+    sirea-core (>=0.1)
+
+  Exposed-Modules:
+    Sirea.GLFW
+    Sirea.GLFW.Joystick
+    Sirea.GLFW.Mouse
+    Sirea.GLFW.Keyboard
+    Sirea.GLFW.Render
+
+  ghc-options: -threaded -Wall -fno-warn-orphans
+
+
