@@ -1,10 +1,14 @@
 {-# LANGUAGE FlexibleInstances, MultiParamTypeClasses #-}
 
 -- | Static - augment a behavior with static information, applying an
--- applicative when building the behavior.  
+-- applicative when building the behavior. 
+--
+-- This is probably the most useful basis for behavior transforms in
+-- RDP, e.g. for configuration and dependency injection, and staged
+-- programming.
 module Sirea.Trans.Static
     ( StaticB
-    , wrapStatic, unwrapStatic
+    , liftStatic, wrapStatic, unwrapStatic
     ) where
 
 import Prelude hiding (id,(.))
@@ -21,54 +25,53 @@ wrapStatic = SB
 unwrapStatic :: StaticB f b x y -> f (b x y)
 unwrapStatic (SB fbxy) = fbxy
 
-toSB :: (Applicative f) => b x y -> StaticB f b x y
-toSB = (SB . pure)
+liftStatic :: (Applicative f) => b x y -> StaticB f b x y
+liftStatic = SB . pure
 
 -- from Sirea.Behavior
 instance (Category b, Applicative f) => Category (StaticB f b) where
-    id = toSB id
+    id = liftStatic id
     (SB f) . (SB g) = SB $ (.) <$> f <*> g
 instance (BFmap b, Applicative f) => BFmap (StaticB f b) where
-    bfmap   = toSB . bfmap
-    bconst  = toSB . bconst
-    bstrat  = toSB bstrat
-    btouch  = toSB btouch
-    badjeqf = toSB badjeqf
+    bfmap   = liftStatic . bfmap
+    bconst  = liftStatic . bconst
+    bstrat  = liftStatic bstrat
+    btouch  = liftStatic btouch
+    badjeqf = liftStatic badjeqf
 instance (BProd b, Applicative f) => BProd (StaticB f b) where
     bfirst (SB f) = SB (bfirst <$> f)
-    bdup    = toSB bdup
-    b1i     = toSB b1i
-    b1e     = toSB b1e
-    btrivial= toSB btrivial
-    bswap   = toSB bswap
-    bassoclp= toSB bassoclp
+    bdup    = liftStatic bdup
+    b1i     = liftStatic b1i
+    b1e     = liftStatic b1e
+    btrivial= liftStatic btrivial
+    bswap   = liftStatic bswap
+    bassoclp= liftStatic bassoclp
 instance (BSum b, Applicative f) => BSum (StaticB f b) where
     bleft  (SB f) = SB (bleft <$> f)
-    bmirror = toSB bmirror
-    bmerge  = toSB bmerge
-    b0i     = toSB b0i
-    b0e     = toSB b0e
-    bvacuous= toSB bvacuous
-    bassocls= toSB bassocls
+    bmirror = liftStatic bmirror
+    bmerge  = liftStatic bmerge
+    b0i     = liftStatic b0i
+    b0e     = liftStatic b0e
+    bvacuous= liftStatic bvacuous
+    bassocls= liftStatic bassocls
 instance (BDisjoin b, Applicative f) => BDisjoin (StaticB f b) where
-    bdisjoin= toSB bdisjoin
+    bdisjoin= liftStatic bdisjoin
 instance (BZip b, Applicative f) => BZip (StaticB f b) where
-    bzap    = toSB bzap
+    bzap    = liftStatic bzap
 instance (BSplit b, Applicative f) => BSplit (StaticB f b) where
-    bsplit  = toSB bsplit
+    bsplit  = liftStatic bsplit
 instance (BTemporal b, Applicative f) => BTemporal (StaticB f b) where
-    bdelay  = toSB . bdelay
-    bsynch  = toSB bsynch
+    bdelay  = liftStatic . bdelay
+    bsynch  = liftStatic bsynch
 instance (BPeek b, Applicative f) => BPeek (StaticB f b) where
-    bpeek   = toSB . bpeek
+    bpeek   = liftStatic . bpeek
 instance (Behavior b, Applicative f) => Behavior (StaticB f b)
 
 -- from Sirea.Partition
 instance (BCross b, Applicative f) => BCross (StaticB f b) where
-    bcross  = toSB bcross
+    bcross  = liftStatic bcross
 
--- NOTE: BDynamic is not supported for StaticB in general.
--- (Not every applicative can be applied to a stream of future behaviors.) 
+
 
 
 

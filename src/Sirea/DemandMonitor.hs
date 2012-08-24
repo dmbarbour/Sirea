@@ -37,12 +37,11 @@
 -- demand monitors.
 --
 module Sirea.DemandMonitor 
-    ( newDemandMonitor
-    , newDemandMonitorZ
-    , newDemandMonitorZeq
+    ( newDemandMonitor, newDemandMonitorZ, newDemandMonitorZeq
     , newActimon, newMaximon, newMinimon
     ) where
 
+import Control.Applicative
 import Sirea.Signal
 import Sirea.Behavior
 import Sirea.B
@@ -70,9 +69,9 @@ newDemandMonitorZ :: ([Sig e] -> Sig z) -- n-zip function
 newDemandMonitorZ = flip newDemandMonitorBase ((const . const) False)
 
 -- | newDemandMonitorZEq is similar to newDemandMonitorZ, but adds
--- an adjacency equality filter to the result. This can improve
--- stability by delaying updates that don't seem to change any
--- observed values in the short term.
+-- an adjacency equality filter to the result. The equality filter
+-- will eliminate redundant updates over time, and eliminate some
+-- redundancies in the short term (by delaying updates).
 --
 -- See also: the notes for newDemandMonitorZ
 newDemandMonitorZeq :: (Eq z) => ([Sig e] -> Sig z) 
@@ -98,13 +97,10 @@ newActimon :: IO (B w (S p ()) (S p ()), B w (S p ()) (S p Bool))
 newActimon = newDemandMonitorZeq sigAny
 
 sigAny :: [Sig a] -> Sig Bool
-sigAny = error "TODO!"
-{- 
-s_select :: [Sig a] -> Sig [a]
-s_select = foldr (s_full_zip jf) (s_always [])
-  where jf (Just x) (Just xs) = Just (x:xs)
-        jf _ xs = xs
--}
+sigAny sigs = s_full_map isActive sigsMerged
+    where sigsMerged = foldr (<|>) empty sigs
+          isActive Nothing  = Just False
+          isActive (Just _) = Just True
 
 -- | newMaximon (K Maximum Monitor) will monitor a list of the top 
 -- K demands (if that many exist), rated and sorted based on Ordinal 
@@ -116,24 +112,46 @@ newMaximon k =
     if (1 == k) then newDemandMonitorZeq (sigBest (>))
                 else newDemandMonitorZeq (sigKBest (>) k)
 
--- | newMinimon (K Minimum Monitor) is simply the newMaximon inverted.
+-- | newMinimon (K Minimum Monitor) is simply the newMaximon with a
+-- preference for the lowest values. 
 newMinimon :: (Ord e) => Int -> IO (B w (S p e) (S p ()), B w (S p ()) (S p [e]))
 newMinimon k = 
     if (k <  1) then return (bconst (), bconst []) else
     if (1 == k) then newDemandMonitorZeq (sigBest (<))
                 else newDemandMonitorZeq (sigKBest (<) k)
 
-
 -- return the `best` signal according to a comparison function
 sigBest :: (e -> e -> Bool) -> [Sig e] -> Sig [e]
-sigBest = error "TODO!"
+sigBest betterThan = foldr (s_full_zip jf) (s_always [])
+    where jf (Just x) (Just []) = Just (x:[])
+          jf (Just x) xs@(Just (y:_)) =
+            if (x `betterThan` y) 
+                then Just (x:[]) 
+                else xs
+          jf _ xs = xs
 
 -- return the k `best` signals according to a comparison function
 -- (in order from best to worst). This assumes k is relatively
 -- small; very large k could become expensive quickly. 
+--
+-- Note: here I assume two values are equal if neither is better
+-- than the other. This assumption is valid because sigKBest is
+-- only instantiated from Ord functions (<) and (>).
 sigKBest :: (e -> e -> Bool) -> Int -> [Sig e] -> Sig [e]
-sigKBest = error "TODO!"
+sigKBest betterThan k = fmap (take k) . foldr (s_full_zip jf) (s_always [])
+    where jf (Just x) (Just xs) = Just (sortedInsert betterThan x xs)
+          jf _ xs = xs
 
+sortedInsert :: (x -> x -> Bool) -> x -> [x] -> [x]
+sortedInsert _ x [] = (x:[])
+sortedInsert bt x (y:ys) = if (x `bt` y) then (x:y:ys) else y:(si y ys)
+    where -- decide if x is after k or dropped (if equal to k)
+            si k [] = if (k `bt` x) then (x:[]) else []
+            si k (z:zs) = 
+                if (x `bt` z)
+                    then if (k `bt` x) then (x:z:zs) -- insert x after k
+                                       else (z:zs)   -- equal to last; drop x
+                    else z:(si z zs) -- x inserts somewhere after z
 
 
 -- NOTE: I'm not entirely sure what I want for a generic demand

@@ -70,8 +70,6 @@ Library
     Sirea.Trans.Static
     Sirea.Trans.Error
     Sirea.Trans.Reader
-    --Sirea.Trans.State (useless)
-    --Sirea.Trans.Bypass (useless)
 
     Sirea.Internal.STypes
     Sirea.Internal.DiscreteTimedSeq

@@ -15,15 +15,15 @@ import Control.Category
 import Sirea.Behavior
 import Sirea.Partition
 
-newtype ErrorB e b x y = ErrorB (b x (e :|: y))
+newtype ErrorB e b x y = EB (b x (e :|: y))
 
 -- | Wrap a behavior for the Error transform
 wrapError :: b x (e :|: y) -> ErrorB e b x y
-wrapError = ErrorB
+wrapError = EB
 
 -- | Expose the underlying behavior
 unwrapError :: ErrorB e b x y -> b x (e :|: y)
-unwrapError (ErrorB b) = b
+unwrapError (EB b) = b
 
 -- | Lift an error-free behavior into the Error transform
 liftError :: (BSum b) => b x y -> ErrorB e b x y
@@ -50,7 +50,7 @@ tryInUnless :: (BDisjoin b, SigInP p x)
             -> ErrorB e b (x :&: y) z -- on success
             -> ErrorB e b (x :&: e) z -- on failure
             -> ErrorB e b x z
-tryInUnless (ErrorB b0) (ErrorB bS) (ErrorB bF) = wrapError $
+tryInUnless (EB b0) (EB bS) (EB bF) = wrapError $
     bdup >>> bsecond b0 >>> -- @ (x :&: (e :|: (S p () :&: y)))
     bsecond bmirror >>> bdisjoin >>> -- @ ((x :&: y) :|: (x :&: e))
     (bS +++ bF) >>> bmerge -- @ (e :|: z)
@@ -61,7 +61,7 @@ newError = liftError . unwrapError
 
 instance (BSum b) => Category (ErrorB e b) where
     id = liftError id
-    (ErrorB g) . (ErrorB f) = ErrorB $
+    (EB g) . (EB f) = EB $
         f >>> bright g >>> bassocls >>> bleft bmerge
 
 instance (BSum b, BFmap b) => BFmap (ErrorB e b) where
@@ -71,7 +71,7 @@ instance (BSum b, BFmap b) => BFmap (ErrorB e b) where
     btouch  = liftError btouch
     badjeqf = liftError badjeqf
 instance (BSum b) => BSum (ErrorB e b) where
-    bleft (ErrorB f) = ErrorB $ bleft f >>> bassocrs
+    bleft (EB f) = EB $ bleft f >>> bassocrs
     bmirror = liftError bmirror
     bmerge  = liftError bmerge
     b0i     = liftError b0i
@@ -96,7 +96,7 @@ instance (BCross b, BSum b) => BCross (ErrorB e b) where
 -- disjoin for a generic type. So, ErrorB is not a product behavior.
 --
 --instance (BProd b, BSum b) => BProd (ErrorB e b) where
---    bfirst (ErrorB f) = 
+--    bfirst (EB f) = 
 -- ALSO BLOCKS: BDisjoin, BZip, Behavior, BDynamic
 
 

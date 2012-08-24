@@ -12,13 +12,13 @@ import Sirea.Behavior
 import Sirea.Partition
 
 
-newtype ReaderB r b x y = ReaderB (b (r :&: x) y)
+newtype ReaderB r b x y = RB (b (r :&: x) y)
 
 wrapReader :: b (r :&: x) y -> ReaderB r b x y
-wrapReader = ReaderB
+wrapReader = RB
 
 unwrapReader :: ReaderB r b x y -> b (r :&: x) y
-unwrapReader (ReaderB b) = b
+unwrapReader (RB b) = b
 
 liftReader :: (BProd b) => b x y -> ReaderB r b x y
 liftReader = wrapReader . (bsnd >>>)
@@ -26,7 +26,7 @@ liftReader = wrapReader . (bsnd >>>)
 -- from Sirea.Behavior
 instance (BProd b) => Category (ReaderB r b) where
     id = liftReader id
-    (ReaderB g) . (ReaderB f) = ReaderB $
+    (RB g) . (RB f) = RB $
         bfirst bdup >>> bassocrp >>> bsecond f >>> g
 instance (BFmap b, BProd b) => BFmap (ReaderB r b) where
     bfmap   = liftReader . bfmap
@@ -36,7 +36,7 @@ instance (BFmap b, BProd b) => BFmap (ReaderB r b) where
     badjeqf = liftReader badjeqf
 instance (BProd b) => BProd (ReaderB r b) where
     -- bfirst :: (r :&: (x :&: y)) ~> (x' :&: y) 
-    bfirst (ReaderB f) = ReaderB $ bassoclp >>> bfirst f
+    bfirst (RB f) = RB $ bassoclp >>> bfirst f
     bdup    = liftReader bdup
     b1i     = liftReader b1i
     b1e     = liftReader b1e

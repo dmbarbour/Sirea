@@ -59,10 +59,13 @@ bfwd = id
 -- performance annotations. BFmap supports arbitrary Haskell 
 -- functions. 
 -- 
--- LAWS:
---    bfmap f >>> bfmap g == bfmap (f >>> g)
---    bconst c >>> bfmap f == bconst (f c)
---    bconst c >>> bconst d == bconst d
+-- Some useful properties:
+--    bfmap f >>> bfmap g = bfmap (f >>> g)
+--    bconst c >>> bfmap f = bconst (f c)
+--    bconst c >>> bconst d = bconst d
+--
+-- The bfmap behavior serves the role of `arr` in Control.Arrow, but
+-- it cannot operate across asynchronous signals or partitions.
 --
 class (Category b) => BFmap b where
     -- | bfmap applies a function to a concrete signal. This allows
@@ -202,14 +205,14 @@ bstratf runF = bfmap (runF . fmap return) >>> bstrat
 --
 -- Various Laws:
 --
--- Distribute First: bfirst f >>> bfirst g == bfirst (f >>> g)
--- Spatial Idempotence: bdup >>> (f *** f) == f >>> bdup
--- Spatial Commutativity: bfirst f >>> bsecond g == bsecond g >>> bfirst f
---     Lemma: (f *** g) >>> (f' *** g') == (f >>> f') *** (g >>> g')
--- Associative Identity (Product, Left): bassoclp >>> bassocrp == id
--- Associative Identity (Product, Right): bassocrp >>> bassoclp == id
--- Commutative Identity (Product): bswap >>> bswap == id
--- 
+-- Distribute First: bfirst f >>> bfirst g = bfirst (f >>> g)
+-- Spatial Idempotence: bdup >>> (f *** f) = f >>> bdup
+-- Spatial Commutativity: bfirst f >>> bsecond g = bsecond g >>> bfirst f
+--     Lemma: (f *** g) >>> (f' *** g') = (f >>> f') *** (g >>> g')
+-- Associative Identity (Product, Left): bassoclp >>> bassocrp = id
+-- Associative Identity (Product, Right): bassocrp >>> bassoclp = id
+-- Commutative Identity (Product): bswap >>> bswap = id
+-- Duplicate Identity: bdup >>> bswap = bdup
 --
 class (Category b) => BProd b where
     bfirst   :: b x x' -> b (x :&: y) (x' :&: y)
@@ -273,16 +276,19 @@ bvoid f = bdup >>> bfirst f >>> bsnd
 -- 
 -- Various Laws: 
 --
--- Distribute Left: bleft f >>> bleft g == bleft (f >>> g)
--- Decision Commutativity: bleft f >>> bright g == bright g >>> bleft f
---     Lemma: (f +++ g) >>> (f' +++ g') == (f >>> f') +++ (g >>> g')
--- Decision Idempotence: bsynch >>> (f +++ f) >>> bmerge 
---                    == bsynch >>> bmerge >>> f
--- Dead Source Elim (Left):  binl >>> bright g == binl
--- Dead Source Elim (Right): binr >>> bleft f  == binr
--- Associative Identity (Sum, Left): bassocls >>> bassocrs == id
--- Associative Identity (Sum, Right): bassocrs >>> bassocls == id
--- Commutative Identity (Product): bmirror >>> bmirror == id
+-- Distribute Left: bleft f >>> bleft g = bleft (f >>> g)
+-- Decision Commutativity: bleft f >>> bright g = bright g >>> bleft f
+--     Lemma: (f +++ g) >>> (f' +++ g') = (f >>> f') +++ (g >>> g')
+-- Decision Idempotence (*): bsynch >>> (f +++ f) >>> bmerge
+--                         = bsynch >>> bmerge >>> f
+--     (*): bmerge must implicitly synch in haskell. With time types
+--          the law would be: (f +++ f) >>> bmerge = bmerge >>> f
+-- Dead Source Elim (Left):  binl >>> bright g = binl
+-- Dead Source Elim (Right): binr >>> bleft f  = binr
+-- Associative Identity (Sum, Left): bassocls >>> bassocrs = id
+-- Associative Identity (Sum, Right): bassocrs >>> bassocls = id
+-- Commutative Identity (Product): bmirror >>> bmirror = id
+-- Merge Identity: bmirror >>> bmerge = bmerge
 --
 class (Category b) => BSum b where
     bleft    :: b x x' -> b (x :|: y) (x' :|: y)

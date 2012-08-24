@@ -37,7 +37,7 @@ instance Typeable2 (B w) where
 -- on actual lookahead stability at runtime.
 dtScanAheadB, dtTouchB :: DT
 dtScanAheadB = 4.0 -- seconds ahead of stability
-dtTouchB = 0.2 -- seconds ahead of stability
+dtTouchB = 0.4 -- seconds ahead of stability
 
 eqfB :: (x -> x -> Bool) -> B w (S p x) (S p x)
 eqfB = unsafeEqShiftB dtScanAheadB
