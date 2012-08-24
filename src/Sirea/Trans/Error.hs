@@ -61,9 +61,8 @@ newError = liftError . unwrapError
 
 instance (BSum b) => Category (ErrorB e b) where
     id = liftError id
-    g . f = wrapError $
-        unwrapError f >>> bright (unwrapError g) >>> 
-        bassocls >>> bleft bmerge
+    (ErrorB g) . (ErrorB f) = ErrorB $
+        f >>> bright g >>> bassocls >>> bleft bmerge
 
 instance (BSum b, BFmap b) => BFmap (ErrorB e b) where
     bfmap   = liftError . bfmap
@@ -72,7 +71,7 @@ instance (BSum b, BFmap b) => BFmap (ErrorB e b) where
     btouch  = liftError btouch
     badjeqf = liftError badjeqf
 instance (BSum b) => BSum (ErrorB e b) where
-    bleft f = wrapError $ bleft (unwrapError f) >>> bassocrs
+    bleft (ErrorB f) = ErrorB $ bleft f >>> bassocrs
     bmirror = liftError bmirror
     bmerge  = liftError bmerge
     b0i     = liftError b0i

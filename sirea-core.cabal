@@ -69,11 +69,9 @@ Library
 
     Sirea.Trans.Static
     Sirea.Trans.Error
-    Sirea.Trans.Skipper
     Sirea.Trans.Reader
-    Sirea.Trans.Writer
-    Sirea.Trans.State
-    Sirea.Trans.Bypass
+    --Sirea.Trans.State (useless)
+    --Sirea.Trans.Bypass (useless)
 
     Sirea.Internal.STypes
     Sirea.Internal.DiscreteTimedSeq

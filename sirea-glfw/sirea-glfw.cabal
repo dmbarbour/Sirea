@@ -24,7 +24,11 @@ Description:
   A weakness of GLFW is that it does not report the OS event times,
   thus Sirea must make best-effort estimates, which adds error and
   variance to user-input latency. Also, GLFW does supports only
-  one mouse and one keyboard.
+  one mouse and one keyboard, and has no support for identifying
+  joysticks by name or type (which hinders configuration). Also, a
+  GLFW window must be open to access mouse or keyboard. (There are 
+  many things to dislike about GLFW. The more I learn, the more I
+  think about switching to SDL.)
   
   GLFW is designed with an assumption that there is only one render
   function. RDP is designed to be extensible and pluggable; there

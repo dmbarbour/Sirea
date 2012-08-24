@@ -36,22 +36,21 @@ instance Typeable2 (B w) where
 -- Eventually I'd like to make these values adaptive, i.e. depending
 -- on actual lookahead stability at runtime.
 dtScanAheadB, dtTouchB :: DT
-dtScanAheadB = 1.0 -- seconds ahead of stability
-dtTouchB = 0 -- seconds ahead of stability
+dtScanAheadB = 4.0 -- seconds ahead of stability
+dtTouchB = 0.2 -- seconds ahead of stability
 
 eqfB :: (x -> x -> Bool) -> B w (S p x) (S p x)
 eqfB = unsafeEqShiftB dtScanAheadB
 
 instance BFmap (B w) where 
     bfmap    = fmapB
-    bconst c = constB c >>> eqfB (const $ const True)
+    bconst c = constB c >>> eqfB ((const . const) True)
     bstrat   = stratB 
     btouch   = touchB dtTouchB
     badjeqf  = adjeqfB >>> eqfB (==)
 instance BProd (B w) where
     bfirst   = firstB
     bdup     = dupB
-    --bfst     = fstB
     b1i      = s1iB
     b1e      = s1eB
     btrivial = trivialB
@@ -61,7 +60,6 @@ instance BSum (B w) where
     bleft    = leftB
     bmirror  = mirrorB
     bmerge   = mergeB
-    --binl     = inlB
     b0i      = s0iB
     b0e      = s0eB
     bvacuous = vacuousB
@@ -80,8 +78,7 @@ instance BPeek (B w) where
 instance Behavior (B w)
 
 instance BDynamic (B w) (B w) where
-    bevalb' dt = -- bfirst (bforce (`seq` ())) >>> 
-                 evalB dt >>> bright bfst
+    bevalb' dt = evalB dt >>> bright bfst
 
 -- note: B does not support `bcross`, since B cannot 
 -- track which partitions are in use. Need BCX for

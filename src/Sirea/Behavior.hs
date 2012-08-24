@@ -58,6 +58,12 @@ bfwd = id
 -- | BFmap - pure operations on concrete signals. Includes common
 -- performance annotations. BFmap supports arbitrary Haskell 
 -- functions. 
+-- 
+-- LAWS:
+--    bfmap f >>> bfmap g == bfmap (f >>> g)
+--    bconst c >>> bfmap f == bconst (f c)
+--    bconst c >>> bconst d == bconst d
+--
 class (Category b) => BFmap b where
     -- | bfmap applies a function to a concrete signal. This allows
     -- arbitrary Haskell functions to integrate with RDP. Lazy.
@@ -194,6 +200,17 @@ bstratf runF = bfmap (runF . fmap return) >>> bstrat
 --     (&&&) - create and define multiple pipelines at once
 --     bvoid - branch behavior just for side-effects, drop result
 --
+-- Various Laws:
+--
+-- Distribute First: bfirst f >>> bfirst g == bfirst (f >>> g)
+-- Spatial Idempotence: bdup >>> (f *** f) == f >>> bdup
+-- Spatial Commutativity: bfirst f >>> bsecond g == bsecond g >>> bfirst f
+--     Lemma: (f *** g) >>> (f' *** g') == (f >>> f') *** (g >>> g')
+-- Associative Identity (Product, Left): bassoclp >>> bassocrp == id
+-- Associative Identity (Product, Right): bassocrp >>> bassoclp == id
+-- Commutative Identity (Product): bswap >>> bswap == id
+-- 
+--
 class (Category b) => BProd b where
     bfirst   :: b x x' -> b (x :&: y) (x' :&: y)
     bdup     :: b x (x :&: x)
@@ -254,6 +271,19 @@ bvoid f = bdup >>> bfirst f >>> bsnd
 --     (|||) - apply operations to both paths then merge them
 --     bskip - behavior never performed, for symmetry with bvoid.
 -- 
+-- Various Laws: 
+--
+-- Distribute Left: bleft f >>> bleft g == bleft (f >>> g)
+-- Decision Commutativity: bleft f >>> bright g == bright g >>> bleft f
+--     Lemma: (f +++ g) >>> (f' +++ g') == (f >>> f') +++ (g >>> g')
+-- Decision Idempotence: bsynch >>> (f +++ f) >>> bmerge 
+--                    == bsynch >>> bmerge >>> f
+-- Dead Source Elim (Left):  binl >>> bright g == binl
+-- Dead Source Elim (Right): binr >>> bleft f  == binr
+-- Associative Identity (Sum, Left): bassocls >>> bassocrs == id
+-- Associative Identity (Sum, Right): bassocrs >>> bassocls == id
+-- Commutative Identity (Product): bmirror >>> bmirror == id
+--
 class (Category b) => BSum b where
     bleft    :: b x x' -> b (x :|: y) (x' :|: y)
     bmirror  :: b (x :|: y) (y :|: x)
@@ -405,9 +435,6 @@ bWhen cond action = bvoid $
 -- product. The main purpose is to combine them to apply a Haskell
 -- function. The arguments must already be in the same partition to
 -- zip them. The signals are implicitly synchronized. 
---
--- At least one of bzip or bzap must be defined.
---
 class (BProd b, BFmap b) => BZip b where
     -- | bzap describes an applicative structure. It applies a
     -- function while zipping the two signals. Usefully, this can
@@ -457,6 +484,7 @@ bunsplit = (bfmap Left ||| bfmap Right)
 -- signals in the type system. But doing so in Haskell is awkward.
 -- For Sirea, many operations implicitly synchronize signals: zip,
 -- merge, disjoin, etc.. 
+-- 
 class (Category b) => BTemporal b where
     -- | Delay a signal. For asynchronous products or sums, branches
     -- that pass through `delay` are delayed by the same amount. The

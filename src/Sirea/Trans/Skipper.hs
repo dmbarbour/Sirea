@@ -6,6 +6,7 @@
 -- This was developed for symmetry with the Error transformer, which
 -- has been part of the Arrows package for some time. Skipper does
 -- seem like a promising pattern in its own right.
+--
 module Sirea.Trans.Skipper
     ( SkipperB
     , wrapSkipper, unwrapSkipper
@@ -25,5 +26,5 @@ unwrapSkipper :: SkipperB k b x y -> b (k :|: x) y
 unwrapSkipper (SkipperB b) = b
 
 
-
+-- Note: there is no sensible `id` function for SkipperB.
 
