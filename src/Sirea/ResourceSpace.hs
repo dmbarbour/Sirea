@@ -1,27 +1,29 @@
 
 -- | RDP has a conservative notion of resources: nothing is created,
 -- nothing is destroyed. That is, there is no equivalent to `new` or
--- `delete`, nor `malloc` and `free`, nor even `gensym`. There is no
--- operation that can return a fresh identifier or object for use by
--- a prorammer. 
+-- `delete`, nor `malloc` and `free`. Those could be modeled using
+-- external state and a globally unique identifier, but RDP favors a
+-- resource discovery idiom. Resources are located and accessed by 
+-- external stable identifiers (e.g. URI or file path). If a virtual
+-- resource does not exist, it may be implicitly created when used.
 --
--- Instead, RDP models resources via a discovery mechanism similar
--- to a filesystem. Resources are located and accessed by external, 
--- stable identifiers (e.g. URI or file path). These identifiers may
--- be relative to a resource space - e.g. a particular directory of
--- a filesystem. Abstractly, resource spaces may be infinite, though
--- only a finite extent can ever be explored or utilized. Perhaps a
--- more precise description is to call such spaces "unbounded". 
+-- Module `PCX` is for static, global resources, identified by type.
 --
--- Sirea heavily leverages this notion of abstract resource spaces
--- via the PCX and BCX types. However, PCX is designed for a static
--- in the application toplevel, and the associated resources are, by
--- design, most useful for binding Haskell IO. 
+-- This module supports dynamic resources, discovered at runtime via
+-- configuration files and such. It assumes a tree-structured model
+-- with relative paths, without direct path from child to parent. 
+-- I.e. there is no equivalent to `..` path of filesystems. Security
+-- can be achieved by controlling distribution of resource spaces.
 --
--- This module exposes a more dynamic concept of a resource space,
--- intended for use both at the toplevel (via BCX) and within RDP.
--- The dynamic resource space is suitable when working with scripts
--- or configuration files.
+-- Resource Spaces should generally support a `reset` capability, to 
+-- set them to an initial state. This is useful to explain initial 
+-- states, and to model volatile resources used by applications or
+-- dynamic behaviors. Similarly, resource spaces may be unavailable
+-- for various reasons, including active reset. 
+--
+module Sirea.ResourceSpace
+    (
+    ) where
 
 
 

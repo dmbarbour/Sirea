@@ -38,13 +38,19 @@
 --
 module Sirea.DemandMonitor 
     ( newDemandMonitor, newDemandMonitorZ, newDemandMonitorZeq
-    , newActimon, newMaximon, newMinimon
+    , newActivityMonitor, newKMaximumMonitor, newKMinimumMonitor
+    -- looking for a good excuse for `newPokemon`
     ) where
 
+import qualified Data.HashTable as HT
+import Data.IORef
 import Control.Applicative
 import Sirea.Signal
 import Sirea.Behavior
+import Sirea.Time
 import Sirea.B
+
+import Sirea.Internal.LTypes
 
 -- | Create a list-based demand monitor in the IO monad. The list
 -- should be treated as a set (behavior independent of duplication
@@ -71,30 +77,19 @@ newDemandMonitorZ = flip newDemandMonitorBase ((const . const) False)
 -- | newDemandMonitorZEq is similar to newDemandMonitorZ, but adds
 -- an adjacency equality filter to the result. The equality filter
 -- will eliminate redundant updates over time, and eliminate some
--- redundancies in the short term (by delaying updates).
+-- redundancies in the short term (by delaying updates). These
+-- eliminations can reduce rework downstream.
 --
 -- See also: the notes for newDemandMonitorZ
 newDemandMonitorZeq :: (Eq z) => ([Sig e] -> Sig z) 
                     -> IO (B w (S p e) (S p ()) , B w (S p ()) (S p z))
 newDemandMonitorZeq = flip newDemandMonitorBase (==)
 
-
--- newDemandMonitorBase is the basis for other demand monitors.
--- It allows developers to control the zip function and an
--- adjacency filter.
-newDemandMonitorBase :: ([Sig e] -> Sig z) -- n-zip function
-                     -> (z -> z -> Bool)   -- partial equality function (may be false if unknown)
-                     -> IO (B w (S p e) (S p ()), B w (S p ()) (S p z)) 
-newDemandMonitorBase = error "TODO!"
--- 
-
-
--- | newActimon (Activity Monitor) is a demand-monitor that simply 
--- returns whether or not there is any active demand on the demand
--- facet. This is a highly stable variation of demand monitor, and 
--- a useful one in many cases. 
-newActimon :: IO (B w (S p ()) (S p ()), B w (S p ()) (S p Bool))
-newActimon = newDemandMonitorZeq sigAny
+-- | newActivityMonitor is a demand-monitor that returns whether or
+-- not there is any active demand on the demand facet. This is very
+-- stable to changes, and useful for many systems. 
+newActivityMonitor :: IO (B w (S p ()) (S p ()), B w (S p ()) (S p Bool))
+newActivityMonitor = newDemandMonitorZeq sigAny
 
 sigAny :: [Sig a] -> Sig Bool
 sigAny sigs = s_full_map isActive sigsMerged
@@ -102,20 +97,19 @@ sigAny sigs = s_full_map isActive sigsMerged
           isActive Nothing  = Just False
           isActive (Just _) = Just True
 
--- | newMaximon (K Maximum Monitor) will monitor a list of the top 
--- K demands (if that many exist), rated and sorted based on Ordinal 
--- functions. This can help control stability relative to a full
--- demand monitor, limiting instability to the top K demands.
-newMaximon :: (Ord e) => Int -> IO (B w (S p e) (S p ()), B w (S p ()) (S p [e]))
-newMaximon k =
+-- | newKMaximumMonitor will monitor a list of the top K demands (if
+-- that many exist), rated and sorted based on Ordinal functions. 
+-- This limits instability to the top K demands. Usually, K should
+-- be small, often 1 or 2.
+newKMaximumMonitor :: (Ord e) => Int -> IO (B w (S p e) (S p ()), B w (S p ()) (S p [e]))
+newKMaximumMonitor k =
     if (k <  1) then return (bconst (), bconst []) else
     if (1 == k) then newDemandMonitorZeq (sigBest (>))
                 else newDemandMonitorZeq (sigKBest (>) k)
 
--- | newMinimon (K Minimum Monitor) is simply the newMaximon with a
--- preference for the lowest values. 
-newMinimon :: (Ord e) => Int -> IO (B w (S p e) (S p ()), B w (S p ()) (S p [e]))
-newMinimon k = 
+-- | newKMinimumMonitor is simply the KMaximiumMonitor inverted.
+newKMinimumMonitor :: (Ord e) => Int -> IO (B w (S p e) (S p ()), B w (S p ()) (S p [e]))
+newKMinimumMonitor k = 
     if (k <  1) then return (bconst (), bconst []) else
     if (1 == k) then newDemandMonitorZeq (sigBest (<))
                 else newDemandMonitorZeq (sigKBest (<) k)
@@ -152,6 +146,37 @@ sortedInsert bt x (y:ys) = if (x `bt` y) then (x:y:ys) else y:(si y ys)
                     then if (k `bt` x) then (x:z:zs) -- insert x after k
                                        else (z:zs)   -- equal to last; drop x
                     else z:(si z zs) -- x inserts somewhere after z
+
+
+
+data DemandMonitorData e z = DemandMonitorData
+    { dmd_zipfn     :: !([Sig e] -> Sig z)
+    , dmd_eqfn      :: !(z -> z -> Bool)
+    , dmd_mkid      :: !(IORef Int)       -- next index
+    , dmd_stable    :: !(IORef (Maybe T)) -- current stability
+    , dmd_update    :: !(IORef (Maybe T)) -- earliest update
+    , dmd_expect    :: !(IORef Int)       -- touch count
+    , dmd_demand    :: !(HT.HashTable Int (DemandData e))
+    , dmd_monitor   :: !(HT.HashTable Int (MonitorData z))
+    }
+data DemandData e = DemandData
+    { dd_idx :: !Int        -- index for this DemandData
+    , dd_sig :: !(SigSt e)  -- demand status
+    }
+data MonitorData z = MonitorData
+    { md_idx :: !Int        -- index for this MonitorData
+    , md_sig :: !(SigSt ()) -- monitoring status (removed when final)
+    , md_lnk :: !(LnkUp z)  -- to receive monitor updates
+    }
+
+-- newDemandMonitorBase is the basis for other demand monitors.
+-- It allows developers to control the zip function and an
+-- adjacency filter.
+newDemandMonitorBase :: ([Sig e] -> Sig z) -- n-zip function
+                     -> (z -> z -> Bool)   -- partial equality function (may be false if unknown)
+                     -> IO (B w (S p e) (S p ()), B w (S p ()) (S p z)) 
+newDemandMonitorBase zfn eqfn = error "TODO!"
+-- 
 
 
 -- NOTE: I'm not entirely sure what I want for a generic demand
