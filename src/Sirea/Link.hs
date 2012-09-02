@@ -17,7 +17,7 @@ module Sirea.Link
     , su_fmap, su_apply
     ) where
 
-import Sirea.Internal.LTypes
+import Sirea.Internal.LTypes -- includes MkLnk, etc.
 import Sirea.Internal.BTypes
 import Sirea.Internal.BImpl (tshiftB)
 import Sirea.Behavior
@@ -39,6 +39,11 @@ import Control.Exception (assert)
 -- observable effect should wait for active signal. At construction,
 -- IO is used to create local state for caches or connections with
 -- external resources. (The resources should be accessed via PCX.)
+--
+-- Note: unsafeLinkB might be called from any thread, potentially at
+-- any time (due to compilation of dynamic behaviors). IO must not
+-- be specific to any partition. (Partition-specific IO should wait 
+-- for a link update.)
 unsafeLinkB :: MkLnk w x y -> B w x y
 unsafeLinkB ln = bsynch >>> tshiftB xBarrier >>> B_mkLnk tr_unit ln
     where xBarrier dts =

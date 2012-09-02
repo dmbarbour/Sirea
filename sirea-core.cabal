@@ -73,6 +73,7 @@ Library
 
     Sirea.Internal.STypes
     Sirea.Internal.DiscreteTimedSeq
+    Sirea.Internal.DemandMonitorData
     Sirea.Internal.SigType
     Sirea.Internal.LTypes
     Sirea.Internal.BTypes
