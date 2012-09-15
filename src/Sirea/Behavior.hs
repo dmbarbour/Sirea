@@ -16,14 +16,14 @@ module Sirea.Behavior
     , (>>>) -- from Control.Category
     , bfwd
     , BFmap(..), bforce, bspark, bstratf
-    , BProd(..), bfst, bsecond, bsnd, bassocrp, (***), (&&&), bvoid
+    , BProd(..), bfst, bsecond, bsnd, bassocrp, (***), (&&&), bvoid, (|*|)
     , BSum(..), binl, bright, binr, bassocrs, (+++), (|||), bskip 
     , bconjoinl, bconjoinr
     , BDisjoin(..), bdisjoinly, bdisjoinlz, bdisjoinlyy, bdisjoinlzz
     ,               bdisjoinry, bdisjoinrz, bdisjoinryy, bdisjoinrzz
     , bIfThenElse, bUnless, bWhen -- utility
     , BZip(..), bzip, bzipWith, bunzip
-    , BSplit(..), bsplitWith, bsplitOn, bunsplit
+    , BSplit(..), bsplitWith, bsplitOn, bunsplit, bsplitMaybe
     , BTemporal(..), BPeek(..)
     , BDynamic(..), bexecb', bevalb'OrElse
     , bevalb, bexecb, bevalbOrElse
@@ -41,6 +41,7 @@ infixr 3 ***
 infixr 3 &&&
 infixr 2 +++
 infixr 2 |||
+infixr 1 |*|
 
 -- | Behavior is a grouping of all basic behavior classes.
 class ( Category b
@@ -117,11 +118,9 @@ class (Category b) => BFmap b where
     -- must be used judiciously (or badjeqf could itself become the
     -- redundant computation).
     --
-    -- Not all redundant updates are eliminated. In particular, you
-    -- may still see redundant updates for each actual signal update
-    -- because it isn't feasible to scan indefinitely into the prior
-    -- signal's future to find the first difference. (But the update
-    -- can be shifted a bit into the future to avoid much rework.)
+    -- You are not guaranteed that all redundant updates will be 
+    -- eliminated. Treat this as a performance annotation; the 
+    -- semantic content is equivalent to id.
     badjeqf :: (Eq x) => b (S p x) (S p x)
     badjeqf = bfwd -- semantic effect is identity
 
@@ -142,11 +141,12 @@ bforce f = bfmap seqf >>> bstrat >>> btouch
 -- does not wait for the computation to complete. 
 --
 -- bspark is predictable, but not very composable. For example, in
---   > bspark foo >>> bspark bar
+--   > bspark foo >>> bspark bar -- (don't do this)
 -- The bar reduction will occur in a spark that immediately waits
 -- for the foo reduction to complete. This ensures the bar reduction
 -- doesn't compete with the foo reduction, but limits parallelism.
 -- Consequently, bspark is best used to just perform full reduction.
+-- If you need more control, use bstrat directly.
 --
 -- A lazy variation of bspark would be easy to implement, but would
 -- be problematic due to ad-hoc competition and GC interaction. If
@@ -203,12 +203,16 @@ bstratf runF = bfmap (runF . fmap return) >>> bstrat
 --     (&&&) - create and define multiple pipelines at once
 --     bvoid - branch behavior just for side-effects, drop result
 --
--- Various Laws:
+-- Various Laws or Properties:
 --
 -- Distribute First: bfirst f >>> bfirst g = bfirst (f >>> g)
 -- Spatial Idempotence: bdup >>> (f *** f) = f >>> bdup
+--     Lemma: bvoid f >>> bvoid f = bvoid f
+--     Lemma: f |*| f = f
 -- Spatial Commutativity: bfirst f >>> bsecond g = bsecond g >>> bfirst f
 --     Lemma: (f *** g) >>> (f' *** g') = (f >>> f') *** (g >>> g')
+--     Lemma: bvoid f >>> bvoid g = bvoid g >>> bvoid f
+--     Lemma: f |*| g = g |*| f
 -- Associative Identity (Product, Left): bassoclp >>> bassocrp = id
 -- Associative Identity (Product, Right): bassocrp >>> bassoclp = id
 -- Commutative Identity (Product): bswap >>> bswap = id
@@ -244,6 +248,25 @@ bvoid f = bdup >>> bfirst f >>> bsnd
 -- staticSelect :: (BProd b) => Bool -> b (x :&: x) x
 -- staticSelect choice = if choice then bfst else bsnd
 
+-- | It is often convenient to treat an RDP behavior as describing a
+-- multi-agent system. Agents are concurrent and operate in a shared 
+-- environment. Agents interact indirectly through shared resources,
+-- such as shared state or demand monitors. The blackboard metaphor
+-- is a useful model for achieving cooperation between agents.
+--
+-- Agents may provide services to other agents by publishing dynamic
+-- behaviors to a shared space where other agents can discover them.
+--
+-- The |*| operator makes treating behaviors as agents convenient.
+-- It is associative, commutative, and formally idempotent, though
+-- the Haskell optimizer won't take advantage of idempotence. 
+--
+--   > main = runSireaApp $ alice |*| bob |*| charlie |*| dana
+--
+-- (One may also treat operands as concurrent threads or processes.)
+(|*|) :: (BProd b) => b x y -> b x z -> b x x
+(|*|) f g = bvoid f >>> bvoid g
+
 -- | BSum - data plumbing for asynchronous sums. Asynchronous sums
 -- (x :|: y) means that x and y are active for different durations
 -- and times, but may overlap slightly due to variation in delay. 
@@ -274,15 +297,16 @@ bvoid f = bdup >>> bfirst f >>> bsnd
 --     (|||) - apply operations to both paths then merge them
 --     bskip - behavior never performed, for symmetry with bvoid.
 -- 
--- Various Laws: 
+-- Various Laws or Properties: 
 --
 -- Distribute Left: bleft f >>> bleft g = bleft (f >>> g)
 -- Decision Commutativity: bleft f >>> bright g = bright g >>> bleft f
 --     Lemma: (f +++ g) >>> (f' +++ g') = (f >>> f') +++ (g >>> g')
 -- Decision Idempotence (*): bsynch >>> (f +++ f) >>> bmerge
 --                         = bsynch >>> bmerge >>> f
---     (*): bmerge must implicitly synch in haskell. With time types
---          the law would be: (f +++ f) >>> bmerge = bmerge >>> f
+--     (*): bmerge must implicitly synch in haskell. The law ideally
+--          would be : (f +++ f) >>> bmerge = bmerge >>> f
+--          (This would require tracking time in signal types.)
 -- Dead Source Elim (Left):  binl >>> bright g = binl
 -- Dead Source Elim (Right): binr >>> bleft f  = binr
 -- Associative Identity (Sum, Left): bassocls >>> bassocrs = id
@@ -467,7 +491,7 @@ bunzip = (bfmap fst &&& bfmap snd)
 class (BSum b, BFmap b) => BSplit b where
     bsplit :: b (S p (Either x y)) (S p x :|: S p y)
 
--- | bsplitWith is included to dual zip, and might be useful.
+-- | bsplitWith is included to dual zipWith, and might be useful.
 bsplitWith :: (BSplit b) => (x -> Either y z) 
            -> b (S p x) (S p y :|: S p z)
 bsplitWith fn = bfmap fn >>> bsplit
@@ -482,6 +506,12 @@ bsplitOn f = bsplitWith f'
 -- | unsplit is included for completeness.
 bunsplit :: (BSum b, BFmap b) => b (S p x :|: S p y) (S p (Either x y))
 bunsplit = (bfmap Left ||| bfmap Right)
+
+-- | bsplitMaybe is for convenience, with the obvious semantics.
+bsplitMaybe :: (BSplit b) => b (S p (Maybe x)) (S p x :|: S p ())
+bsplitMaybe = bsplitWith mb2e
+    where mb2e Nothing  = Right ()
+          mb2e (Just x) = Left x
 
 -- | BTemporal - operations for orchestrating signals in time.
 -- (For spatial orchestration, see FRP.Sirea.Partition.)
@@ -603,21 +633,23 @@ class (Behavior b, Behavior b') => BDynamic b b' where
 -- behavior type to be the same as the outer behavior type. This 
 -- is useful to avoid an explicit type signature, e.g. for `B w` or
 -- `BCX w`, because the `w` type cannot be inferred.
-bevalb :: (BDynamic b b, SigInP p x) => DT -> b (S p (b x y) :&: x) (y :|: S p ())
-bevalb = bevalb'
+beval :: (BDynamic b b, SigInP p x) => DT -> b (S p (b x y) :&: x) (y :|: S p ())
+beval = bevalb'
 
 -- | evaluate, but drop the result. This is a common pattern with an
 -- advantage of not needing a DT estimate. The response is reduction 
 -- from the signal carrying b'.
-bexecb' :: (BDynamic b b', SigInP p x) => b (S p (b' x y_) :&: x) (S p () :|: S p ())
-bexecb' = bsynch >>> bprep >>> bevalb' 0
-    where bprep = bfirst (bfmap modb &&& bconst ()) >>> bassocrp 
+bexecb' :: (BDynamic b b', SigInP p x) => b (S p (b' x y_) :&: x) (S p ())
+bexecb' = (exec &&& ignore) >>> bsnd
+    where exec = bsynch >>> bprep >>> bevalb' 0
+          ignore = bfst >>> bconst ()
+          bprep = bfirst (bfmap modb &&& bconst ()) >>> bassocrp 
           modb b' = bsecond b' >>> bfst
 
 -- | bexec serves similar to beval, constraining the b types to be
 -- the same.
-bexecb :: (BDynamic b b, SigInP p x) => b (S p (b x y_) :&: x) (S p () :|: S p ())
-bexecb = bexecb'
+bexec :: (BDynamic b b, SigInP p x) => b (S p (b x y_) :&: x) (S p () :|: S p ())
+bexec = bexecb'
 
 -- | provides the `x` signal again for use with a fallback behavior.
 bevalb'OrElse :: (SigInP p x, BDynamic b b') => DT -> b (S p (b' x y) :&: x) (y :|: (S p () :&: x))

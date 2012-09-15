@@ -32,6 +32,7 @@ module Sirea.Build
     , beginSireaApp
     , SireaApp
     , bUnsafeExit
+    , bStartTime
     ) where
 
 import Prelude hiding (catch)
@@ -49,12 +50,12 @@ import Sirea.Internal.BCross
 import Sirea.Internal.Thread
 import Sirea.Behavior
 import Sirea.Partition
+import Sirea.Link
 import Sirea.UnsafeOnUpdate
 import Sirea.PCX
 import Sirea.BCX
 import Sirea.Time
 import Sirea.Signal
-
 
 -- | This is what an RDP application looks like in Sirea:
 --
@@ -154,10 +155,9 @@ zeroObject cw =
 buildSireaBLU :: PCX w -> LnkUp () -> IO SireaObject
 buildSireaBLU cw lu =
     newIORef emptyStopData >>= \ rfSD ->
-    let gs      = findInPCX cw in
+    addTCRecv tc0 (beginApp tc0 gs rfSD lu) >> -- add kickstart
     let cp0     = findInPCX cw :: PCX P0 in
     let tc0     = findInPCX cp0 in
-    addTCRecv tc0 (beginApp tc0 gs rfSD lu) >> -- add kickstart
     let stepper = tcToStepper tc0 in
     let stopper = makeStopper rfSD in
     return $ SireaObject { sireaStepper = stepper
@@ -166,8 +166,11 @@ buildSireaBLU cw lu =
           
 -- task to initialize application (performed on first runStepper)
 -- a slight delay is introduced before everything really starts.
-beginApp :: TC -> GobStopper -> IORef StopData -> LnkUp () -> IO ()
-beginApp tc0 gs rfSD lu =
+beginApp :: PCX w -> IORef StopData -> LnkUp () -> IO ()
+beginApp cw rfSD lu = 
+    let gs  = findInPCX cw in
+    let cp0 = findInPCX cw :: PCX P0 in
+    let tc0 = findInPCX cp0 in
     readIORef rfSD >>= \ sd ->
     if shouldStop sd 
       then shutdownEvent tc0 gs rfSD
@@ -177,6 +180,7 @@ beginApp tc0 gs rfSD lu =
            let su = SigUp { su_state = Just (s_always (), tStart)
                           , su_stable = Just tStable } in
            let nextStep = maintainApp tc0 gs rfSD lu tStable in
+           setStartupTime cp0 tStart >>
            ln_update lu su >> -- activation!
            schedule dtStep (addTCRecv tc0 nextStep)
 
@@ -218,11 +222,12 @@ shutdownEvent tc0 gs rfSD = runGobStopper gs finiStop
 --   dtStability : how far ahead to stabilize
 --   dtStep      : period between stability updates
 --
--- dtStep can also influence amount of computation per round.
--- These values can have a large impact on idling overheads.
--- TODO: make configurable on command line.
+-- dtStep can also influence amount of computation per round due to
+-- `btouch` and similar structures that compute based on stability.
+-- These values also can have an impact on idling overheads.
+--
 dtStability, dtStep :: DT
-dtStability = 0.30  -- stability of main signal
+dtStability = 0.30  -- stability of main signal (how long to halt)
 dtStep      = 0.06  -- periodic event to increase stability
 
 -- | If you don't need to run the stepper yourself, consider use of
@@ -270,8 +275,8 @@ basicSireaAppLoop rfContinue stepper =
 -- killThread on the main thread after signal becomes active. This 
 -- causes the application to begin halting gracefully. Halt a Sirea 
 -- application from within the application. Should not be used if 
--- you plan to perform an external kill; a second kill will abort 
--- graceful exit. 
+-- you plan to perform an external kill, since a double kill will 
+-- abort graceful exit. 
 --
 -- The behavior of bUnsafeExit is not precise and not composable. If
 -- developers wish to model precise shutdown behavior, they should
@@ -299,5 +304,35 @@ instance Typeable ExitR where
         where tycExitR = mkTyCon3 "sirea-core" "Sirea.Build.Internal" "ExitR"
 instance Resource ExitR where
     locateResource _ = liftM ExitR $ newIORef False
+
+-- | bStartTime - obtain start time of the RDP application. This can 
+-- be useful to model volatile state, to model actions relative to
+-- startup times, and for other tasks.
+--
+-- NOTE: this does not account for stop, sleep, or hibernate. If the
+-- goal is robust behavior after disruption, a more robust mechanism
+-- is required.
+bStartTime :: BCX w (S P0 ()) (S P0 T)
+bStartTime = unsafeLinkBCX $ \ cw -> 
+    MkLnk { ln_tsen = False, ln_peek = 0
+          , ln_build = (return . ln_lumap) (mklu cw) }
+    where mklu cw lu =
+            let cp0 = findInPCX cw :: PCX P0 in
+            let rfST = inStartTime $ findInPCX cp0 in
+            let touch' = ln_touch lu in
+            let update' su = 
+                    readIORef rfST >>= \ tStart ->
+                    let su' = su_fmap (s_const tStart) su in
+                    ln_update lu su'
+            in LnkUp { ln_touch = touch', ln_update = update' }
+
+newtype StartTime = StartTime { inStartTime :: IORef T }
+instance Typeable StartTime where
+    typeOf _ = mkTyConApp tycStartTime []
+        where tycStartTime = mkTyCon3 "sirea-core" "Sirea.Build.Internal" "StartTime"
+instance Resource StartTime where
+    locateResource _ = liftM StartTime trf
+        where trf = newIORef t0
+              t0  = timeFromDays 0
 
 

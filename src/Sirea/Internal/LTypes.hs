@@ -76,8 +76,8 @@ data LnkW s a where
 -- can be represented ultimately as a complex product of LnkUp 
 -- structures. 
 --
---   ln_touch - call this if an update is guaranteed in the near
---      future but not immediately. Allows later stages in the pipe
+--   ln_touch - call this if an update is guaranteed in the current
+--      round but not immediately. Allows later stages in the pipe
 --      to wait for the update. Can prevent redundant computations.
 --
 --   ln_update - updates the entire future of a signal (see SigUp).

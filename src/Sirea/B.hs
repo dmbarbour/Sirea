@@ -31,22 +31,28 @@ instance Typeable2 (B w) where
 -- Concrete Instances: B --
 ---------------------------
 -- TUNING
---   dtScanAheadB: default lookahead for constB, adjeqfB.
---   dtTouchB: compute ahead of stability for btouch.
+--   dtEqf: default lookahead for constB, adjeqfB.
+--   dtTouch: compute ahead of stability for btouch.
+--
 -- Eventually I'd like to make these values adaptive, i.e. depending
--- on actual lookahead stability at runtime.
-dtScanAheadB, dtTouchB :: DT
-dtScanAheadB = 4.0 -- seconds ahead of stability
-dtTouchB = 0.4 -- seconds ahead of stability
+-- on actual lookahead stability at runtime. The TCP-like algorithms
+-- for congestion control seem applicable. 
+--
+-- For badjeqf/bconst, it may also be valuable to choke updates if
+-- they do not appear to have changed. I.e. switch to heartbeat
+-- updates if there is no observed change.
+dtEqf, dtTouch :: DT
+dtEqf   = 6.0 -- seconds ahead of stability to find difference
+dtTouch = 0.3 -- seconds ahead of stability to force evaluation
 
 eqfB :: (x -> x -> Bool) -> B w (S p x) (S p x)
-eqfB = unsafeEqShiftB dtScanAheadB
+eqfB = unsafeEqShiftB dtEqf
 
 instance BFmap (B w) where 
     bfmap    = fmapB
     bconst c = constB c >>> eqfB ((const . const) True)
     bstrat   = stratB 
-    btouch   = touchB dtTouchB
+    btouch   = touchB dtTouch
     badjeqf  = adjeqfB >>> eqfB (==)
 instance BProd (B w) where
     bfirst   = firstB
@@ -79,6 +85,11 @@ instance Behavior (B w)
 
 instance BDynamic (B w) (B w) where
     bevalb' dt = evalB dt >>> bright bfst
+
+
+-- TODO: Consider a behavior that slows the heartbeat.
+--   Or maybe this could be done at `badjeqf` when we
+--   realize a signal is constant for a while?
 
 -- note: B does not support `bcross`, since B cannot 
 -- track which partitions are in use. Need BCX for

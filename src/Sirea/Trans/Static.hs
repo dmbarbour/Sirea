@@ -17,6 +17,7 @@ import Control.Applicative
 import Sirea.Behavior
 import Sirea.Partition
 
+-- | StaticB is a behavior built by an applicative. 
 newtype StaticB f b x y = SB (f (b x y))
 
 wrapStatic :: f (b x y) -> StaticB f b x y

@@ -29,12 +29,12 @@ module Sirea.Signal
  , s_fmap, s_full_map
  , s_ap
  , s_zip, s_full_zip
+ --, s_weave, s_full_weave
  , s_mask
  , s_merge
  , s_switch, s_switch'
  , s_is_final, s_term
  , s_delay, s_peek
- , s_select
  , s_adjn, s_adjeqf
  --, s_strat
  -- instances: functor, applicative, alternative
@@ -47,6 +47,20 @@ import Control.Exception (assert)
 import Control.Applicative
 import Data.Maybe (isNothing)
 
+instance Functor Sig where
+    fmap  = s_fmap
+    (<$)  = s_const
+
+instance Applicative Sig where
+    pure  = s_always
+    (<*>) = s_ap
+    (<*)  = s_mask
+    (*>)  = flip s_mask
+
+instance Alternative Sig where
+    empty = s_never
+    (<|>) = s_merge
+
 -- | listToSig allows developers to turn a list of signal updates
 -- into a signal. The list must be ordered in strict monotonic time,
 -- which means no repeating times. It should not be divergent when
@@ -54,7 +68,6 @@ import Data.Maybe (isNothing)
 -- also provided. 
 listToSig :: (Maybe a) -> [(T,Maybe a)] -> Sig a
 listToSig v0 = mkSig v0 . ds_fromList 
-
 
 -- | Sample a signal for its value at given instant. The signal
 -- may be inactive at the given instant, in which case 'Nothing'
@@ -164,6 +177,39 @@ s_full_zip jf sa sb = mkSig (f b) (ds_ap f b fs bs)
           b  = s_head sb
           bs = s_tail sb
 
+{-
+-- IDEA: `weave` functions that pick one element as the contributing
+-- element at any given step. This is a more specialized `zip` that
+-- can avoid the interruptions due to updates in the unused element.
+-- This becomes the generic basis for mask & merge, and is useful for
+-- the single-element minimax demand monitors. 
+--
+-- Intermediate, it is also possible to have a weave-zip that can
+-- identify when only one of the two inputs contributes. However,
+-- this might also be achieved via a merge of a weave and a zip.
+--
+-- Will need to find a sensible API for these before progressing.
+
+-- | to `weave` a value is a specialized form of `zip`; the idea is
+-- that only one signal contributes to the weave at any given time,
+-- so we can eliminate some updates from the signal that does not
+-- contribute at that time.
+-- This is tested by `a -> b -> Bool`. If True, the left side will
+-- contribute. If False, the right side will contribute. 
+s_weave :: (a -> a -> Bool) -> Sig a -> Sig a -> Sig a
+s_weave w = s_full_weave w'
+    where w' _ Nothing = True
+          w' Nothing _ = False
+          w' (Just a0) (Just a1) = w a0 a1
+
+-- could add an a->b->c for a weave-zip.
+
+-- | full weave provides some more flexibility on how to merge in
+-- case of Nothing values. 
+s_full_weave :: (Maybe a -> Maybe a -> Bool) 
+             -> Sig a -> Sig a -> Sig a
+-}
+
 -- | Mask one signal with the activity profile of another. That is,
 -- the resulting signal is only active when both input signals are
 -- active, but the value is always from the signal on the left.
@@ -174,6 +220,8 @@ s_mask sa sb =
         Nothing -> mkSig Nothing (tail_with ds_mask0)
         _       -> mkSig (s_head sa) (tail_with ds_mask1)
     where tail_with msk = msk (s_head sa) (s_tail sa) (s_tail sb)
+
+
 
 -- | Merge two signals by using the left signal when it is active,
 -- otherwise the right signal.
@@ -296,36 +344,4 @@ s_adjeqf eq s0 =
 --  improve s_adjeqf handoff? maybe some sort of `improving` value
 --    model fot the update times? seems complicated.
 --  
-
-
--- | Select will essentially zip a collection of signals into a
--- signal of collections. The resulting signal is awlays active, but 
--- has value [] when the argument contains no active signals. In RDP
--- this is used for demand monitors, where the signal is masked by 
--- the observer's demand (to ensure duration coupling).
---
--- The output at any given instant will be ordered the same as the
--- collection of signals. The input list must be finite.
-s_select :: [Sig a] -> Sig [a]
-s_select = foldr (s_full_zip jf) (s_always [])
-  where jf (Just x) (Just xs) = Just (x:xs)
-        jf _ xs = xs
-
-instance Functor Sig where
-    fmap  = s_fmap
-    (<$)  = s_const
-
-instance Applicative Sig where
-    pure  = s_always
-    (<*>) = s_ap
-    (<*)  = s_mask
-    (*>)  = flip s_mask
-
-instance Alternative Sig where
-    empty = s_never
-    (<|>) = s_merge
-
-
-
-
 
