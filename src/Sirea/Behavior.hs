@@ -25,8 +25,7 @@ module Sirea.Behavior
     , BZip(..), bzip, bzipWith, bunzip
     , BSplit(..), bsplitWith, bsplitOn, bunsplit, bsplitMaybe
     , BTemporal(..), BPeek(..)
-    , BDynamic(..), bexecb', bevalb'OrElse
-    , bevalb, bexecb, bevalbOrElse
+    , BDynamic(..), beval, bexec, bexecb', bevalOrElse, bevalb'OrElse
     , Behavior
     ) where
 
@@ -646,9 +645,9 @@ bexecb' = (exec &&& ignore) >>> bsnd
           bprep = bfirst (bfmap modb &&& bconst ()) >>> bassocrp 
           modb b' = bsecond b' >>> bfst
 
--- | bexec serves similar to beval, constraining the b types to be
--- the same.
-bexec :: (BDynamic b b, SigInP p x) => b (S p (b x y_) :&: x) (S p () :|: S p ())
+-- | bexec constrains both behavior types to be the same. Evaluates
+-- the dynamic behavior but drops the response.
+bexec :: (BDynamic b b, SigInP p x) => b (S p (b x y_) :&: x) (S p ())
 bexec = bexecb'
 
 -- | provides the `x` signal again for use with a fallback behavior.
@@ -662,8 +661,8 @@ bevalb'OrElse dt = bsynch >>> bsecond bdup >>> bassoclp >>> bfirst (bevalb' dt)
              >>> bleft bswap >>> bmirror >>> bleft bsnd
              -- now have (y :|: (S p () :&: x))
 
-bevalbOrElse :: (SigInP p x, BDynamic b b) => DT -> b (S p (b x y) :&: x) (y :|: (S p () :&: x))
-bevalbOrElse = bevalb'OrElse
+bevalOrElse :: (SigInP p x, BDynamic b b) => DT -> b (S p (b x y) :&: x) (y :|: (S p () :&: x))
+bevalOrElse = bevalb'OrElse
 
 -- WISHLIST: a behavior-level map operation.
 --
@@ -693,16 +692,7 @@ bevalbOrElse = bevalb'OrElse
 --  index and restructure big data into a stable tree. I.e. then we
 --  only need to rebuild small sections of that tree. 
 
--- TODO: convenience operators?
---  I've added Bdeep - eqvs. of bcadadr and setf bcadadr from Lisp
---  Need some stack-like operators
---      on (x :&: (y :&: (z :& ...
---      kswap, krotl(3,4,5,6,7), krotr(3,4,5,6,7), kdup, kover, 
---      kdisjoin would be feasible for some number of arguments.
---      ktake,kput
---  Maybe some support for data-driven dynamic patterns.
---      folds, recursion
---  
+
 
 
 {-# RULES

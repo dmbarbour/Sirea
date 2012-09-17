@@ -52,7 +52,7 @@ Library
     Sirea.Time
     Sirea.Signal
     Sirea.Behavior
-    Sirea.Bdeep
+    Sirea.BStruct
     Sirea.Build
     Sirea.PCX
     Sirea.Partition
@@ -67,6 +67,7 @@ Library
     Sirea.Clock
     Sirea.Utility
 
+    Sirea.Trans.Pure
     Sirea.Trans.Static
     Sirea.Trans.Error
     Sirea.Trans.Reader

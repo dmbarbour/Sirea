@@ -21,7 +21,8 @@ import Sirea.Behavior
 import Sirea.Partition
 
 -- | PureB is a behavior that has no side-effects and no access to
--- external resources. It can be useful, if you wish t
+-- external resources. This can be useful to enforce purity on RDP
+-- subprograms, e.g. to isolate a dynamic behavior.
 newtype PureB b x y = PB (b x y)
 
 liftPure :: b x y -> PureB b x y
