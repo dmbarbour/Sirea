@@ -60,6 +60,7 @@ import Sirea.Signal
 import Sirea.Behavior
 import Sirea.B
 import Sirea.Link
+import Sirea.Time
 
 -- I don't want DemandMonitor implemented with any special internals
 -- but I do want to share the internals of DemandMonitor with ORef
@@ -121,13 +122,13 @@ newDemandSetMonitor = newDemandMonitorZeq (sigMergeSortSet compare)
 -- few updates.
 sigMergeSortSet :: (e -> e -> Ordering) -> [Sig e] -> Sig [e]
 sigMergeSortSet _ [] = s_always []
-sigMergeSortSet _ (s:[]) = s_full_map s (Just . maybeToList)
+sigMergeSortSet _ (s:[]) = s_full_map (Just . maybeToList) s
 sigMergeSortSet cmp ss = 
     let n = length ss in
     let half = n `div` 2 in
     let (ssHd,ssTl) = splitAt half ss in
-    let sigHd = sigMergeSortSet bt ssHd in
-    let sigTl = sigMergeSortSet bt ssTl in
+    let sigHd = sigMergeSortSet cmp ssHd in
+    let sigTl = sigMergeSortSet cmp ssTl in
     s_zip (mergeListSet cmp) sigHd sigTl
 
 -- merge two list-sets into a new list-set
@@ -136,9 +137,9 @@ mergeListSet _ [] ys = ys
 mergeListSet _ xs [] = xs
 mergeListSet cmp xs@(x:xs') ys@(y:ys') =
     case cmp x y of
-        LT -> x:(mergeListSet xs' ys )
-        EQ -> x:(mergeListSet xs' ys')
-        GT -> y:(mergeListSet xs  ys')
+        LT -> x:(mergeListSet cmp xs' ys )
+        EQ -> x:(mergeListSet cmp xs' ys')
+        GT -> y:(mergeListSet cmp xs  ys')
 
 
 -- | newActivityMonitor is a demand-monitor that returns whether or
@@ -211,8 +212,8 @@ dmd_default_history = 0.025
 newDemandMonitorBase :: ([Sig e] -> Sig z) -- n-zip function
                      -> (z -> z -> Bool)   -- partial equality (false if unknown)
                      -> IO (B w (S p e) (S p ()), B w (S p ()) (S p z)) 
-newDemandMonitorBase zfn eqfn = 
-    newDemandMonitorData zfn eqfn dmd_default_history >>= \ dmd ->
+newDemandMonitorBase zfn eqfn = error "TODO: newDemandMonitorBase!"
+  {-  newDemandMonitorData zfn eqfn dmd_default_history >>= \ dmd ->
     return (demandFacetB dmd, monitorFacetB dmd)
 
 demandFacetB :: DemandMonitorData e z -> B w (S p e) (S p ())
@@ -225,6 +226,7 @@ monitorFacetB dmd = unsafeLinkB lnk
     where lnk = MkLnk { ln_tsen = True, ln_peek = 0, ln_build = build } 
           build LnkDead = return LnkDead
           build (LnkSig lu) = LnkSig <$> newMonitorFacet dmd lu
+   -}
 
 
 

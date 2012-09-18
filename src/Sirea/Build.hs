@@ -155,9 +155,9 @@ zeroObject cw =
 buildSireaBLU :: PCX w -> LnkUp () -> IO SireaObject
 buildSireaBLU cw lu =
     newIORef emptyStopData >>= \ rfSD ->
-    addTCRecv tc0 (beginApp tc0 gs rfSD lu) >> -- add kickstart
     let cp0     = findInPCX cw :: PCX P0 in
     let tc0     = findInPCX cp0 in
+    addTCRecv tc0 (beginApp cw rfSD lu) >> -- add kickstart
     let stepper = tcToStepper tc0 in
     let stopper = makeStopper rfSD in
     return $ SireaObject { sireaStepper = stepper
@@ -172,7 +172,7 @@ beginApp cw rfSD lu =
     let cp0 = findInPCX cw :: PCX P0 in
     let tc0 = findInPCX cp0 in
     readIORef rfSD >>= \ sd ->
-    if shouldStop sd 
+    if shouldStop sd -- were we stopped before we started?
       then shutdownEvent tc0 gs rfSD
       else getTime >>= \ tNow ->
            let tStart = tNow `addTime` dtStep in
@@ -180,6 +180,7 @@ beginApp cw rfSD lu =
            let su = SigUp { su_state = Just (s_always (), tStart)
                           , su_stable = Just tStable } in
            let nextStep = maintainApp tc0 gs rfSD lu tStable in
+           tStart `seq`
            setStartupTime cp0 tStart >>
            ln_update lu su >> -- activation!
            schedule dtStep (addTCRecv tc0 nextStep)
@@ -315,10 +316,10 @@ instance Resource ExitR where
 bStartTime :: BCX w (S P0 ()) (S P0 T)
 bStartTime = unsafeLinkBCX $ \ cw -> 
     MkLnk { ln_tsen = False, ln_peek = 0
-          , ln_build = (return . ln_lumap) (mklu cw) }
+          , ln_build = return . (ln_lumap (mklu cw)) }
     where mklu cw lu =
             let cp0 = findInPCX cw :: PCX P0 in
-            let rfST = inStartTime $ findInPCX cp0 in
+            let rfST = rfStartTime $ findInPCX cp0 in
             let touch' = ln_touch lu in
             let update' su = 
                     readIORef rfST >>= \ tStart ->
@@ -326,7 +327,7 @@ bStartTime = unsafeLinkBCX $ \ cw ->
                     ln_update lu su'
             in LnkUp { ln_touch = touch', ln_update = update' }
 
-newtype StartTime = StartTime { inStartTime :: IORef T }
+newtype StartTime = StartTime { rfStartTime :: IORef T }
 instance Typeable StartTime where
     typeOf _ = mkTyConApp tycStartTime []
         where tycStartTime = mkTyCon3 "sirea-core" "Sirea.Build.Internal" "StartTime"
@@ -334,5 +335,10 @@ instance Resource StartTime where
     locateResource _ = liftM StartTime trf
         where trf = newIORef t0
               t0  = timeFromDays 0
+
+-- sets the startup time for one SireaApp.
+setStartupTime :: PCX P0 -> T -> IO () 
+setStartupTime cp0 t = writeIORef (rfStartTime $ findInPCX cp0) t
+
 
 

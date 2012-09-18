@@ -28,7 +28,7 @@ newtype PureB b x y = PB (b x y)
 liftPure :: b x y -> PureB b x y
 liftPure = PB
 
-unwrapPure :: PureB (b x y) -> b x y
+unwrapPure :: PureB b x y -> b x y
 unwrapPure (PB f) = f
 
 -- from Sirea.Behavior
@@ -42,7 +42,7 @@ instance (BFmap b) => BFmap (PureB b) where
     btouch  = liftPure btouch
     badjeqf = liftPure badjeqf
 instance (BProd b) => BProd (PureB b) where
-    bfirst (SB f) = SB (bfirst <$> f)
+    bfirst (PB f) = PB (bfirst f)
     bdup    = liftPure bdup
     b1i     = liftPure b1i
     b1e     = liftPure b1e
@@ -50,7 +50,7 @@ instance (BProd b) => BProd (PureB b) where
     bswap   = liftPure bswap
     bassoclp= liftPure bassoclp
 instance (BSum b) => BSum (PureB b) where
-    bleft  (SB f) = SB (bleft <$> f)
+    bleft  (PB f) = PB (bleft f)
     bmirror = liftPure bmirror
     bmerge  = liftPure bmerge
     b0i     = liftPure b0i
@@ -70,9 +70,9 @@ instance (BPeek b) => BPeek (PureB b) where
     bpeek   = liftPure . bpeek
 instance (Behavior b) => Behavior (PureB b)
 
-instance (Behavior b) => BDynamic b (PureB b) where
+instance (BDynamic b b) => BDynamic b (PureB b) where
     bevalb' dt = bfirst (bfmap unwrapPure) >>> bevalb' dt
-instance (Behavior b) => BDynamic (PureB b) (PureB b) where
+instance (BDynamic b b) => BDynamic (PureB b) (PureB b) where
     bevalb' = liftPure . bevalb'
 
 -- from Sirea.Partition

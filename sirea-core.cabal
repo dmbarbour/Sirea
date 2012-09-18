@@ -62,10 +62,11 @@ Library
 
     Sirea.Link
     Sirea.DemandMonitor
-    Sirea.ORef
+    Sirea.AgentResource
     Sirea.UnsafeOnUpdate
     Sirea.Clock
     Sirea.Utility
+    Sirea.ORef
 
     Sirea.Trans.Pure
     Sirea.Trans.Static

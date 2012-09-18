@@ -270,11 +270,12 @@ Some behaviors provide access to effectful resources such as sensors, actuators,
 
 Different resources tend to update at different times and frequencies. Use of the complex signal types `(x :&: y)` and `(x :|: y)` enable developers to describe subnets that update at different rates. This is critical for efficiency. Developers can easily control and reason about which behavior subnets might be updated based on changes upstream. By arranging for some signals to be more stable (e.g. by utilizing an intermediate state resource) developers can protect subsystems that cannot handle rapid or short-term variations in input.
 
-Reactive Demand Programming is metacircular: an RDP application is essentially a dynamic behavior. Dynamic behaviors are compiled and installed at runtime. Dynamic behaviors will be updated and replaced according to an input signal whose value is a behavior. Old dynamic behaviors are removed from memory after they process and propagate their final signal updates. Dynamic behaviors can model staged programming, resource discovery, dynamic linking, and live programming. Sirea will bootstrap the toplevel application-behavior with `runSireaApp`, but even a toplevel dynamic behavior can be understood as *dynamic*: active at some times, inactive at others, subject to possible changes in the behavior description between executions.
+Reactive Demand Programming is metacircular: an RDP application is essentially a dynamic behavior. Dynamic behaviors are compiled and installed at runtime. Dynamic behaviors will be updated and replaced according to an input signal whose value is a behavior. Old dynamic behaviors are removed from memory after they process and propagate their final signal updates. Dynamic behaviors can model staged programming, resource discovery, dynamic linking, and live programming. Sirea will bootstrap a behavior with `runSireaApp`, but even that toplevel application behavior can be understood as *dynamic*: active at some times (when running the process), inactive at others, subject to possible changes in the behavior description between executions.
 
-Within RDP, it is RDP all the way down, all the way out to the physical resources. Simple. Symmetric. Elegant.
+It is RDP all the way out to the physical resources. Simple. Symmetric. Elegant.
 
 ### Dataflow Networks
+
 
 
 

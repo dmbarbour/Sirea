@@ -1,8 +1,7 @@
 
 -- Utilities for tracking demands and monitors of demand.
 module Sirea.Internal.DemandMonitorData
-    ( DemandMonitorData(..)
-    , newDemandMonitorData, newDemandFacet, newMonitorFacet
+    ( DemandAggr(..), DD(..)
     ) where
 
 import qualified Data.HashTable as HT
@@ -60,8 +59,13 @@ data DemandAggr e z = DemandAggr
     , de_next       :: !(LnkUp z)           -- 
     }
 
+data DD e = DD
+    { dd_signal :: !(Sig e)
+    , dd_expect :: !Bool
+    , dd_stable :: !(Maybe T)
+    }
 
-
+{-
 
 newDemandAggr :: ([Sig e] -> Sig z) 
               -> 
@@ -93,15 +97,15 @@ data DemandMonitorData e z = DemandMonitor
     , dmd_update    :: !(IORef (Maybe T))      -- earliest demand update
     , dmd_dtouch    :: !(IORef Int)            -- # expected updates on demand facets
     , dmd_mtouch    :: !(IORef Int)            -- # expected updates on monitor facets
-    , dmd_nxtid     :: !(IORef Int)            -- create local unique ID for table
-    , dmd_dTable    :: !(HT.HashTable Int (DemandData e))
-    , dmd_mTable    :: !(HT.HashTable Int (MonitorData z))
+    , dmd_nxtid     :: !(IORef Int32)          -- create local unique ID for table
+    , dmd_dTable    :: !(HT.HashTable (DemandData e))
+    , dmd_mTable    :: !(HT.HashTable (MonitorData z))
     }
 data DemandData e = DemandData
     { dd_sig :: !(SigSt e) -- current demand status
     }
 data MonitorData z = MonitorData
-    { md_sig :: !(SigSt ()) -- monitoring status (removed when final)
+    { md_sig :: !(SigSt ()) -- monitoring status 
     , md_lnk :: !(LnkUp z)  -- to receive monitor updates
     , md_upd :: !(Maybe T)  -- recent update time (if any)
     }
@@ -309,7 +313,7 @@ newMonitorFacet dmd lu =
     let update su = loadIndex >>= \ ix -> dmd_updateMonitorFacet dmd ix su in
     return $ LnkUp { ln_touch = touch, ln_update = update }
 
-
+-}
 
 
 
