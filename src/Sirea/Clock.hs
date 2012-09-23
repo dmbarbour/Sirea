@@ -39,6 +39,7 @@ module Sirea.Clock
     ) where
 
 import Control.Exception (assert)
+import Data.Ratio
 import Sirea.B
 import Sirea.BCX
 import Sirea.Time
@@ -64,15 +65,14 @@ import Sirea.Signal
 -- to correspond to a simple rational frequency.
 -- 
 -- Caution: High rate clocks become expensive to compute and memory
--- intensive. If Sirea computes 300ms for history and anticipation,
--- a nanosecond clock signal in memory would consume over a gigabyte
--- of memory and a gigahertz CPU. If the rate was only 1000Hz, the
--- cost would measure in kilobytes and kilohertz of CPU. Don't use
--- high frequency clocks.
+-- intensive. Many resources buffer signals partially into memory. A
+-- 1 MHz signal buffered for 1 second will cost many megabytes and 
+-- corresponding CPU MHz to compute. 
 --
--- An alternative to clocks is use of animated state, which can be
--- flexible and efficient, though more difficult to maintain in a
--- robust manner (as state tends to be).
+-- If precise actions are needed on a clock, but flexibly such that
+-- most ticks are ignored, consider use of animated state instead of
+-- or in addition to a clock. Animated state might model timeouts or
+-- updates on ad-hoc schedules. 
 -- 
 data ClockSpec = ClockSpec
     { clock_period :: !DT
@@ -168,16 +168,17 @@ timeAfterTime cs t0 = t0 `seq` (t1:timeAfterTime cs t1)
 -- Frequency is ticks per second, but sub-second frequencies are
 -- allowed. Frequency must still select a valid ClockSpec.
 --
--- Note that very high frequencies (e.g. multi MHz) might become a
--- compute burden.  
-bclockOfFreq :: (HasClock b) => Double -> b (S p ()) (S p T)
+-- Note that high frequencies will become a space and CPU burden.
+-- The practical period for a clock really ranges from a few minutes
+-- down to a millisecond or so.   
+bclockOfFreq :: (HasClock b) => Rational -> b (S p ()) (S p T)
 bclockOfFreq = bclock . freqToClockSpec
 
 -- | Frequency is updates per second, and phase how far into each
 -- period we perform the update. E.g. if frequency was 2 and phase
 -- is 0.5, then we update twice per second at 0.25 and 0.75. 
 -- Phase must be bounded by [0.0,1.0). 
-bclockOfFreqAndPhase :: (HasClock b) => Double -> Double -> b (S p ()) (S p T)
+bclockOfFreqAndPhase :: (HasClock b) => Rational -> Rational -> b (S p ()) (S p T)
 bclockOfFreqAndPhase dFreq dPhase = bclock $ freqAndPhaseToClockSpec dFreq dPhase
 
 -- | A few common low-frequency clocks. These each report the full time, 
@@ -201,8 +202,8 @@ clockSpecValid cs =
     where one_full_day = nanosToDt nanosInDay
 
 -- | Translate a frequency value to a ClockSpec.
-freqToClockSpec :: Double -> ClockSpec
-freqToClockSpec hz = freqAndPhaseToClockSpec hz 0.0
+freqToClockSpec :: Rational -> ClockSpec
+freqToClockSpec hz = freqAndPhaseToClockSpec hz 0
 
 -- | Translate frequency and phase to a ClockSpec.
 --
@@ -214,11 +215,11 @@ freqToClockSpec hz = freqAndPhaseToClockSpec hz 0.0
 -- Here, phase is in the range [0.0,1.0), relative offset within one 
 -- period of the clock. A clock with 0 phase will always tick at 
 -- midnight (UTC). 
-freqAndPhaseToClockSpec :: Double -> Double -> ClockSpec
+freqAndPhaseToClockSpec :: Rational -> Rational -> ClockSpec
 freqAndPhaseToClockSpec dFreq dPhase = 
     assert ((minFreq <= dFreq) && (dFreq <= maxFreq)) $
-    assert ((0.0 <= dPhase) && (dPhase < 1.0)) $
-    let dPeriod = (1000000000.0 / dFreq) in
+    assert ((0 <= dPhase) && (dPhase < 1)) $
+    let dPeriod = (1000000000 / dFreq) in
     let nPeriod = ceiling dPeriod in
     let nPhase  = floor (dPeriod * dPhase) in
     assert ((1 <= nPeriod) && (nPeriod <= nanosInDay)) $
@@ -227,8 +228,8 @@ freqAndPhaseToClockSpec dFreq dPhase =
     let dtPhase  = nanosToDt nPhase in
     ClockSpec { clock_period = dtPeriod
               , clock_offset = dtPhase }
-    where minFreq = (1.0 / 86400.0)
-          maxFreq = 1000000000.0
+    where minFreq = 1 % 86400
+          maxFreq = 1000000000
 
 
 
