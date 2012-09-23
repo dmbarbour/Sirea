@@ -23,7 +23,7 @@ import Sirea.Internal.BImpl
 import Sirea.Internal.BDynamic
 import Data.Typeable
 
-instance Typeable2 (B w) where
+instance Typeable2 B where
     typeOf2 _ = mkTyConApp tcB []
         where tcB = mkTyCon3 "sirea-core" "Sirea.Behavior" "B"
 
@@ -45,16 +45,16 @@ dtEqf, dtSeq :: DT
 dtEqf   = 6.0 -- seconds ahead of stability to find difference
 dtSeq   = 0.3 -- seconds ahead of stability to force evaluation
 
-eqfB :: (x -> x -> Bool) -> B w (S p x) (S p x)
+eqfB :: (x -> x -> Bool) -> B (S p x) (S p x)
 eqfB = unsafeEqShiftB dtEqf
 
-instance BFmap (B w) where 
+instance BFmap B where 
     bfmap    = fmapB
     bconst c = constB c >>> eqfB ((const . const) True)
     bstrat   = stratB 
     bseq     = seqB dtSeq
     badjeqf  = adjeqfB >>> eqfB (==)
-instance BProd (B w) where
+instance BProd B where
     bfirst   = firstB
     bdup     = dupB
     b1i      = s1iB
@@ -62,7 +62,7 @@ instance BProd (B w) where
     btrivial = trivialB
     bswap    = swapB
     bassoclp = assoclpB
-instance BSum (B w) where
+instance BSum B where
     bleft    = leftB
     bmirror  = mirrorB
     bmerge   = mergeB
@@ -70,20 +70,20 @@ instance BSum (B w) where
     b0e      = s0eB
     bvacuous = vacuousB
     bassocls = assoclsB
-instance BZip (B w) where
+instance BZip B where
     bzap     = zapB
-instance BSplit (B w) where
+instance BSplit B where
     bsplit   = splitB
-instance BDisjoin (B w) where 
+instance BDisjoin B where 
     bdisjoin = disjoinB
-instance BTemporal (B w) where
+instance BTemporal B where
     bdelay   = delayB
     bsynch   = synchB
-instance BPeek (B w) where
+instance BPeek B where
     bpeek    = peekB
-instance Behavior (B w)
+instance Behavior B 
 
-instance BDynamic (B w) (B w) where
+instance BDynamic B B where
     beval dt = evalB dt >>> bright bfst
 
 

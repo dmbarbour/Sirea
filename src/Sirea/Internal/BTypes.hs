@@ -60,21 +60,21 @@ import Control.Exception (assert)
 -- Behaviors compose much like arrows (from Control.Arrow), but are
 -- more constrained due to partitioning, asynchrony, and duration
 -- coupling. 
-data B w x y where
+data B x y where
   -- most operations:
   --   TR to report induced delays or transform of latency
   --   MkLnk to apply effects
-  B_mkLnk   :: (TR x y) -> (MkLnk w x y) -> B w x y
+  B_mkLnk   :: (TR x y) -> (MkLnk x y) -> B x y
 
   -- category
-  B_pipe    :: (B w x y) -> (B w y z) -> B w x z
+  B_pipe    :: (B x y) -> (B y z) -> B x z
 
   -- arrows
-  B_first   :: (B w x x') -> B w (x :&: y) (x' :&: y)
-  B_left    :: (B w x x') -> B w (x :|: y) (x' :|: y)
+  B_first   :: (B x x') -> B (x :&: y) (x' :&: y)
+  B_left    :: (B x x') -> B (x :|: y) (x' :|: y)
 
   -- access information from the first compilation pass
-  B_latent  :: (LnkD LDT x -> B w x y) -> B w x y
+  B_latent  :: (LnkD LDT x -> B x y) -> B x y
 
   -- ability to compare opaque behaviors would be nice...
   -- B_unique :: UniqueID -> (B w x y) -> B w x y
@@ -92,7 +92,7 @@ data B w x y where
 -- | delay computation of B x y until timing info is available
 -- (note: this separation exists for the potential case that I
 -- later extend compilation phase 1 with more than timing info).
-latentOnTime :: (LnkD LDT x -> B w x y) -> B w x y
+latentOnTime :: (LnkD LDT x -> B x y) -> B x y
 latentOnTime = B_latent
 
 ---------------------------------------------------------

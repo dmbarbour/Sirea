@@ -75,7 +75,7 @@ import Sirea.Internal.DemandMonitorData
 -- This is generally not for direct use by Sirea clients; instead,
 -- it serves as a primitive for a ResourceSpace or BCX, which can
 -- introduce a demand monitor where it is needed.
-newDemandMonitor :: IO (B w (S p e) (S p ()) , B w (S p ()) (S p [e]))
+newDemandMonitor :: IO (B (S p e) (S p ()) , B (S p ()) (S p [e]))
 newDemandMonitor = newDemandMonitorBase sigListZip bothNil
     where bothNil [] [] = True -- nils are equal
           bothNil _ _ = False -- everything else is unknown
@@ -102,7 +102,7 @@ sigListZip = foldr (s_full_zip jf) (s_always [])
 --
 -- See also: the notes for newDemandMonitorZ
 newDemandMonitorZeq :: (Eq z) => ([Sig e] -> Sig z) 
-                    -> IO (B w (S p e) (S p ()) , B w (S p ()) (S p z))
+                    -> IO (B (S p e) (S p ()) , B (S p ()) (S p z))
 newDemandMonitorZeq = flip newDemandMonitorBase (==)
 
 -- | newDemandSetMonitor will provide the output as an ordered set 
@@ -113,7 +113,7 @@ newDemandMonitorZeq = flip newDemandMonitorBase (==)
 -- ordinal properties.
 --
 -- The resulting set is ordered from lowest to highest.
-newDemandSetMonitor :: (Ord e) => IO (B w (S p e) (S p ()), B w (S p ()) (S p [e]))
+newDemandSetMonitor :: (Ord e) => IO (B (S p e) (S p ()), B (S p ()) (S p [e]))
 newDemandSetMonitor = newDemandMonitorZeq (sigMergeSortSet compare)
 
 -- merge-sort a list of signals, eliminating duplicates as we go.
@@ -145,7 +145,7 @@ mergeListSet cmp xs@(x:xs') ys@(y:ys') =
 -- | newActivityMonitor is a demand-monitor that returns whether or
 -- not there is any active demand on the demand facet. This is very
 -- stable to changes, and useful for many systems. 
-newActivityMonitor :: IO (B w (S p ()) (S p ()), B w (S p ()) (S p Bool))
+newActivityMonitor :: IO (B (S p ()) (S p ()), B (S p ()) (S p Bool))
 newActivityMonitor = newDemandMonitorZeq sigAny
 
 sigAny :: [Sig a] -> Sig Bool
@@ -162,7 +162,7 @@ sigAny sigs = s_full_map isActive sigsMerged
 -- Motivation: top K demands is probably more stable than N demands, 
 -- assuming N > K. Computation costs are also under better control.
 -- Improves stability and performance relative to DemandSetMonitor. 
-newKMaximumMonitor :: (Ord e) => Int -> IO (B w (S p e) (S p ()), B w (S p ()) (S p [e]))
+newKMaximumMonitor :: (Ord e) => Int -> IO (B (S p e) (S p ()), B (S p ()) (S p [e]))
 newKMaximumMonitor k =
     if (k <  1) then return (bconst (), bconst []) 
                 else newDemandMonitorZeq (sigKMax k) 
@@ -173,7 +173,7 @@ sigKMax :: (Ord e) => Int -> [Sig e] -> Sig [e]
 sigKMax k = fmap (take k) . (sigMergeSortSet (flip compare))
 
 -- | newKMinimumMonitor is simply the KMaximiumMonitor inverted.
-newKMinimumMonitor :: (Ord e) => Int -> IO (B w (S p e) (S p ()), B w (S p ()) (S p [e]))
+newKMinimumMonitor :: (Ord e) => Int -> IO (B (S p e) (S p ()), B (S p ()) (S p [e]))
 newKMinimumMonitor k = 
     if (k <  1) then return (bconst (), bconst []) 
                 else newDemandMonitorZeq (sigKMin k)
@@ -211,7 +211,7 @@ dmd_default_history = 0.025
 --
 newDemandMonitorBase :: ([Sig e] -> Sig z) -- n-zip function
                      -> (z -> z -> Bool)   -- partial equality (false if unknown)
-                     -> IO (B w (S p e) (S p ()), B w (S p ()) (S p z)) 
+                     -> IO (B (S p e) (S p ()), B (S p ()) (S p z)) 
 newDemandMonitorBase zfn eqfn = error "TODO: newDemandMonitorBase!"
   {-  newDemandMonitorData zfn eqfn dmd_default_history >>= \ dmd ->
     return (demandFacetB dmd, monitorFacetB dmd)

@@ -377,7 +377,7 @@ In addition to the `(:&:)` typed signals, Sirea supports `(:|:)` typed signals. 
         (|||)    :: (BSum b) => b x z  -> b y z  -> b (x :|: y) z
         binr     :: (BSum b) => b y (x :|: y)
 
-With product `(:&:)`, sum `(:|:)`, and unit `(S p ())`, developers can represent arbitrary data types - booleans, composition of booleans into 32-bit numbers, and so on - without relying on a second paradigm. Of course, this would be dreadfully inefficient on modern architectures (without a lot of high-level optimizations). Dynamic behaviors can serve several of the same roles as `(:|:)` signals. Dynamic behaviors and relevant performance considerations are discussed in a later section.
+With product `(:&:)`, sum `(:|:)`, and unit `(S p ())`, developers can represent arbitrary data types - booleans, composition of booleans into 32-bit numbers, and so on - without relying on a second paradigm. Of course, this would be dreadfully inefficient on modern architectures (without a lot of high-level optimizations). 
 
 Developers must also support interactions between the `(:&:)` and `(:|:)` types. The two basic interactions involve factoring a signal that occurs regardless of choice (`bconjoin`), or distributing a signal across a choice (`bdisjoin`). Conjoin is quite trivial - duplicate, filter, and merge. Disjoin, however, requires a little extra attention. 
 
@@ -428,6 +428,8 @@ This says that behavior type `b` can install a time-varying instance of the same
 
 The `DT` value provides a static latency for the behavior, and the `S p ()` output indicates an error, which happens if you try to evaluate a behavior that is larger than the given `DT` value. (I'd prefer to use dependent types for time, but those aren't trivial to model in Haskell.) The `b'` inner type supports behavior transformers or layers. The `SigInP p x` constraint ensures all the `x` signals are in the same partition as the behavior signal. 
 
+Dynamic behaviors can serve several of the same roles as `(:|:)` signals, but `(:|:)` is more openly composable and may sometimes offer performance advantages. No best practices are yet established for when to use sums vs. dynamic behaviors for RDP, but for a small number of commonly used, statically known choices it will probably be better to favor sums.
+
 *NOTE:* Sirea uses speculative evaluation to compile and install dynamic behaviors a few seconds before they are necessary. Thus, even though `beval` indicates only one behavior as active, in practice multiple behaviors are installed and active, computing recent past and near future in parallel. If the dynamic behaviors are relatively stable - and assuming the CPU can keep up with the higher burden - this can reduce latencies experienced by the user. 
 
 **CAUTION:** Compared to first-class functions in Haskell, dynamic behaviors in Sirea are relatively expensive and lack effective cross-level optimizations. Dynamic behaviors for Sirea should be relatively stable, such that the expense of changing behaviors is amortized over time. Use dynamic behaviors where necessary for expressiveness, but use them sparingly. 
@@ -468,7 +470,7 @@ Use of explicit, logical delay provides developers more control over their RDP c
 
 The behavior `bdelay` will delay a signal logically. It achieves this by adding the given `DT` to the update and stability times for every `SigUp`. Fundamentally, the idea is to turn *straggling* updates into *future* updates: instead of an update too late, the update might arrive a little early (based on the distance between logical and real time). Future updates are subject to speculative evaluation, anticipation, and buffering. The delay can mask variance in physical latency, hiding scheduler hiccups and similar.
 
-Choosing too large a `DT` value has its own disadvantages: most reactive or real time systems have a tight latency budget, beyond which the quality of the system degrades. Also, large `DT` results in larger buffers and memory overheads. So developers in RDP are under some pressure to specify delays that are large enough but not too large. Fortunately, developers do not need to be especially precise or accurate; many resources are robust to an occasional straggler, and the window for "good enough" is quite large in most problem domains.
+Choosing too large a `DT` value has its own disadvantages: most reactive or real time systems have a tight latency budget, beyond which the quality of the system rapidly degrades. Also, large `DT` results in larger buffers and memory overheads. So developers in RDP are under some pressure to specify delays that are large enough but not too large. Fortunately, developers do not need to be especially precise or accurate; most resources are robust to an occasional straggler, and the window for "good enough" is quite large in most problem domains. In many cases, computation latencies can be entirely subsumed by communication latencies.
 
 The `bdelay` behavior be applied to components signals in a complex signal type (e.g. `bfirst bdelay 0.01` to delay the first signal 10 milliseconds). This is why RDP has *asynchronous products and sums* for its signal types. But when signals become asynchronous, it is often desirable to synchronize them for an operation. Some operations in Sirea will implicitly synchronize: `bzip`, `bmerge`, or `bdisjoin`. But a behavior for an explicit synchronization barrier is also available:
 
@@ -521,9 +523,22 @@ The use of "touch" is reflected directly in the data type for constructing concr
             , ln_update :: SigUp a -> IO ()
             }
 
-Touch is used only within each partition. Between partitions, batches will often be processed in non-optimal order. However, ability to accumulate batches and process them together will at least *resist* worst-case orderings. 
+Touch is used only within each partition. Acyclic dependencies between signals will often realize as cyclic dependencies between partitions, which would complicate a higher layer use of touch. Between partitions, batches will often process in non-optimal orders. However, the tendency to accumulate and process multiple batches together will strongly resist the worst-case orderings. 
+
+Developers will use the `LnkUp` type directly if extending Sirea for new resources. This is achieved with `unsafeLinkB` from Sirea.Link. The simplest links would essentially be constructed by:
+
+        (LnkUp y -> IO (LnkUp x)) -> B (S p x) (S p y)
+
+Links in Sirea are built starting from the destination for the dataflow `(S p y)`. The `IO` at construction is used for any per-link caches and resource management. (RDP behaviors must not be semantically stateful, but use of state is often convenient for their implementation.) `B w` is Sirea's primary, concrete behavior type (the `w` is a phantom type 
+to control  distribution of resources). 
+
+But the signature presented here is insufficient for multiple signals or certain dead-code optimizations. 
+
+        unsafeLinkB :: 
 
 
+
+Between rounds of RDP updates, developers can specify the behavior for each partition. 
 
 
 Each round is controlled by a `runStepper` operation. Between rounds, it is possible to manipulate resources, e.g. to render an OpenGL frame or update some sound buffers. Developers can specify the behavior of a partition thread via the `Partition` typeclass. (The exception is `P0`, the initial partition, which is controlled by the Sirea client.)

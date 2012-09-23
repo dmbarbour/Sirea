@@ -56,7 +56,7 @@ dt_compile_future = 3 -- seconds into future
 --   cannot predict dead sink in x based on dead sink in y
 -- consequently, eval tends to hinder optimizations.
 -- 
-evalB :: (SigInP p x) => DT -> B w (S p (B w x y) :&: x) (y :|: (S p () :&: x))
+evalB :: (SigInP p x) => DT -> B (S p (B x y) :&: x) (y :|: (S p () :&: x))
 evalB dt = --trace "evalB" $
     -- synchronization and preparation (& initial compile step)
     synchB >>> forceDelayB >>> evalPrepB dt >>>
@@ -71,14 +71,14 @@ evalB dt = --trace "evalB" $
 
 -- apply first compilation stage to the input behavior, and filter
 -- behaviors that won't fit into given time `dt`.
-evalPrepB :: DT -> B w (S p (B w x y) :&: x) ((S p (Either (B w x y) ())) :&: x)
+evalPrepB :: DT -> B (S p (B x y) :&: x) ((S p (Either (B x y) ())) :&: x)
 evalPrepB dt = B_latent $ \ tbx ->
     assert (evalSynched tbx) $
     let tx = lnd_snd tbx in
     B_first (fmapB (evalPrep dt tx))
 
 -- final evaluation step; assumes input B is valid at this point.
-evalFinalB :: (SigMembr x) => DT -> B w (S p (B w x y) :&: x) y
+evalFinalB :: (SigMembr x) => DT -> B (S p (B x y) :&: x) y
 evalFinalB dt = B_latent $ \ tbx ->
     let tx = lnd_snd tbx in
     B_mkLnk (trEval dt) (buildEval tx)
@@ -102,7 +102,7 @@ trEval dt t0 =
 -- first compilation phase eliminating B_latent expressions, and
 -- applying any fixed delays and dead-code-on-input optimizations.
 -- Basically, the `B` after this point is highly context dependent.
-evalPrep :: DT -> LnkD LDT x -> B w x y -> Either (B w x y) ()
+evalPrep :: DT -> LnkD LDT x -> B x y -> Either (B x y) ()
 evalPrep dt ldtx =
     assert (evalSynched ldtx) $
     evalFitDelay dtf . precompile
@@ -113,7 +113,7 @@ evalPrep dt ldtx =
 -- evalFitDelay is applied to each dynamic behavior. If it succeeds,
 -- we can guarantee the resulting delay is equal to dtf on every value
 -- entering `y`. It may fail if the behavior is too large for dtf.
-evalFitDelay :: DT -> (B w x y, LnkD LDT y) -> Either (B w x y) ()
+evalFitDelay :: DT -> (B x y, LnkD LDT y) -> Either (B x y) ()
 evalFitDelay dtf (b,t0) =
     assert (ldt_valid t0) $
     if (ldt_maxGoal t0 > dtf) 
@@ -143,7 +143,7 @@ evalSynched ldt =
     (ldt_maxGoal ldt == ldt_minCurr ldt)
 
 -- buildEval prepares the evaluator to receive and process inputs.
-buildEval :: (SigMembr x) => LnkD LDT x -> Lnk y -> IO (Lnk (S p (B w x y) :&: x))
+buildEval :: (SigMembr x) => LnkD LDT x -> Lnk y -> IO (Lnk (S p (B x y) :&: x))
 buildEval dtx lnyFinal =
     --trace "buildEval start" $ 
     assert (evalSynched dtx) $

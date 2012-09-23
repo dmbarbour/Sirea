@@ -60,7 +60,7 @@ type WithPCX w = WrappedArrow (->) (PCX w)
 --
 -- BCX is a behavior that can work in any world w, given a context
 -- (GCX w) to represent or proxy resources in that world. 
-newtype BCX w x y = BCX { fromBCX :: StaticB (WithPCX w) (B w) x y } 
+newtype BCX w x y = BCX { fromBCX :: StaticB (WithPCX w) B x y } 
     deriving ( Category, BFmap, BProd, BSum, BDisjoin
              , BZip, BSplit, BTemporal, BPeek, Behavior )
     -- NOT deriving: BDynamic, BCross
@@ -69,16 +69,16 @@ instance Typeable2 (BCX w) where
     typeOf2 _ = mkTyConApp tcBCX []
         where tcBCX = mkTyCon3 "sirea-core" "Sirea.BCX" "BCX"
 
-unwrapBCX :: BCX w x y -> (PCX w -> B w x y)
+unwrapBCX :: BCX w x y -> (PCX w -> B x y)
 unwrapBCX = unwrapArrow . unwrapStatic . fromBCX
 
-wrapBCX :: (PCX w -> B w x y) -> BCX w x y
+wrapBCX :: (PCX w -> B x y) -> BCX w x y
 wrapBCX =  BCX . wrapStatic . WrapArrow
 
 instance BCross (BCX w) where
     bcross = wrapBCX crossB
 
-instance BDynamic (BCX w) (B w) where
+instance BDynamic (BCX w) B where
     beval = wrapBCX . const . beval
 
 instance BDynamic (BCX w) (BCX w) where

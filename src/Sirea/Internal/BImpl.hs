@@ -48,29 +48,29 @@ import Data.IORef (newIORef, readIORef, writeIORef, IORef)
 
 import qualified Data.List as L
 
-instance Category (B w) where
+instance Category B where
   id  = fwdB
   (.) = flip B_pipe
 
 
-firstB :: B w x x' -> B w (x :&: y) (x' :&: y)
+firstB :: B x x' -> B (x :&: y) (x' :&: y)
 firstB = B_first
 
-leftB :: B w x x' -> B w (x :|: y) (x' :|: y)
+leftB :: B x x' -> B (x :|: y) (x' :|: y)
 leftB = B_left
 
-mkLnkPure :: (Lnk y -> Lnk x) -> MkLnk w x y
+mkLnkPure :: (Lnk y -> Lnk x) -> MkLnk x y
 mkLnkPure = (return .)
 
-mkLnkB :: TR x y -> MkLnk w x y -> B w x y
+mkLnkB :: TR x y -> MkLnk x y -> B x y
 mkLnkB = B_mkLnk
 
 -- fwdB is the simplest behavior...
-fwdB :: B w x x 
+fwdB :: B x x 
 fwdB = mkLnkB id $ mkLnkPure id
 
 -- introduce S1. This creates an imaginary signal out of nothing.
-s1iB :: B w x (S1 :&: x)
+s1iB :: B x (S1 :&: x)
 s1iB = mkLnkB trTriv $ mkLnkPure lnTriv
     where trTriv tx =
             let t1 = LnkDUnit $ LDT { ldt_curr = ldt_maxCurr tx
@@ -83,14 +83,14 @@ s1iB = mkLnkB trTriv $ mkLnkPure lnTriv
             assert (ln_dead ln1) lnx
             
 -- eliminate S1
-s1eB :: B w (S1 :&: x) x
+s1eB :: B (S1 :&: x) x
 s1eB = mkLnkB trTriv $ mkLnkPure lnTriv
     where trTriv = lnd_snd
           lnTriv x = LnkProd LnkDead x
 
 -- trivialB - S1 is a final state; anything else should be dead
 -- code, so go ahead and validate this property.
-trivialB :: B w x S1
+trivialB :: B x S1
 trivialB = mkLnkB trTriv $ mkLnkPure lnTriv
     where trTriv x = LnkDUnit $ LDT { ldt_curr = ldt_maxCurr x
                                     , ldt_goal = ldt_maxGoal x
@@ -98,13 +98,13 @@ trivialB = mkLnkB trTriv $ mkLnkPure lnTriv
           lnTriv ln1 = assert (ln_dead ln1) LnkDead 
 
 -- simple swap on Lnk sinks
-swapB :: B w (x :&: y) (y :&: x)
+swapB :: B (x :&: y) (y :&: x)
 swapB = mkLnkB trSwap $ mkLnkPure lnSwap
     where trSwap tr = LnkDProd (lnd_snd tr) (lnd_fst tr)
           lnSwap ln = LnkProd (ln_snd ln) (ln_fst ln)
 
 -- simple rearrangement like swap            
-assoclpB :: B w (x :&: (y :&: z)) ((x :&: y) :&: z)
+assoclpB :: B (x :&: (y :&: z)) ((x :&: y) :&: z)
 assoclpB = mkLnkB trRotl $ mkLnkPure lnAso
     where trRotl tr = 
             let tx = lnd_fst tr in
@@ -119,7 +119,7 @@ assoclpB = mkLnkB trRotl $ mkLnkPure lnAso
 
 
 -- deep-duplicate signals (at least where two sinks are available)
-dupB :: B w x (x :&: x)
+dupB :: B x (x :&: x)
 dupB = mkLnkB trDup $ mkLnkPure lnDup
     where trDup tr = LnkDProd tr tr -- duplicate timing properties
           lnDup ln = lnDeepDup (ln_fst ln) (ln_snd ln)
@@ -144,18 +144,18 @@ lnDeepDup (LnkSig x) rhs =
     LnkSig (ln_append x (ln_lnkup rhs))
            
 {-- if inl, can ignore the right bucket
-inlB :: B w x (x :|: y)
+inlB :: B x (x :|: y)
 inlB = mkLnkB trinl $ mkLnkPure ln_left
     where trinl tr = LnkDSum tr (tr_dead tr) -}
 
 -- introduce a vacuous signal (old role of inlB)
-s0iB :: B w x (S0 :|: x)
+s0iB :: B x (S0 :|: x)
 s0iB = mkLnkB trVac $ mkLnkPure lnVac
     where trVac tx = LnkDSum (tr_dead tx) tx
           lnVac = ln_right
 
 -- eliminate a vacuous signal (implicitly performed by mergeB)
-s0eB :: B w (S0 :|: x) x
+s0eB :: B (S0 :|: x) x
 s0eB = mkLnkB trVac $ mkLnkPure lnVac
     where trVac t0x =
             let t0 = lnd_left t0x in
@@ -164,7 +164,7 @@ s0eB = mkLnkB trVac $ mkLnkPure lnVac
           lnVac lx = LnkSum LnkDead lx
 
 -- prove anything from nothing
-vacuousB :: B w S0 x
+vacuousB :: B S0 x
 vacuousB = mkLnkB trVac $ mkLnkPure lnVac
     where trVac t0 = 
             let ldt = lnd_sig t0 in
@@ -173,13 +173,13 @@ vacuousB = mkLnkB trVac $ mkLnkPure lnVac
           lnVac _ = LnkDead
 
 -- simple rearrangement
-mirrorB :: B w (x :|: y) (y :|: x)
+mirrorB :: B (x :|: y) (y :|: x)
 mirrorB = mkLnkB trMirr $ mkLnkPure lnMirr 
     where trMirr tr = LnkDSum (lnd_right tr) (lnd_left tr)
           lnMirr ln = LnkSum (ln_right ln) (ln_left ln)
 
 -- simple rearrangement
-assoclsB :: B w (x :|: (y :|: z)) ((x :|: y) :|: z)
+assoclsB :: B (x :|: (y :|: z)) ((x :|: y) :|: z)
 assoclsB = mkLnkB trRotl $ mkLnkPure lnAso
     where trRotl tr =
             let tx = lnd_left tr in
@@ -194,11 +194,11 @@ assoclsB = mkLnkB trRotl $ mkLnkPure lnAso
 
 -- merge is among the more challenging behaviors due to complex
 -- synchronization and optimization requirements.
-mergeB :: B w (x :|: x) x
+mergeB :: B (x :|: x) x
 mergeB = mergeSynchB >>> latentOnTime mergeSigsB
 
 -- pre-synch for merge; minimal, does not synch with dead branches
-mergeSynchB :: B w (x :|: x) (x :|: x)
+mergeSynchB :: B (x :|: x) (x :|: x)
 mergeSynchB = tshiftB synchTs
     where synchTs xx = 
             let synchLR = lnd_zip synchLDT (lnd_left xx) (lnd_right xx) in
@@ -221,7 +221,7 @@ shallowSynch lhs rhs =
         , ldt_live = True
         }
 
-mergeSigsB :: LnkD LDT (x :|: x) -> B w (x :|: x) x
+mergeSigsB :: LnkD LDT (x :|: x) -> B (x :|: x) x
 mergeSigsB tr = mkLnkB trMerge (buildMerge tr) 
     where trMerge xx = lnd_zip ldtMerge (lnd_left xx) (lnd_right xx)
           ldtMerge lhs rhs =
@@ -267,12 +267,12 @@ buildMerge_i tl tr (LnkSig lu) =
 -- choice signal with the external signal (a special case for which
 -- tshiftB was heavily revised) then apply the split.
 disjoinB :: (SigInP p x)
-         => B w (x :&: ((S p () :&: y) :|: z))
+         => B (x :&: ((S p () :&: y) :|: z))
                 ((x :&: y) :|: (x :&: z))
 disjoinB = disjSynchB >>> latentOnTime disjSigsB
 
 -- pre-synch for disjoin operation
-disjSynchB :: B w (x :&: ((S p () :&: y) :|: z) ) 
+disjSynchB :: B (x :&: ((S p () :&: y) :|: z) ) 
                   (x :&: ((S p () :&: y) :|: z) )
 disjSynchB = tshiftB disjSynchTs
     where disjSynchTs xuyz =
@@ -304,7 +304,7 @@ fullSynch = synchCurr . synchGoal
 -- primary disjoin behavior, includes latent optimization for dead
 -- code on input (i.e. binl, binr)
 disjSigsB :: LnkD LDT (x :&: ((S p () :&: y) :|: z))
-          -> B w (x :&: ((S p () :&: y) :|: z))
+          -> B (x :&: ((S p () :&: y) :|: z))
                         ((x :&: y) :|: (x :&: z))
 disjSigsB tr = mkLnkB disjTr (buildDisj tr)
     where disjTr xuyz = 
@@ -413,13 +413,13 @@ disjMaskRight sa su = s_mask sa su'
           inv _       = Nothing
 
 -- | apply pure functions in one signal to values in another
-zapB :: B w (S p (a -> b) :&: S p a) (S p b)
+zapB :: B (S p (a -> b) :&: S p a) (S p b)
 zapB = synchB >>> unsafeSigZipB (<*>)
 
 -- | combine arbitrary signals. Be careful, this can easily break 
 -- invariants unless synchronization constraints are enforced and 
 -- the signal function is carefully constrained.
-unsafeSigZipB :: (Sig a -> Sig b -> Sig c) -> B w (S p a :&: S p b) (S p c)
+unsafeSigZipB :: (Sig a -> Sig b -> Sig c) -> B (S p a :&: S p b) (S p c)
 unsafeSigZipB = mkLnkB tr_unit . buildZip
 
 -- intermediate state is needed to perform zip, zap, etc.
@@ -433,7 +433,7 @@ buildZip fnZip (LnkSig lu) =
     return (LnkProd (LnkSig sf) (LnkSig sa))
 
 -- | split a signal based on its data. Main source of (:|:) signals.
-splitB :: B w (S p (Either x y)) (S p x :|: S p y)
+splitB :: B (S p (Either x y)) (S p x :|: S p y)
 splitB = mkLnkB trSplit $ mkLnkPure lnkSplit 
     where trSplit = LnkDUnit . lnd_sig -- unit of a different type
           lnkSplit lr =
@@ -463,24 +463,24 @@ takeRight (Just (Right x)) = Just x
 takeRight _ = Nothing
 
 -- | map an arbitrary Haskell function across an input signal.
-fmapB :: (a -> b) -> B w (S p a) (S p b)
+fmapB :: (a -> b) -> B (S p a) (S p b)
 fmapB = mkLnkB tr_fwd . mkLnkPure . lnFmap
     where lnFmap = ln_lumap . ln_sumap . su_fmap . fmap
 
 -- | map haskell function across an input signal 
 -- (unsafe! could damage duration coupling.) 
-unsafeFullMapB :: (Maybe a -> Maybe b) -> B w (S p a) (S p b)
+unsafeFullMapB :: (Maybe a -> Maybe b) -> B (S p a) (S p b)
 unsafeFullMapB = mkLnkB tr_fwd . mkLnkPure . lnFullMap
     where lnFullMap = ln_lumap . ln_sumap . su_fmap . s_full_map
 
 -- | map a constant to a signal. 
-constB :: c -> B w (S p a) (S p c)
+constB :: c -> B (S p a) (S p c)
 constB c = mkLnkB tr_fwd constLnk
     where constLnk = mkLnkPure $ lnConst c
           lnConst  = ln_lumap . ln_sumap . su_fmap . (<$)
 
 -- | add stability to the signal (used by forceB).
-unsafeAddStabilityB :: DT -> B w (S p x) (S p x)
+unsafeAddStabilityB :: DT -> B (S p x) (S p x)
 unsafeAddStabilityB dt = 
     if (0 == dt) then fwdB else 
     mkLnkB id (mkLnkPure lnAddStability)
@@ -494,7 +494,7 @@ unsafeAddStabilityB dt =
 -- every step is touched. I.e. after an update in stability, all
 -- prior elements will be touched. If stability is infinite, then 
 -- nothing more is touched. 
-seqB :: DT -> B w (S p x) (S p x)
+seqB :: DT -> B (S p x) (S p x)
 seqB dt = 
     unsafeAddStabilityB dt >>> 
     mkLnkB id buildSeqB >>> 
@@ -551,7 +551,7 @@ forceSig tLower tUpper sig =
 -- | stratB currently evaluates based on stability, not sampling. It
 -- ensures that evaluation is initialized before the `Just y` signal
 -- value is observed. This should achieve a decent level of parallelism.
-stratB :: B w (S p (Eval x)) (S p x)
+stratB :: B (S p (Eval x)) (S p x)
 stratB = unsafeFullMapB unwrapStrat
 
 -- apply a 
@@ -562,7 +562,7 @@ unwrapStrat (Just x) = runEval (Just <$> x)
 -- | filter adjacent equal values from a signal (performance), with
 -- some scan-ahead to combine equal values. Useful after fmapB if 
 -- it results in far fewer values. 
-adjeqfB :: (Eq x) => B w (S p x) (S p x)
+adjeqfB :: (Eq x) => B (S p x) (S p x)
 adjeqfB = mkLnkB id $ mkLnkPure lnAdjeqf
     where lnAdjeqf = ln_lumap $ ln_sumap $ su_fmap $ s_adjeqf (==)
 
@@ -570,10 +570,10 @@ adjeqfB = mkLnkB id $ mkLnkPure lnAdjeqf
 -- | tshiftB achieves a declarative delay, via B_latent and B_mkLnk.
 -- The given function not only computes the delay, it applies the
 -- delay if there is a change in ldt_curr values.
-tshiftB :: TS x -> B w x x
+tshiftB :: TS x -> B x x
 tshiftB = latentOnTime . tshiftB' 
 
-tshiftB' :: TS x -> LnkD LDT x -> B w x x
+tshiftB' :: TS x -> LnkD LDT x -> B x x
 tshiftB' fn t0 = B_mkLnk fn lnk
     where tf  = fn t0
           lnk = mkLnkPure $ buildTshift t0 tf
@@ -602,7 +602,7 @@ buildTshift t0 tf (LnkSig lu) =
 
 
 -- | delay a signal (logically)
-delayB :: DT -> B w x x
+delayB :: DT -> B x x
 delayB = tshiftB . lnd_fmap . addDelay
     where addDelay dt ldt = ldt { ldt_goal = (dt + (ldt_goal ldt)) }
 
@@ -611,7 +611,7 @@ delayB = tshiftB . lnd_fmap . addDelay
 -- Actual synchronization happens at a tshiftB.
 -- note: ignores dead branches due to binl or binr.
 -- (This is more consistent with synch on merge and disjoin.)
-synchB :: B w x x
+synchB :: B x x
 synchB = tshiftB doSynch
     where doSynch x = 
             assert (ldt_valid x) $
@@ -624,14 +624,14 @@ synchB = tshiftB doSynch
 
 -- | force aggregated lazy delays to apply at this location.
 -- This ensures the signal values are consistent with the delays.
-forceDelayB :: B w x x
+forceDelayB :: B x x
 forceDelayB = tshiftB (lnd_fmap toGoal)
     where toGoal ldt = ldt { ldt_curr = (ldt_goal ldt) }
 
 
 -- | look ahead in a signal slightly. Reduces stability of signal,
 -- i.e. updates at time T can affect peek signal at time T-dt.
-peekB :: DT -> B w (S p x) (S p (Either x ()))
+peekB :: DT -> B (S p x) (S p (Either x ()))
 peekB = mkLnkB tr_fwd . mkLnPeek 
 
 -- | Each update to mkLnPeek will correct any prior view of the
@@ -671,7 +671,7 @@ lnPeek dt rf lu = LnkUp { ln_touch = onTouch, ln_update = onUpdate }
     
 
 -- | scopes are trivial variations on id
-unsafeChangeScopeB :: B w (S p1 x) (S p2 x)
+unsafeChangeScopeB :: B (S p1 x) (S p2 x)
 unsafeChangeScopeB = mkLnkB tr_fwd $ mkLnkPure lnkFwd
 
 lnkFwd :: Lnk (S p1 x) -> Lnk (S p2 x)
@@ -682,7 +682,7 @@ lnkFwd (LnkSig lu) = LnkSig lu
 -- would otherwise be redundant, with a given limit for how far into
 -- the future we should search for the first change. The given eq
 -- function might be a semi-decision on equality, in general.
-unsafeEqShiftB :: DT -> (a -> a -> Bool) -> B w (S p a) (S p a)
+unsafeEqShiftB :: DT -> (a -> a -> Bool) -> B (S p a) (S p a)
 unsafeEqShiftB dt eq = mkLnkB id (buildEqShift dt eq)
 
 buildEqShift :: DT -> (a -> a -> Bool) -> Lnk (S p a) -> IO (Lnk (S p a))
@@ -741,7 +741,7 @@ eqShift eq as bs tLower tUpper =
 -- should be specific to the partition. It is assumed that updates
 -- and the phase queue are handled in the same thread. It is created
 -- when the behavior is built, if necessary.
-phaseUpdateB :: IO PhaseQ -> B w (S p x) (S p x)
+phaseUpdateB :: IO PhaseQ -> B (S p x) (S p x)
 phaseUpdateB mkPQ = mkLnkB id lnPhase
     where lnPhase LnkDead = return LnkDead
           lnPhase (LnkSig lu) =
@@ -783,7 +783,7 @@ appendSigUp su0 su = SigUp { su_state = state', su_stable = stable' }
 
 -- | keepAliveB will keep the first element alive so long as other
 -- parts of the signal are alive. (used by unsafeOnUpdateBLN)
-keepAliveB :: B w (S p x :&: y) (S p x :&: y)
+keepAliveB :: B (S p x :&: y) (S p x :&: y)
 keepAliveB = mkLnkB id $ mkLnkPure lnkMatchLiveness
     where lnkMatchLiveness xy =
             if (ln_dead xy) then LnkDead else   
@@ -793,7 +793,7 @@ keepAliveB = mkLnkB id $ mkLnkPure lnkMatchLiveness
 
 -- | undeadB will keep a signal alive on output. Like undead in
 -- any horror film, undeadB will infect everything it consumes...
-undeadB :: B w (S p x) (S p x)
+undeadB :: B (S p x) (S p x)
 undeadB = mkLnkB id $ mkLnkPure (LnkSig . ln_lnkup)
 
 
@@ -813,7 +813,7 @@ undeadB = mkLnkB id $ mkLnkPure (LnkSig . ln_lnkup)
 -- This is `unsafe` because it does not respect duration coupling;
 -- indeed, you'll need to hack around it a bit to regain duration
 -- coupling, perform merges or masking, ensure thread safety.
-unsafeAutoSubscribeB :: OnSubscribe x -> B w (S p ()) x
+unsafeAutoSubscribeB :: OnSubscribe x -> B (S p ()) x
 unsafeAutoSubscribeB = mkLnkB tr_unit . buildSubscriber 
 
 type OnSubscribe x = Lnk x -> IO (UnSubscribe)

@@ -56,7 +56,6 @@ import Sirea.PCX
 import Sirea.BCX
 import Sirea.Time
 import Sirea.Signal
-import Sirea.Internal.BCross (phaseDelayB)
 
 -- | This is what an RDP application looks like in Sirea:
 --

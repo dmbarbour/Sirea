@@ -42,14 +42,14 @@ import Sirea.PCX
 -- any time (due to compilation of dynamic behaviors). IO must not
 -- be specific to any partition. (Partition-specific IO should wait 
 -- for a link update.)
-unsafeLinkB :: MkLnk w x y -> B w x y
+unsafeLinkB :: MkLnk x y -> B x y
 unsafeLinkB ln = bsynch >>> forceDelayB >>> B_mkLnk tr_unit ln
 
 
 -- | unsafeLinkBCX provides access to PCX, which models resources
 -- that may be shared between links. If otherwise you would need 
 -- global state, please use unsafeLinkBCX and put state in the PCX. 
-unsafeLinkBCX :: (PCX w -> MkLnk w x y) -> BCX w x y
+unsafeLinkBCX :: (PCX w -> MkLnk x y) -> BCX w x y
 unsafeLinkBCX = wrapBCX . (unsafeLinkB .)
 
 

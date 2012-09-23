@@ -45,7 +45,7 @@ type Work = IO ()
 --    allow updates on input to buffer and batch (bounded buffer)
 -- crossB is eliminated if typeOf p1 == typeOf p2
 --
-crossB :: (Partition p1, Partition p2) => PCX w -> B w (S p1 x) (S p2 x)
+crossB :: (Partition p1, Partition p2) => PCX w -> B (S p1 x) (S p2 x)
 crossB cw = fix $ \ b ->
     let (p1,p2) = getPartitions b in
     if (typeOf p1 == typeOf p2) 
@@ -53,13 +53,13 @@ crossB cw = fix $ \ b ->
       else sendB cw p1 p2 >>> phaseDelayB cw
 
 -- this is a total hack in haskell to access typesystem data
-getPartitions :: B w (S p1 x) (S p2 x) -> (p1,p2)
+getPartitions :: B (S p1 x) (S p2 x) -> (p1,p2)
 getPartitions _ = (undefined,undefined)
 
 -- jumpB is used if we're moving to the same partition we started in
 -- It simply ignores the partitions and forwards the signal. Jump is
 -- free after compilation. It would be unsafe to use this if p1 != p2.
-jumpB :: (Partition p1, Partition p2) => B w (S p1 x) (S p2 x)
+jumpB :: (Partition p1, Partition p2) => B (S p1 x) (S p2 x)
 jumpB = fix $ \ b ->
     let (p1,p2) = getPartitions b in
     assert(typeOf p1 == typeOf p2) $
@@ -75,7 +75,7 @@ fnJump (LnkSig lu) = (LnkSig lu)
 --   * batch multiple updates to one partition (across signals)
 --   * delay operation to runTCSend phase
 sendB :: (Partition p1, Partition p2) 
-      => PCX w -> p1 -> p2 -> B w (S p1 x) (S p2 x)
+      => PCX w -> p1 -> p2 -> B (S p1 x) (S p2 x)
 sendB cw p1 p2 = B_mkLnk tr_fwd lnkSend
     where lnkSend = mkSend cw p1 p2
 
@@ -96,7 +96,7 @@ mkSend cw p1 p2 (LnkSig lu) =
 -- later run, potentially eliminating redundant updates. Use of 
 -- phaseDelayB may also accumulate multiple updates, which is useful
 -- if phaseDelayB runs in the runStepper receive phase.
-phaseDelayB :: (Partition p) => PCX w -> B w (S p x) (S p x)
+phaseDelayB :: (Partition p) => PCX w -> B (S p x) (S p x)
 phaseDelayB cw = fix $ \ b -> 
     let (p,_) = getPartitions b in
     let cp = getPCX p cw in
@@ -116,7 +116,7 @@ phaseDelayB cw = fix $ \ b ->
 -- more useful in some cases to use `onNextStep` with phaseDelayB,
 -- e.g. to ensure updates are grouped.
 --
-stepDelayB :: (Partition p) => PCX w -> B w (S p x) (S p x)
+stepDelayB :: (Partition p) => PCX w -> B (S p x) (S p x)
 stepDelayB cw = fix $ \ b ->
     let (p,_) = getPartitions b in
     let cp = getPCX p cw in

@@ -83,14 +83,14 @@ class HasClock b where
     -- | Observe a logical clock of a given ClockSpec. 
     bclock :: ClockSpec -> b (S p ()) (S p T)
 
-instance HasClock (B w) where
+instance HasClock B where
     bclock = clockB
 
 instance HasClock (BCX w) where
     bclock = wrapBCX . const . clockB
 
 -- clockB will implement a clock via unsafe
-clockB :: ClockSpec -> B w (S p ()) (S p T)
+clockB :: ClockSpec -> B (S p ()) (S p T)
 clockB cs =
     assert (clockSpecValid cs) $ 
     unsafeLinkB clockLnk

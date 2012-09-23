@@ -115,12 +115,12 @@ bundefined = bconst () >>> bundefined_
 bundefinedk :: (BUndefined b, BFmap b, BProd b, SigInP p y) => b (S p x :&: x') y
 bundefinedk = bfst >>> bundefined
 
-instance BUndefined (B w) where bundefined_ = undefinedB
+instance BUndefined B where bundefined_ = undefinedB
 instance BUndefined (BCX w) where bundefined_ = (wrapBCX . const) undefinedB
 
 -- undefinedB is only live code if there is demand on `y`.
 -- This would be unsafe without `y` being entirely in p.
-undefinedB :: (SigInP p y) => B w (S p ()) y 
+undefinedB :: (SigInP p y) => B (S p ()) y 
 undefinedB = unsafeOnUpdateBL (return undefinedIO) >>> unsafeLinkB mkKeepAlive
     where mkKeepAlive = return . sendNothing
           undefinedIO _ Nothing = return () -- inactive signal is okay

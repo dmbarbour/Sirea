@@ -24,37 +24,18 @@ import Control.Applicative
 import Data.Monoid
 import Data.IORef
 
--- | MkLnk - constructors and metadata for including a new behavior
--- primitive in Sirea. 
+-- | MkLnk - construct a link in the IO monad, accepting destination 
+-- capability and generating the source capability. IO is for caches
+-- and any per-link resource management, but must avoid observable 
+-- side-effects. (Any observable consequence must be from USING the
+-- link with an active signal, not from building it.)
 --
--- The primary operation is ln_build, which constructs a link in the
--- IO monad, accepting the response capability and generating the
--- demand capability. IO is for constructing intermediate caches and
--- any preparatory hooks to external resources, but should not have
--- observable side-effects (i.e. wait for the signal to activate).
+-- Dead-sink optimizations are supported as part of the construction
+-- process: the `LnkDead` constructor provides some information that
+-- the output is unused, which allows the MkLnk operation to control
+-- accordingly how much computation to perform. 
 --
--- Dead-code optimizations are handled as part of ln_build: if the
--- response target is LnkDead, one might return LnkDead for demand
--- capability. This isn't necessary, though - an effectful behavior
--- will accept a link even if it doesn't provide any meaningful
--- output.
---
--- A little extra metadata is supported for optimizations:
---
---   tsen - time sensitive: if true, prevents delay aggregation and
---     forces aggregated delay to apply prior to reaching link. 
---   peek - how much the link might peek into the future of signals. 
---     May influence various optimizations, eventually. 
---
--- Many MkLnk structures need a `PCX` argument to access resources
--- without using global state. In that case, developers should use:
---
---    PCX w () -> MkLnk w x y
---
--- This leverages phantom types to enforce that PCX values do not
--- cross between separate SireaApp instances. 
---
-type MkLnk w x y = Lnk y -> IO (Lnk x)
+type MkLnk x y = Lnk y -> IO (Lnk x)
 
 -- | A Lnk describes a complex product of LnkUp values, to 
 -- support all complex signal types - S, (:&:) and (:|:). 
