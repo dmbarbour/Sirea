@@ -56,6 +56,7 @@ import Sirea.PCX
 import Sirea.BCX
 import Sirea.Time
 import Sirea.Signal
+import Sirea.Internal.BCross (phaseDelayB)
 
 -- | This is what an RDP application looks like in Sirea:
 --
@@ -120,7 +121,8 @@ buildSireaApp app =
     let tc0 = findInPCX cp0 :: TC in
     writeIORef (tc_init tc0) True >> 
     -- compute behavior in the new context
-    let bcx = unwrapSireaApp app in
+    -- add a phase delay for consistency with bcross updates
+    let bcx = (wrapBCX phaseDelayB) >>> (unwrapSireaApp app) in
     let b   = unwrapBCX bcx cw in
     -- compile behavior, dropping response
     let dt0 = LnkDUnit ldt_zero in
@@ -315,8 +317,7 @@ instance Resource ExitR where
 -- is required.
 bStartTime :: BCX w (S P0 ()) (S P0 T)
 bStartTime = unsafeLinkBCX $ \ cw -> 
-    MkLnk { ln_tsen = False, ln_peek = 0
-          , ln_build = return . (ln_lumap (mklu cw)) }
+    return . (ln_lumap (mklu cw))
     where mklu cw lu =
             let cp0 = findInPCX cw :: PCX P0 in
             let rfST = rfStartTime $ findInPCX cp0 in

@@ -14,7 +14,7 @@ module Sirea.Internal.BImpl
     , s1iB, s1eB, trivialB, firstB, swapB, assoclpB, dupB, zapB -- BProd 
     , s0iB, s0eB, vacuousB, leftB, mirrorB, assoclsB, mergeB, splitB -- BSum
     , disjoinB
-    , fmapB, constB, touchB, stratB, adjeqfB -- BFmap
+    , fmapB, constB, seqB, stratB, adjeqfB -- BFmap
     , tshiftB, tshiftB', delayB, synchB, forceDelayB, peekB -- temporal
 
     -- miscellaneous
@@ -60,13 +60,7 @@ leftB :: B w x x' -> B w (x :|: y) (x' :|: y)
 leftB = B_left
 
 mkLnkPure :: (Lnk y -> Lnk x) -> MkLnk w x y
-mkLnkPure = mkLnkSimp . (return .)
-
-mkLnkSimp :: (Lnk y -> IO (Lnk x)) -> MkLnk w x y
-mkLnkSimp build = MkLnk { ln_tsen = False 
-                        , ln_peek = 0
-                        , ln_build = build
-                        }
+mkLnkPure = (return .)
 
 mkLnkB :: TR x y -> MkLnk w x y -> B w x y
 mkLnkB = B_mkLnk
@@ -228,7 +222,7 @@ shallowSynch lhs rhs =
         }
 
 mergeSigsB :: LnkD LDT (x :|: x) -> B w (x :|: x) x
-mergeSigsB tr = mkLnkB trMerge (mkLnkSimp $ buildMerge tr) 
+mergeSigsB tr = mkLnkB trMerge (buildMerge tr) 
     where trMerge xx = lnd_zip ldtMerge (lnd_left xx) (lnd_right xx)
           ldtMerge lhs rhs =
             let inl = not (ldt_live lhs) in
@@ -312,7 +306,7 @@ fullSynch = synchCurr . synchGoal
 disjSigsB :: LnkD LDT (x :&: ((S p () :&: y) :|: z))
           -> B w (x :&: ((S p () :&: y) :|: z))
                         ((x :&: y) :|: (x :&: z))
-disjSigsB tr = mkLnkB disjTr (mkLnkSimp $ buildDisj tr)
+disjSigsB tr = mkLnkB disjTr (buildDisj tr)
     where disjTr xuyz = 
             -- restructure data; maintain liveness of x,y. 
             assert (ldt_valid xuyz) $
@@ -426,7 +420,7 @@ zapB = synchB >>> unsafeSigZipB (<*>)
 -- invariants unless synchronization constraints are enforced and 
 -- the signal function is carefully constrained.
 unsafeSigZipB :: (Sig a -> Sig b -> Sig c) -> B w (S p a :&: S p b) (S p c)
-unsafeSigZipB = mkLnkB tr_unit . mkLnkSimp . buildZip
+unsafeSigZipB = mkLnkB tr_unit . buildZip
 
 -- intermediate state is needed to perform zip, zap, etc.
 -- since updates on fst and snd might occur at different times.
@@ -500,25 +494,25 @@ unsafeAddStabilityB dt =
 -- every step is touched. I.e. after an update in stability, all
 -- prior elements will be touched. If stability is infinite, then 
 -- nothing more is touched. 
-touchB :: DT -> B w (S p x) (S p x)
-touchB dt = 
+seqB :: DT -> B w (S p x) (S p x)
+seqB dt = 
     unsafeAddStabilityB dt >>> 
-    mkLnkB id (mkLnkSimp buildTouchB) >>> 
+    mkLnkB id buildSeqB >>> 
     unsafeAddStabilityB (negate dt)
 
 -- touch up to stability
-buildTouchB :: Lnk (S p x) -> IO (Lnk (S p x))
-buildTouchB LnkDead = return LnkDead
-buildTouchB (LnkSig lu) = 
+buildSeqB :: Lnk (S p x) -> IO (Lnk (S p x))
+buildSeqB LnkDead = return LnkDead
+buildSeqB (LnkSig lu) = 
     newIORef (s_never, Nothing) >>= \ rf ->
-    let lu' = buildTouchB' rf lu in
+    let lu' = buildSeqB' rf lu in
     return (LnkSig lu')
 
 -- touch signal up to stability. 
 -- stability may have been adjusted a bit just for this op, so it
 -- does not make stability assumptions (and doesn't use SigSt). 
-buildTouchB' :: IORef (Sig x, Maybe T) -> LnkUp x -> LnkUp x
-buildTouchB' rf lu = 
+buildSeqB' :: IORef (Sig x, Maybe T) -> LnkUp x -> LnkUp x
+buildSeqB' rf lu = 
     LnkUp { ln_touch = (ln_touch lu), ln_update = onUpdate }
     where onUpdate su = 
             -- update state and cleanup
@@ -582,8 +576,7 @@ tshiftB = latentOnTime . tshiftB'
 tshiftB' :: TS x -> LnkD LDT x -> B w x x
 tshiftB' fn t0 = B_mkLnk fn lnk
     where tf  = fn t0
-          lnk = MkLnk { ln_build = return . buildTshift t0 tf
-                      , ln_tsen = False, ln_peek = 0 }
+          lnk = mkLnkPure $ buildTshift t0 tf
 
 -- buildTshift will apply delays based on before/after LDT values
 --  asserts latency is non-decreasing
@@ -639,11 +632,8 @@ forceDelayB = tshiftB (lnd_fmap toGoal)
 -- | look ahead in a signal slightly. Reduces stability of signal,
 -- i.e. updates at time T can affect peek signal at time T-dt.
 peekB :: DT -> B w (S p x) (S p (Either x ()))
-peekB dt = mkLnkB tr_fwd peekLnk
-    where peekLnk = MkLnk { ln_tsen  = False
-                          , ln_peek  = dt -- to track anticipation.
-                          , ln_build = mkLnPeek dt
-                          }
+peekB = mkLnkB tr_fwd . mkLnPeek 
+
 -- | Each update to mkLnPeek will correct any prior view of the
 -- future from a given update time. Peek reduces stability of the 
 -- signal by dt. 
@@ -693,7 +683,7 @@ lnkFwd (LnkSig lu) = LnkSig lu
 -- the future we should search for the first change. The given eq
 -- function might be a semi-decision on equality, in general.
 unsafeEqShiftB :: DT -> (a -> a -> Bool) -> B w (S p a) (S p a)
-unsafeEqShiftB dt eq = mkLnkB id (mkLnkSimp (buildEqShift dt eq))
+unsafeEqShiftB dt eq = mkLnkB id (buildEqShift dt eq)
 
 buildEqShift :: DT -> (a -> a -> Bool) -> Lnk (S p a) -> IO (Lnk (S p a))
 buildEqShift _ _ LnkDead = return LnkDead
@@ -752,7 +742,7 @@ eqShift eq as bs tLower tUpper =
 -- and the phase queue are handled in the same thread. It is created
 -- when the behavior is built, if necessary.
 phaseUpdateB :: IO PhaseQ -> B w (S p x) (S p x)
-phaseUpdateB mkPQ = mkLnkB id $ mkLnkSimp lnPhase
+phaseUpdateB mkPQ = mkLnkB id lnPhase
     where lnPhase LnkDead = return LnkDead
           lnPhase (LnkSig lu) =
             mkPQ >>= \ pq ->
@@ -824,7 +814,7 @@ undeadB = mkLnkB id $ mkLnkPure (LnkSig . ln_lnkup)
 -- indeed, you'll need to hack around it a bit to regain duration
 -- coupling, perform merges or masking, ensure thread safety.
 unsafeAutoSubscribeB :: OnSubscribe x -> B w (S p ()) x
-unsafeAutoSubscribeB = mkLnkB tr_unit . mkLnkSimp . buildSubscriber 
+unsafeAutoSubscribeB = mkLnkB tr_unit . buildSubscriber 
 
 type OnSubscribe x = Lnk x -> IO (UnSubscribe)
 type UnSubscribe = IO ()

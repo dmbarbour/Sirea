@@ -94,10 +94,7 @@ clockB :: ClockSpec -> B w (S p ()) (S p T)
 clockB cs =
     assert (clockSpecValid cs) $ 
     unsafeLinkB clockLnk
-    where clockLnk = MkLnk { ln_build = return . buildFn
-                           , ln_tsen = True
-                           , ln_peek = 0
-                           }
+    where clockLnk = return . buildFn
           buildFn LnkDead = LnkDead
           buildFn (LnkSig lu) = LnkSig (clockFn cs lu)
 

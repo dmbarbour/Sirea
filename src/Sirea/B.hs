@@ -32,7 +32,7 @@ instance Typeable2 (B w) where
 ---------------------------
 -- TUNING
 --   dtEqf: default lookahead for constB, adjeqfB.
---   dtTouch: compute ahead of stability for btouch.
+--   dtSeq: compute ahead of stability for bseq.
 --
 -- Eventually I'd like to make these values adaptive, i.e. depending
 -- on actual lookahead stability at runtime. The TCP-like algorithms
@@ -41,9 +41,9 @@ instance Typeable2 (B w) where
 -- For badjeqf/bconst, it may also be valuable to choke updates if
 -- they do not appear to have changed. I.e. switch to heartbeat
 -- updates if there is no observed change.
-dtEqf, dtTouch :: DT
+dtEqf, dtSeq :: DT
 dtEqf   = 6.0 -- seconds ahead of stability to find difference
-dtTouch = 0.3 -- seconds ahead of stability to force evaluation
+dtSeq   = 0.3 -- seconds ahead of stability to force evaluation
 
 eqfB :: (x -> x -> Bool) -> B w (S p x) (S p x)
 eqfB = unsafeEqShiftB dtEqf
@@ -52,7 +52,7 @@ instance BFmap (B w) where
     bfmap    = fmapB
     bconst c = constB c >>> eqfB ((const . const) True)
     bstrat   = stratB 
-    btouch   = touchB dtTouch
+    bseq     = seqB dtSeq
     badjeqf  = adjeqfB >>> eqfB (==)
 instance BProd (B w) where
     bfirst   = firstB
@@ -84,7 +84,7 @@ instance BPeek (B w) where
 instance Behavior (B w)
 
 instance BDynamic (B w) (B w) where
-    bevalb' dt = evalB dt >>> bright bfst
+    beval dt = evalB dt >>> bright bfst
 
 
 -- TODO: Consider a behavior that slows the heartbeat.

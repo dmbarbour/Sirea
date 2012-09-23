@@ -1,10 +1,10 @@
 
 -- Seems GHC Base is getting rid of Data.HashTable at 7.6.
--- But, with how cabal is, I'd rather avoid another package dependency.
+-- With how cabal is, I'd rather avoid a package dependency.
 -- So, here is my own simplified definition of HashTable.
 --
 -- Since Sirea only needs int-keyed hashtables (since it provides its
--- own keys) this is specialized on Int32.
+-- own keys) this is specialized on Int.
 module Sirea.Internal.HashTable 
     ( HashTable
     , new
@@ -13,9 +13,5 @@ module Sirea.Internal.HashTable
     , toList
     ) where
 
-data HashTable e = HT
-    { ht_count :: IORef Int
-    , 
-    }
 
 

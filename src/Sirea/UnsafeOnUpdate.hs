@@ -76,11 +76,8 @@ unsafeOnUpdateB mkOp = unsafeOnUpdateBL mkOp >>> undeadB
 -- Only suitable for signals you'll need for other reasons.
 --
 unsafeOnUpdateBL :: (Eq a) => IO (T -> Maybe a -> IO ()) -> B w (S p a) (S p a)
-unsafeOnUpdateBL mkOp = unsafeLinkB blLnk
-    where blLnk = MkLnk { ln_build = build
-                        , ln_tsen = True
-                        , ln_peek = 0     }
-          build LnkDead = return LnkDead
+unsafeOnUpdateBL mkOp = unsafeLinkB build
+    where build LnkDead = return LnkDead
           build (LnkSig lu) = 
             mkOp >>= \ op ->
             newIORef (s_never,Nothing) >>= \ rfSig ->

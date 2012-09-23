@@ -64,9 +64,7 @@ jumpB = fix $ \ b ->
     let (p1,p2) = getPartitions b in
     assert(typeOf p1 == typeOf p2) $
     B_mkLnk tr_fwd lnkJump
-    where lnkJump = MkLnk { ln_build = return . fnJump
-                          , ln_tsen = False, ln_peek = 0 }
-          
+    where lnkJump = return . fnJump
 
 fnJump :: Lnk (S p x) -> Lnk (S p' x)
 fnJump LnkDead = LnkDead
@@ -79,8 +77,7 @@ fnJump (LnkSig lu) = (LnkSig lu)
 sendB :: (Partition p1, Partition p2) 
       => PCX w -> p1 -> p2 -> B w (S p1 x) (S p2 x)
 sendB cw p1 p2 = B_mkLnk tr_fwd lnkSend
-    where lnkSend = MkLnk { ln_build = mkSend cw p1 p2
-                          , ln_tsen = False, ln_peek = 0 }
+    where lnkSend = mkSend cw p1 p2
 
 mkSend :: (Partition p1, Partition p2) 
        => PCX w -> p1 -> p2 -> Lnk (S p2 x) -> IO (Lnk (S p1 x))
@@ -125,8 +122,8 @@ stepDelayB cw = fix $ \ b ->
     let cp = getPCX p cw in
     let tc = getTC cp in
     let doSend = addTCRecv tc in
-    B_mkLnk tr_fwd $ MkLnk { ln_build = return . fnStepDelay doSend
-                           , ln_tsen = False, ln_peek = 0 }
+    let mkLn = return . fnStepDelay doSend in
+    B_mkLnk tr_fwd mkLn
 
 fnStepDelay :: (IO () -> IO ()) -> Lnk (S p x) -> Lnk (S p x)
 fnStepDelay _ LnkDead = LnkDead

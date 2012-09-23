@@ -81,7 +81,7 @@ evalPrepB dt = B_latent $ \ tbx ->
 evalFinalB :: (SigMembr x) => DT -> B w (S p (B w x y) :&: x) y
 evalFinalB dt = B_latent $ \ tbx ->
     let tx = lnd_snd tbx in
-    B_mkLnk (trEval dt) (mkLnkEval tx)
+    B_mkLnk (trEval dt) (buildEval tx)
 
 -- trEval reports the delay incurred by the eval process
 -- i.e. so that operations using `y` are timed properly.
@@ -121,8 +121,7 @@ evalFitDelay dtf (b,t0) =
         else Left (b >>> delayToFit) 
     where tfn = trDTF dtf
           delayToFit = B_mkLnk tfn lnkDTF
-          lnkDTF = MkLnk { ln_build = return . buildTshift t0 (tfn t0)
-                         , ln_tsen = False, ln_peek = 0 }
+          lnkDTF = return . buildTshift t0 (tfn t0)
 
 -- "delay to fit" a particular time
 trDTF :: DT -> LnkD LDT x -> LnkD LDT y
@@ -142,10 +141,6 @@ evalSynched ldt =
     (ldt_maxGoal ldt == ldt_minGoal ldt) &&
     (ldt_maxCurr ldt == ldt_minCurr ldt) &&
     (ldt_maxGoal ldt == ldt_minCurr ldt)
-
-mkLnkEval :: (SigMembr x) => LnkD LDT x -> MkLnk w (S p (B w x y) :&: x) y
-mkLnkEval dtx = MkLnk { ln_build = buildEval dtx
-                      , ln_tsen = True, ln_peek = 0 }
 
 -- buildEval prepares the evaluator to receive and process inputs.
 buildEval :: (SigMembr x) => LnkD LDT x -> Lnk y -> IO (Lnk (S p (B w x y) :&: x))

@@ -11,7 +11,7 @@ module Sirea.Link
     ( unsafeLinkB
     , unsafeLinkBCX
     -- the following are re-exported from LTypes
-    , MkLnk(..), LnkUp(..), Lnk, LnkW(..), SigUp(..)
+    , MkLnk, Lnk, LnkW(..), SigUp(..), LnkUp(..)
     , ln_zero, ln_lnkup, ln_fst, ln_snd, ln_left, ln_right, ln_dead
     , ln_sumap, ln_lumap
     , su_fmap, su_apply
@@ -19,13 +19,11 @@ module Sirea.Link
 
 import Sirea.Internal.LTypes -- includes MkLnk, etc.
 import Sirea.Internal.BTypes
-import Sirea.Internal.BImpl (tshiftB)
+import Sirea.Internal.BImpl (forceDelayB)
 import Sirea.Behavior
 import Sirea.B()
 import Sirea.BCX
 import Sirea.PCX
-
-import Control.Exception (assert)
 
 -- | unsafeLinkB can represent new primitive behaviors. Often, it is
 -- unnecessary; even for FFI and legacy adapters, support for a few
@@ -38,22 +36,14 @@ import Control.Exception (assert)
 -- Construction of links should have no observable side effects. Any
 -- observable effect should wait for active signal. At construction,
 -- IO is used to create local state for caches or connections with
--- external resources. (The resources should be accessed via PCX.)
+-- external resources. (Proxy resources should be accessed via PCX.)
 --
 -- Note: unsafeLinkB might be called from any thread, potentially at
 -- any time (due to compilation of dynamic behaviors). IO must not
 -- be specific to any partition. (Partition-specific IO should wait 
 -- for a link update.)
 unsafeLinkB :: MkLnk w x y -> B w x y
-unsafeLinkB ln = bsynch >>> tshiftB xBarrier >>> B_mkLnk tr_unit ln
-    where xBarrier dts =
-            assert (ldt_valid dts) $
-            assert (ldt_minGoal dts == ldt_maxGoal dts) $ 
-            let bNeedBarrier = ldt_minCurr dts /= ldt_maxCurr dts in
-            if ln_tsen ln || bNeedBarrier
-                then flip lnd_fmap dts $ \ x -> x { ldt_curr = (ldt_goal x) }
-                else dts -- no change; all or nothing (for now)
-    -- xBarrier actually applies the updates (sets ldt_curr) if necessary.
+unsafeLinkB ln = bsynch >>> forceDelayB >>> B_mkLnk tr_unit ln
 
 
 -- | unsafeLinkBCX provides access to PCX, which models resources

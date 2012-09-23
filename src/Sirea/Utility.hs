@@ -122,8 +122,7 @@ instance BUndefined (BCX w) where bundefined_ = (wrapBCX . const) undefinedB
 -- This would be unsafe without `y` being entirely in p.
 undefinedB :: (SigInP p y) => B w (S p ()) y 
 undefinedB = unsafeOnUpdateBL (return undefinedIO) >>> unsafeLinkB mkKeepAlive
-    where mkKeepAlive = MkLnk { ln_build = return . sendNothing
-                              , ln_tsen = False, ln_peek = 0 }
+    where mkKeepAlive = return . sendNothing
           undefinedIO _ Nothing = return () -- inactive signal is okay
           undefinedIO _ (Just _) = undefined {- Haskell's undefined IO op -}
 

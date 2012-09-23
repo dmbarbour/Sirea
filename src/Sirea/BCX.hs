@@ -79,11 +79,11 @@ instance BCross (BCX w) where
     bcross = wrapBCX crossB
 
 instance BDynamic (BCX w) (B w) where
-    bevalb' = wrapBCX . const . bevalb'
+    beval = wrapBCX . const . beval
 
 instance BDynamic (BCX w) (BCX w) where
-    bevalb' dt = wrapBCX $ \ cw -> 
-        bfirst (bfmap (`unwrapBCX` cw)) >>> bevalb' dt
+    beval dt = wrapBCX $ \ cw -> 
+        bfirst (bfmap (`unwrapBCX` cw)) >>> beval dt
 
 -- | onNextStepBCX will delay processing until the next runStepper
 -- event, and processes updates as though from a remote partition.

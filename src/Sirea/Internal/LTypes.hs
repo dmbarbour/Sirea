@@ -3,7 +3,7 @@
 -- Types for FRP.Sirea.Link (here to avoid cyclic dependencies)
 -- plus related utilities
 module Sirea.Internal.LTypes 
-    ( MkLnk(..), Lnk, LnkW(..), LnkUp(..)
+    ( MkLnk, Lnk, LnkW(..), LnkUp(..)
     , ln_left, ln_right, ln_fst, ln_snd, ln_dead
     , ln_zero, ln_lnkup, ln_append, ln_lumap, ln_sumap
     , SigUp(..), su_signal, su_time, su_fmap, su_delay, su_apply
@@ -54,11 +54,7 @@ import Data.IORef
 -- This leverages phantom types to enforce that PCX values do not
 -- cross between separate SireaApp instances. 
 --
-data MkLnk w x y = MkLnk 
-    { ln_build  :: !(Lnk y -> IO (Lnk x))
-    , ln_tsen   :: !Bool 
-    , ln_peek   :: !DT
-    }
+type MkLnk w x y = Lnk y -> IO (Lnk x)
 
 -- | A Lnk describes a complex product of LnkUp values, to 
 -- support all complex signal types - S, (:&:) and (:|:). 

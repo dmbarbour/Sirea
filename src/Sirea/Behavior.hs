@@ -16,16 +16,17 @@ module Sirea.Behavior
     , (>>>) -- from Control.Category
     , bfwd
     , BFmap(..), bforce, bspark, bstratf
-    , BProd(..), bfst, bsecond, bsnd, bassocrp, (***), (&&&), bvoid, (|*|)
-    , BSum(..), binl, bright, binr, bassocrs, (+++), (|||), bskip 
-    , bconjoinl, bconjoinr
-    , BDisjoin(..), bdisjoinly, bdisjoinlz, bdisjoinlyy, bdisjoinlzz
-    ,               bdisjoinry, bdisjoinrz, bdisjoinryy, bdisjoinrzz
+    , BProd(..), bfst, bsecond, bsnd, bassocrp, (***), (&&&)
+    , bvoid, (|*|)
+    , BSum(..), binl, bright, binr, bassocrs, (+++), (|||)
+    , bconjoin
+    , BDisjoin(..)
     , bIfThenElse, bUnless, bWhen -- utility
     , BZip(..), bzip, bzipWith, bunzip
     , BSplit(..), bsplitWith, bsplitOn, bunsplit, bsplitMaybe
     , BTemporal(..), BPeek(..)
-    , BDynamic(..), beval, bexec, bexecb', bevalOrElse, bevalb'OrElse
+    , BDynamic(..), bexec, bevalOrElse
+    , bevalb, bexecb, bevalbOrElse
     , Behavior
     ) where
 
@@ -95,15 +96,15 @@ class (Category b) => BFmap b where
     bstrat :: b (S p (Eval x)) (S p x)
     bstrat = bfmap runEval
 
-    -- | btouch annotates that a signal should be computed as it 
+    -- | bseq annotates that a signal should be computed as it 
     -- updates, generally based on stability of the signal's value
     -- (see FRP.Sirea.Link for more about stability). The signal is
     -- computed up to `Just x | Nothing`; x is not observed. 
     --
     -- This is meant for use in tandem with bstrat to lift desired
     -- computations to occur prior observing the `Just` constructor.
-    btouch :: b (S p x) (S p x)
-    btouch = bfwd
+    bseq :: b (S p x) (S p x)
+    bseq = bfwd
 
     -- | Types that can be tested for equality can be filtered to
     -- eliminate redundant updates. Redundant updates are common if
@@ -132,7 +133,7 @@ class (Category b) => BFmap b where
 -- making more efficient use of partition threads, can help control
 -- memory overheads, and can achieve more predictable performance.
 bforce :: (BFmap b) => (x -> ()) -> b (S p x) (S p x)
-bforce f = bfmap seqf >>> bstrat >>> btouch
+bforce f = bfmap seqf >>> bstrat >>> bseq
     where seqf x = (f x) `pseq` return x
 
 -- | `bspark` is the similar to `bforce` except that it sparks each
@@ -153,7 +154,7 @@ bforce f = bfmap seqf >>> bstrat >>> btouch
 -- directly use bstrat or bstratf, and btouch.
 --
 bspark :: (BFmap b) => (x -> ()) -> b (S p x) (S p x)
-bspark f = bfmap sparkf >>> bstrat >>> btouch
+bspark f = bfmap sparkf >>> bstrat >>> bseq
     where sparkf x = 
             let d = f x in 
             d `par` return (d `pseq` x)
@@ -204,7 +205,7 @@ bstratf runF = bfmap (runF . fmap return) >>> bstrat
 --
 -- Various Laws or Properties:
 --
--- Distribute First: bfirst f >>> bfirst g = bfirst (f >>> g)
+-- Factor First: bfirst f >>> bfirst g = bfirst (f >>> g)
 -- Spatial Idempotence: bdup >>> (f *** f) = f >>> bdup
 --     Lemma: bvoid f >>> bvoid f = bvoid f
 --     Lemma: f |*| f = f
@@ -298,7 +299,7 @@ bvoid f = bdup >>> bfirst f >>> bsnd
 -- 
 -- Various Laws or Properties: 
 --
--- Distribute Left: bleft f >>> bleft g = bleft (f >>> g)
+-- Factor Left: bleft f >>> bleft g = bleft (f >>> g)
 -- Decision Commutativity: bleft f >>> bright g = bright g >>> bleft f
 --     Lemma: (f +++ g) >>> (f' +++ g') = (f >>> f') +++ (g >>> g')
 -- Decision Idempotence (*): bsynch >>> (f +++ f) >>> bmerge
@@ -330,7 +331,7 @@ bassocrs :: (BSum b) => b ((x :|: y) :|: z) (x :|: (y :|: z))
 (+++)    :: (BSum b) => b x x' -> b y y' -> b (x :|: y) (x' :|: y')
 (|||)    :: (BSum b) => b x z  -> b y z  -> b (x :|: y) z
 bmirror3 :: (BSum b) => b ((x :|: y) :|: z) (z :|: (y :|: x))
-bskip    :: (BSum b) => b y x -> b x x
+-- bskip    :: (BSum b) => b y x -> b x x
 
 binr = b0i >>> bleft bvacuous
 binl = binr >>> bmirror
@@ -339,19 +340,17 @@ bassocrs = bmirror3 >>> bassocls >>> bmirror3
 (+++) f g = bleft f >>> bright g
 (|||) f g = (f +++ g) >>> bmerge
 bmirror3 = bleft bmirror >>> bmirror
-bskip f = binr >>> bleft f >>> bmerge
+-- bskip f = binr >>> bleft f >>> bmerge
 
 -- staticSwitch :: (BSum b) => Bool -> b x (x :|: x)
 -- staticSwitch choice = if choice then binl else binr
 
 -- | bconjoin (aka "factor") is a partial merge, factoring a common 
 -- element from a sum. (The name refers to conjunctive form.)
-bconjoinl :: (BSum b, BProd b) => b ((x :&: y) :|: (x :&: z)) (x :&: (y :|: z))
-bconjoinr :: (BSum b, BProd b) => b ((x :&: z) :|: (y :&: z)) ((x :|: y) :&: z)
-bconjoinl = bdup >>> (isolateX *** isolateYZ)
-    where isolateX = (bfst +++ bfst) >>> bmerge
-          isolateYZ = (bsnd +++ bsnd)
-bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
+bconjoin :: (BSum b, BProd b) => b ((x :&: y) :|: (x :&: z)) (x :&: (y :|: z))
+bconjoin = getX &&& getYZ
+    where getX = (bfst +++ bfst) >>> bmerge
+          getYZ = (bsnd +++ bsnd)
 
 -- | Disjoin (aka "distribute") will apply a split across elements
 -- that are outside of that split. This doesn't happen magically; a
@@ -398,6 +397,9 @@ bconjoinr = (bswap +++ bswap) >>> bconjoinl >>> bswap
 class (BSum b, BProd b) => BDisjoin b where
     bdisjoin :: (SigInP p x) => b (x :&: ((S p () :&: y) :|: z)) ((x :&: y) :|: (x :&: z))
 
+{- I can't imagine actually using any of these; `bdisjoin` is such a big act that 
+   I tend to treat it carefully each time I need it.
+
 bdisjoinly  :: (BDisjoin b, BFmap b, SigInP p x) => b (x :&: (S p y :|: z))  ((x :&: S p y) :|: (x :&: z))
 bdisjoinlyy :: (BDisjoin b, BFmap b, SigInP p x) => b (x :&: ((S p y :&: y') :|: z)) ((x :&: (S p y :&: y')) :|: (x :&: z))
 bdisjoinlz  :: (BDisjoin b, BFmap b, SigInP p x) => b (x :&: (y :|: S p z)) ((x :&: y) :|: (x :&: S p z))
@@ -419,6 +421,8 @@ bdisjoinry   = bswap >>> bdisjoinly  >>> (bswap +++ bswap)
 bdisjoinryy  = bswap >>> bdisjoinlyy >>> (bswap +++ bswap)
 bdisjoinrz   = bswap >>> bdisjoinlz  >>> (bswap +++ bswap)
 bdisjoinrzz  = bswap >>> bdisjoinlzz >>> (bswap +++ bswap)
+
+-}
 
 -- | bIfThenElse expresses a common pattern seen in many functional
 -- languages, but in the context of RDP's reactive model. It will
@@ -626,33 +630,21 @@ class (Behavior b, Behavior b') => BDynamic b b' where
     -- too large for DT, the error path is selected. (If I could 
     -- statically enforce valid beval, I'd favor that option.)
     -- 
-    bevalb' :: (SigInP p x) => DT -> b (S p (b' x y) :&: x) (y :|: S p ())
-
--- | beval is same as bevalb', except that it constrains the inner
--- behavior type to be the same as the outer behavior type. This 
--- is useful to avoid an explicit type signature, e.g. for `B w` or
--- `BCX w`, because the `w` type cannot be inferred.
-beval :: (BDynamic b b, SigInP p x) => DT -> b (S p (b x y) :&: x) (y :|: S p ())
-beval = bevalb'
+    beval :: (SigInP p x) => DT -> b (S p (b' x y) :&: x) (y :|: S p ())
 
 -- | evaluate, but drop the result. This is a common pattern with an
 -- advantage of not needing a DT estimate. The response is reduction 
 -- from the signal carrying b'.
-bexecb' :: (BDynamic b b', SigInP p x) => b (S p (b' x y_) :&: x) (S p ())
-bexecb' = (exec &&& ignore) >>> bsnd
-    where exec = bsynch >>> bprep >>> bevalb' 0
+bexec :: (BDynamic b b', SigInP p x) => b (S p (b' x y_) :&: x) (S p ())
+bexec = (exec &&& ignore) >>> bsnd
+    where exec = bsynch >>> bprep >>> beval 0
           ignore = bfst >>> bconst ()
           bprep = bfirst (bfmap modb &&& bconst ()) >>> bassocrp 
           modb b' = bsecond b' >>> bfst
 
--- | bexec constrains both behavior types to be the same. Evaluates
--- the dynamic behavior but drops the response.
-bexec :: (BDynamic b b, SigInP p x) => b (S p (b x y_) :&: x) (S p ())
-bexec = bexecb'
-
 -- | provides the `x` signal again for use with a fallback behavior.
-bevalb'OrElse :: (SigInP p x, BDynamic b b') => DT -> b (S p (b' x y) :&: x) (y :|: (S p () :&: x))
-bevalb'OrElse dt = bsynch >>> bsecond bdup >>> bassoclp >>> bfirst (bevalb' dt)
+bevalOrElse :: (SigInP p x, BDynamic b b') => DT -> b (S p (b' x y) :&: x) (y :|: (S p () :&: x))
+bevalOrElse dt = bsynch >>> bsecond bdup >>> bassoclp >>> bfirst (beval dt)
              -- now have (y :|: S p ()) :&: x 
              >>> bfirst (bmirror >>> bleft bdup) >>> bswap 
              -- now have x :&: ((S p () :&: S p ()) :|: y)
@@ -661,8 +653,18 @@ bevalb'OrElse dt = bsynch >>> bsecond bdup >>> bassoclp >>> bfirst (bevalb' dt)
              >>> bleft bswap >>> bmirror >>> bleft bsnd
              -- now have (y :|: (S p () :&: x))
 
-bevalOrElse :: (SigInP p x, BDynamic b b) => DT -> b (S p (b x y) :&: x) (y :|: (S p () :&: x))
-bevalOrElse = bevalb'OrElse
+-- | bevalb, bexecb, bevalbOrElse simply constrain the BDynamic type
+-- a little. These are useful because Haskell type inference has...
+-- issues with inferring the `w` world type for evaluating B and BCX.
+bevalb :: (BDynamic b b, SigInP p x) => DT -> b (S p (b x y) :&: x) (y :|: S p ())
+bexecb :: (BDynamic b b, SigInP p x) => b (S p (b x y_) :&: x) (S p ())
+bevalbOrElse :: (BDynamic b b, SigInP p x) => DT -> b (S p (b x y) :&: x) (y :|: (S p () :&: x))
+bevalb = beval
+bexecb = bexec
+bevalbOrElse = bevalOrElse
+
+
+
 
 -- WISHLIST: a behavior-level map operation.
 --

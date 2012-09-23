@@ -77,7 +77,7 @@ compileBC1 (B_left bef) lnz =
 compileBC1 (B_latent _) _ =
     error "B_latent must be handled by compileBC0!"
 compileBC1 (B_mkLnk _ mkLnk) lnz =
-    ln_build mkLnk lnz
+    mkLnk lnz
 
 -- | deadOnInputB simply returns LnkDead. Assumption: already have
 -- proven the input is dead. Injected by compileBC0 when B_left is
@@ -85,8 +85,7 @@ compileBC1 (B_mkLnk _ mkLnk) lnz =
 -- resources (such as partition threads).
 deadOnInputB :: B w x y
 deadOnInputB = B_mkLnk tr_dead lnkDead
-    where lnkDead = MkLnk { ln_build = const (return LnkDead)
-                          , ln_tsen = False, ln_peek = 0 } 
+    where lnkDead = const (return LnkDead)
 
 
 

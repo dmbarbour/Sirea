@@ -20,13 +20,12 @@
 --
 -- The primary reason to use an AgentResource is to support resource
 -- adapters. It is often convenient to define a resource's behavior,
--- or at least big chunks of it, in terms of an RDP behavior outside
--- the main application. This is especially true when resources have
--- dependencies or relationships to other resources. 
+-- or at least big chunks of it, in terms of an RDP behavior. Agents
+-- can support this division of labor without redundant effort.
 --
 -- To communicate more than demand for the agent's services requires
 -- indirect methods - shared state, demand monitor, or blackboard
--- metaphor. 
+-- metaphor.
 --
 module Sirea.AgentResource
     ( invokeAgent
@@ -51,18 +50,21 @@ class (Typeable p, Typeable duty) => AgentBehavior p duty where
 -- This will ensure only one copy of the agent behavior is active,
 -- even if invoked from multiple locations in the Sirea application.
 -- The agent will remain active so long as there is at least one
--- demand for it. 
+-- demand for it. If there is no anticipated demand for the agent,
+-- it will be uninstalled and GC'd until next invocation.
 --
 -- Using `agentBehavior` directly would instead cause one copy of
 -- the behavior to be installed for each use. Due to idempotence,
--- the resulting system should have the same effects. However, it
--- would be more expensive if there are many subprograms using the
--- same behavior.
+-- the resulting system would have the same effects. However, it
+-- will be more expensive if there is more than one instance of the
+-- agent behavior installed and active. 
 invokeAgent :: (AgentBehavior p duty) => duty -> BCX w (S p ()) (S p ())
 invokeAgent = error "TODO! invokeAgent"
 
 
-
+-- TODO: Will need to consider this whole AgentResource concept again for plugins.
+--  (It might also need first-class treatment there, to avoid instantiating any
+--  agents that are not, at some point, necessary to the application.)
 
 -- 
 --   1. AgentResource essentially needs an activity monitor.

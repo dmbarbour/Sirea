@@ -37,7 +37,7 @@ instance (BFmap b, Applicative f) => BFmap (StaticB f b) where
     bfmap   = liftStatic . bfmap
     bconst  = liftStatic . bconst
     bstrat  = liftStatic bstrat
-    btouch  = liftStatic btouch
+    bseq    = liftStatic bseq
     badjeqf = liftStatic badjeqf
 instance (BProd b, Applicative f) => BProd (StaticB f b) where
     bfirst (SB f) = SB (bfirst <$> f)
@@ -67,6 +67,11 @@ instance (BTemporal b, Applicative f) => BTemporal (StaticB f b) where
 instance (BPeek b, Applicative f) => BPeek (StaticB f b) where
     bpeek   = liftStatic . bpeek
 instance (Behavior b, Applicative f) => Behavior (StaticB f b)
+
+-- Static cannot evaluate itself, in general, but may evaluate any
+-- dynamic behavior that the original behavior could evaluate.
+instance (BDynamic b b', Applicative f) => BDynamic (StaticB f b) b' where
+    beval   = liftStatic . beval
 
 -- from Sirea.Partition
 instance (BCross b, Applicative f) => BCross (StaticB f b) where

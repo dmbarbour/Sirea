@@ -32,7 +32,7 @@ instance (BFmap b, BProd b) => BFmap (ReaderB r b) where
     bfmap   = liftReader . bfmap
     bconst  = liftReader . bconst
     bstrat  = liftReader bstrat
-    btouch  = liftReader btouch
+    bseq    = liftReader bseq
     badjeqf = liftReader badjeqf
 instance (BProd b) => BProd (ReaderB r b) where
     -- bfirst :: (r :&: (x :&: y)) ~> (x' :&: y) 

@@ -16,7 +16,6 @@ module Sirea.Trans.Pure
 
 import Prelude hiding (id,(.))
 import Control.Category
-import Control.Applicative
 import Sirea.Behavior
 import Sirea.Partition
 
@@ -39,7 +38,7 @@ instance (BFmap b) => BFmap (PureB b) where
     bfmap   = liftPure . bfmap
     bconst  = liftPure . bconst
     bstrat  = liftPure bstrat
-    btouch  = liftPure btouch
+    bseq    = liftPure bseq
     badjeqf = liftPure badjeqf
 instance (BProd b) => BProd (PureB b) where
     bfirst (PB f) = PB (bfirst f)
@@ -70,10 +69,10 @@ instance (BPeek b) => BPeek (PureB b) where
     bpeek   = liftPure . bpeek
 instance (Behavior b) => Behavior (PureB b)
 
-instance (BDynamic b b) => BDynamic b (PureB b) where
-    bevalb' dt = bfirst (bfmap unwrapPure) >>> bevalb' dt
-instance (BDynamic b b) => BDynamic (PureB b) (PureB b) where
-    bevalb' = liftPure . bevalb'
+instance (BDynamic b b') => BDynamic b (PureB b') where
+    beval dt = bfirst (bfmap unwrapPure) >>> beval dt
+instance (BDynamic b b') => BDynamic (PureB b) (PureB b') where
+    beval = liftPure . beval
 
 -- from Sirea.Partition
 instance (BCross b) => BCross (PureB b) where
