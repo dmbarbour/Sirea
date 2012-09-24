@@ -1,25 +1,30 @@
 {-# LANGUAGE TypeOperators, GADTs #-}
 
 -- | UnsafeOnUpdate provides quick and dirty behaviors to integrate 
--- IO. Such behaviors can support easy debugging or prototyping of
--- resources. They in some cases will be sufficient for integration
--- of effects. There are cleaner ways to integrate effects with RDP
--- via blackboard metaphor, shared services.
+-- output effects. While the name says `unsafe` (and it is, for RDP
+-- invariants), this is far safer than using unsafeLinkB! Commands 
+-- are activated when the input signal stabilizes on a new value -
+-- a simple semantic that developers can easily grok and leverage.
 --
--- The onUpdate operations are unsafe because they are not generally
--- idempotent or commutative. They also are difficult to anticipate,
--- and only weakly tied to real-time. They are suitable for simple
--- logging tasks for debugging, e.g. console output.
+-- IO actions are not generally idempotent or commutative. Thus, the
+-- unsafeOnUpdate actions may be unsafe to duplicate or rearrange in
+-- manners that should be safe for RDP. These safety concerns can be
+-- mitigated with some simple disciplines:
 --
--- With discipline, developers can ensure unsafe IO is used in safe
--- ways, either make it idempotent and commutative or ensure unique
--- use within a behavior.
+--   * favor resources insensitive to concurrent update events
+--   * consider enforcing uniqueness of unsafeOnUpdate per resource
 --
--- On the input side, I am still designing a behavior - perhaps to
--- inject a signal into RDP from IO, which would then be masked by
--- the demand signal. For thread-safety, such a signal would first
--- go through an intermediate, dedicated partition. It should be
--- feasible to combine these updates into batches (using a monoid).
+-- The Sirea.AgentResource module would help for the latter option,
+-- while message-passing is often suitable for concurrent events.
+--
+-- A weakness of UnsafeOnUpdate is that it is totally unsuitable for
+-- input effects. Consequences of update events are not anticipated!
+-- Sirea is blind to any feedback, which can lead to higher costs.
+-- Developers should disfavor UnsafeOnUpdate if it causes any hidden
+-- feedback. This is for unidirectional communication only: output.
+--
+-- UnsafeOnUpdate is useful for logging, debugging, and integration
+-- with some imperative APIs. 
 --
 module Sirea.UnsafeOnUpdate 
     ( unsafeOnUpdateB, unsafeOnUpdateBCX
@@ -52,29 +57,17 @@ dtFinal :: DT
 dtFinal = 6.0 -- seconds
 
 -- | unsafeOnUpdateB - perform an IO action for every unique value
--- in a signal as it becomes stable, then forward the update (after
--- performing the IO). The IO action is executed when the value is
--- fully stable, i.e. so you won't receive two updates for the same
--- time. The motivation for unsafeOnUpdateB is easy support for 
--- debugging, unit tests, auditing, etc.
---
--- The outermost `IO` is called once, when the link is first built.
--- It allows setting up any volatile resources, as necessary. This
--- might be called from a different thread than `p`.
---
--- unsafeOnUpdateB qualifies as an effectful sink, i.e. it will keep
--- a behavior alive. This will interfere with dead code elimination,
--- and so may be unsuitable for debugging purposes.
+-- in a signal as it becomes stable, then forward the update. There
+-- is also a one-time IO action on initial construction.
 unsafeOnUpdateB :: (Eq a) => IO (T -> Maybe a -> IO ()) -> B (S p a) (S p a)
 unsafeOnUpdateB mkOp = unsafeOnUpdateBL mkOp >>> undeadB
 
 
 -- | unsafeOnUpdateBL - a very lazy variation of unsafeOnUpdateB.
 -- This variation allows dead-code elimination of the behavior when
--- the tapped signal is not used later in the pipeline.
---
--- Only suitable for signals you'll need for other reasons.
---
+-- the tapped signal is not used later in the pipeline. A motivation
+-- for this is logging a signal but only if it is active for another
+-- reason.
 unsafeOnUpdateBL :: (Eq a) => IO (T -> Maybe a -> IO ()) -> B (S p a) (S p a)
 unsafeOnUpdateBL mkOp = unsafeLinkB build
     where build LnkDead = return LnkDead
@@ -125,14 +118,8 @@ runToStability rfSig rfA op su =
 --      unsafeOnUpdateBL - too lazy!
 --      unsafeOnUpdateBLN - just right.
 --
--- This allows tapping a signal for debugging that would otherwise
--- be dropped by the behavior, but allows dead code elimination to
--- remove the behavior based on whether nearby signal `x` is dead.
---
--- In addition to the processed signal, BLN forwards an arbitrary 
--- complex signal without processing it (not even synchronizing it)
--- but will check to see whether it's all dead code. If not, the 
--- IO effect is activated.
+-- Runs the update event if any signal in `(S p a :&: x)` is alive.
+-- This allows debugging without keeping a signal alive.
 unsafeOnUpdateBLN :: (Eq a) => IO (T -> Maybe a -> IO ()) 
                     -> B (S p a :&: x) (S p a :&: x)
 unsafeOnUpdateBLN mkOp = bfirst (unsafeOnUpdateBL mkOp) >>> keepAliveB
@@ -158,14 +145,5 @@ unsafeOnUpdateBCXLN :: (Eq a, Typeable p) => (PCX p -> IO (T -> Maybe a -> IO ()
 unsafeOnUpdateBCX mkOp = wrapBCX $ unsafeOnUpdateB . mkOp . findInPCX
 unsafeOnUpdateBCXL mkOp = wrapBCX $ unsafeOnUpdateBL . mkOp . findInPCX
 unsafeOnUpdateBCXLN mkOp = wrapBCX $ unsafeOnUpdateBLN . mkOp . findInPCX
-
-
-
-
--- TODO:
---
--- A simple mechanism will also be provided to inject updates into a
--- behavior. For thread safety, this channels the updates through a
--- dedicated partition. 
 
 

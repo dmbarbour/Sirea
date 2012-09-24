@@ -8,7 +8,7 @@ _an RDP application is a complex symphony of signals and declarative effects orc
 
 _an RDP application is one big, active declaration that can be modified at any time_
 
-Everybody knows *"side-effects aren't compositional"*. But that statement is only true in general. There are useful subsets of side-effects that have nice properties - e.g. idempotence, commutativity, monotonicity. For a small subset of effects, one can achieve equational reasoning and refactoring on par with the very best _pure, law abiding_ programming models. I call these *declarative effects*. Any pure functional programming advocate also knows effects are rarely essential, i.e. that just a little cleverness will find a wonderfully pure solution most problems. How much more could be achieved with just a few, highly constrained, declarative effects?
+Everybody knows *"side-effects aren't compositional"*. But that statement is only true in general. There are useful subsets of side-effects that have nice properties - e.g. idempotence, commutativity, monotonicity. For a small subset of effects, one can achieve equational reasoning and refactoring on par with the very best _pure, law abiding_ programming models. I call these *declarative effects*. Any pure functional programming advocate also knows effects are rarely essential, i.e. that sufficient cleverness will find a wonderfully pure solution most problems. How much more could be achieved with just a little cleverness and a few, highly constrained, declarative effects?
 
 Reactive Demand Programming was developed as an answer to this question. RDP's particular effect model was inspired from a symmetric *observer effect* in physics and psychology: one cannot generally observe or query a system without altering its behavior. Of course, by ignoring the response, one can "observe" a system with the sole purpose of influence. In RDP, resources, state, and agents may indirectly react to a set of signals that may represent active queries, requests, or commands (collectively, *demands*). Signal processing is local, modular, and composable. Treating the signals as a *set* provides spatial idempotence and commutativity. 
 
@@ -26,14 +26,12 @@ Reactive Demand Programming simultaneously delivers:
 
 RDP is not the first paradigm with highly declarative effects. Synchronous reactive programming, temporal logic programming, discrete event systems, and concurrent constraint systems each precede RDP by more than a decade. Use of sub-structural types for uniqueness or linearity have also been utilized to great effect. However, RDP is the only paradigm I am aware of that supports declarative effects in an open, extensible system.
 
-This README file is intended to serve as an introduction to both Sirea and RDP, and exposes a few of the implementation aspects that might aide understanding and confidence in RDP. 
+This README file is intended to serve as an introduction to both Sirea and RDP. It attempts to be concrete, to expose enough of the implementation aspects that a developer might have some confidence in RDP and feel comfortable with integrating their own resources. Feedback is welcome.
 
-Sirea Features
+Sirea Features 
 --------------
 
-Sirea is now in an alpha state. The primitive behaviors (everything in Sirea.Behavior) have been implemented, plus partitions. Sirea should be in a compiling state for each check-in, but testing is very lightweight and not yet automated. 
-
-Sirea will eventually offer many features. Many are already supported, but some need support from separate not-yet-implemented packages such as sirea-state or sirea-plugins. All of these are on the agenda for 1.0:
+Sirea is now in an alpha state. The primitive behaviors (everything in Sirea.Behavior) have been implemented, plus partitions. Sirea should be in a compiling state for each check-in, but testing is very lightweight and not yet automated. Sirea will eventually offer many features. Many are already supported, but some need support from separate not-yet-implemented packages such as sirea-state or sirea-plugins. All of these are on the agenda for 1.0:
 
 * _Declarative, Compositional, Extensible._ General constructs in RDP are associative, spatially commutative, and spatially idempotent. All effects and state manipulations also have those properties. In addition to composition, RDP is designed to support open extension. There are no "closed loops" in an RDP system, not even local state: any feedback must be an open loop through an external resource. This makes it easy to add behavior to an established system. Between these properties, is easy to reason about, refactor, reuse, compose, and extend RDP code.
 
@@ -80,11 +78,10 @@ Most weakenesses of Sirea RDP belong far more to Sirea than to RDP.
 
 * Developers must use a point-free style for RDP behaviors in Sirea. This a very rewarding style, and anything difficult can be achieved using full Haskell functions for staged programming. But newcomers seem to find it intimidating. 
 
-* It is possible to express open feedback loops, like placing microphone near amplifier. There are idioms to avoid such loops (e.g. for blackboard metaphor, don't put replies onto same board as requests), and there are idioms to dampen loops (e.g. `bdelay` or clever use of `badjeqf`). But Sirea provides no static warnings. Developers must learn the idioms and use discipline. (*Note:* Sirea state and demand monitors will forcibly dampen loops and report errors when they occur dynamically, trading consistency for robust performance.)
+* Sirea does not track resource usage for safety. It is easy to express open feedback loops, analogous to placing microphone near its amplifier. There are idioms to avoid such loops (e.g. for blackboard metaphor, don't put replies onto same board as requests), and there are idioms to dampen loops (e.g. `bdelay` or clever use of `badjeqf`). But Sirea provides no static warnings. Developers must learn the idioms and use discipline. (Though, a few of Sirea's constructs will dynamically detect local cycles and forcibly dampen them, emitting a runtime warning.)
 
 * RDP is designed for [object capability model](http://en.wikipedia.org/wiki/Object-capability_model) systems, using dynamic behaviors as runtime composable capabilities. (This is reflected, for example, in having fine-grained capabilities for many resources.) Sirea, however, is designed to be convenient in context of Haskell's module and type systems. I am not entirely comfortable with this tradeoff; it isn't necessary if one reifies the module and linking system (e.g. service registry and matchmaker). 
 
-* `unsafeLinkB` is very minimal and can easily break RDP invariants. This behavior is used to adapt external resources to RDP. While safer and more convenient adapter functions could be built, they are not a priority for Sirea at the moment.
 
 
 Haskell Packages
@@ -502,7 +499,7 @@ Between partitions, signal updates are batched into one outbox for each destinat
 
 Round-based batch processing ensures an atomic "snapshot" view of other partitions within and between rounds. Snapshot consistency is weaker than "glitch freedom": by observing one resource through lenses of two different partitions, temporary inconsistency is possible. But snapshot consistency eliminates "local" glitches, which are the cause of most problems.
 
-Within each round, updates are processed in two phases. First, every link with a pending update is *"touched"* to indicate an update will be coming on that link. Then, every update is delivered. This is a dynamic solution to the update ordering problem. The *update ordering problem* is a performance concern for push-based reactive systems with complex or ad-hoc dependencies. For example, assume a system whose dependency graph looks like:
+Within each round, updates are processed in two phases. First, every link with a pending update is *"touched"* to indicate an update will be coming on that link. Then, every update is delivered. This is a dynamic solution to the update ordering problem. The *update ordering problem* is a performance concern for push-based reactive systems with complex or ad-hoc acyclic dependencies. For example, assume a system whose dependency graph looks like:
 
         a--b--c--d--e--k
          \/ \/ \/ \/  /
@@ -514,7 +511,7 @@ In this graph, dependencies flow left to right along the lines. For example, `c`
         a,f,b,g,c,h,d,i,e,j,k -- an optimal update ordering
         a,b,h,d,j,k,c,i,e,k,g,c,d,e,k,f,b,h,d,j,k,g,h,c,d,e,i,e,j,k -- a non-optimal ordering
 
-I do not present a worst-case ordering. The worst-case ordering is exponentially worse than the best case. If you know the dependencies, a [toplogical sort](http://en.wikipedia.org/wiki/Topological_sorting) will provide an optimal ordering. However, for RDP, the dynamic behaviors and openly shared resources (state, demand monitors) make it difficult to determine the dependencies. The *"touch"* technique is a very simple, dynamic solution to the problem: a "touch" is a promise of a pending update. When `g` is touched by `a` and `f`, `g` knows to wait for an update from both before pushing its own update. By propagating touches before propagating updates, the update ordering can be optimal.
+I do not present a worst-case ordering. The worst-case ordering is exponentially worse than the best case. If you know the dependencies, a [toplogical sort](http://en.wikipedia.org/wiki/Topological_sorting) will provide an optimal ordering. However, for RDP, the dynamic behaviors and openly shared resources (state, demand monitors) make it difficult to determine the dependencies. The *"touch"* technique is a very simple, dynamic solution to the problem: a "touch" is a promise of a pending update. When `g` is touched by `a` and `f`, `g` knows to wait for an update from both before pushing its own update. By propagating all touches before propagating any updates, the update ordering will be optimal.
 
 The use of "touch" is reflected directly in the data type for constructing concrete behavior networks. Each link (`LnkUp`) has two channels: one for touch, one for the signal update: 
 
@@ -525,157 +522,72 @@ The use of "touch" is reflected directly in the data type for constructing concr
 
 Touch is used only within each partition. Acyclic dependencies between signals will often realize as cyclic dependencies between partitions, which would complicate a higher layer use of touch. Between partitions, batches will often process in non-optimal orders. However, the tendency to accumulate and process multiple batches together will strongly resist the worst-case orderings. 
 
-Developers will use the `LnkUp` type directly if extending Sirea for new resources. This is achieved with `unsafeLinkB` from Sirea.Link. The simplest links would essentially be constructed by:
+Developers will use the `LnkUp` type directly if extending Sirea for new resources. This is achieved with `unsafeLinkB` from Sirea.Link. Behaviors in Sirea are built in two passes, forward then back. The forward pass carries information about static latency and dead code from `binl` or `binr`. The reverse pass carries information about dead code from `bfst` or `bsnd`, and performs the actual construction. Some `IO` is allowed during construction, though it is intended for resource management and signal caching (no semantic state, no observable effects). Developers extending Sirea will hook into the reverse pass:
 
-        (LnkUp y -> IO (LnkUp x)) -> B (S p x) (S p y)
+        unsafeLinkB :: (Lnk y -> IO (Lnk x)) -> B x y
+  
+        data Lnk x = -- GADT
+            LnkDead :: Lnk a
+            LnkSig  :: LnkUp a -> Lnk (S p a)
+            LnkProd :: Lnk x -> Lnk y -> Lnk (x :&: y)
+            LnkSum  :: Lnk x -> Lnk y -> Lnk (x :|: y)
 
-Links in Sirea are built starting from the destination for the dataflow `(S p y)`. The `IO` at construction is used for any per-link caches and resource management. (RDP behaviors must not be semantically stateful, but use of state is often convenient for their implementation.) `B w` is Sirea's primary, concrete behavior type (the `w` is a phantom type 
-to control  distribution of resources). 
+The `Lnk` type can carry `LnkUp` values for each concrete signal, and can also carry multiple concrete signals in case of `(x :&: y)` or `(x :|: y)`. Finally, it allows developers to easily optimize for dead code on output. Not all behaviors have useful effects other than the query result, so it is useful to optimize them out of the behavior entirely. 
 
-But the signature presented here is insufficient for multiple signals or certain dead-code optimizations. 
+Here `B` is the concrete, primitive behavior type implemented by Sirea. Type `B` is somewhat inconvenient to use directly since resources would need to be shoved into Haskell's global space. Sirea provides a higher level behavior type `BCX` to mitigate this by reifying a toplevel context object `PCX`. 
 
-        unsafeLinkB :: 
+        newtype BCX w x y = BCX (PCX w -> B x y) 
+        unsafeLinkBCX :: (PCX w -> Lnk y -> IO (Lnk x)) -> BCX w x y
 
+These `unsafeLink` operations are unsafe from Sirea's perspective: it is far too easy to violate RDP's sensitive constraint. Discipline is needed by the developer to safely extend Sirea. This is, at the moment, one of Sirea's weaknesses, though idioms such as AgentResource and UnsafeOnUpdate can help.
 
+### Parallelism and Performance
 
-Between rounds of RDP updates, developers can specify the behavior for each partition. 
+Sirea RDP is an excellent target for parallelism in Haskell for a few reasons:
 
+* the `(x :&: y)` asynchronous products enforce clean, coarse-grained separation of data dependencies in the type system. This makes it easy to judge where introducing parrallelism is advantageous. Very little parallelism will be wasted. 
+* the concrete signal type `(S p a)` (implemented by `Sig a`) provides a clean separation between the spatial and temporal aspects of data. It is easy, in Sirea, to specify that the spatial computations occur in parallel while the temporal "spine" of the signal is left to incremental, sequential processing.
+* the use of signal updates with explicit stability (`SigUp`) supports speculative evaluation and optimistic concurrency, similar to lightweight time warp protocols. (Parallelism via optimistic concurrency is really trading efficiency for latency and robustness, but is a very nice way to use that extra CPU.)
+* use of `bcross` models distributed behaviors, potentially multi-processor systems, which are inherently parallel. 
+* state resources are explicit and external to RDP, and persistent; there is no risk of lazy, parallel folds becoming space leaks.
 
-Each round is controlled by a `runStepper` operation. Between rounds, it is possible to manipulate resources, e.g. to render an OpenGL frame or update some sound buffers. Developers can specify the behavior of a partition thread via the `Partition` typeclass. (The exception is `P0`, the initial partition, which is controlled by the Sirea client.)
+Sirea provides several convenience functions for developers to control the timing of computations on data:
 
+        bstrat :: (BFmap b) => b (S p (Eval a)) (S p a)
+        bseq :: (BFmap b) => b (S p a) (S p a)
+        bspark :: (BFmap b) => (x -> ()) -> b (S p x) (S p x)
+        bforce :: (BFmap b) => (x -> ()) -> b (S p x) (S p x)
+        bstratf :: (BFmap b, Functor f) => (forall e . f e -> e) -> b (S p (f x)) (S p x)
 
-Also, while Sirea ensures snapshot consistency between partitions, there is still some indeterminism regarding exactly which snapshot you'll be using. For determinism, it is often preferable to keep operations within one thread. Sirea does support a notion of "scopes" - hierarchical sub partitions - which can be useful for representing multiple locations, objects, or resources within a single, internally deterministic thread.
+`bspark` is the most accessible mechanism to add parallelism to a Sirea behavior. It will spin off one spark for each value in a signal, but for only a few values at a time (incrementally, relative to stability), and downstream clients will wait on this computation to finish (as though it were strict). This eliminates risk of losing parallelism, but has the disadvantage of not being very compositional. The reduction `(x -> ())` is any sequential strategy, usually `rnf` from Control.DeepSeq. The `bforce` behavior is similar but will evaluate in the current partition's thread. A potentially useful idiom is to use `bspark` just before `bcross`, such that lazy values are computed "in transit".
 
+The `bstrat` and `bseq` behaviors are more primitive. The `bstrat` will not directly evaluate anything, but will prepare the inner `Eval a` to evaluate when later computing the signal up to `Just a | Nothing`. The `bseq` behavior will, over time, incrementally evaluate the signals up to `Just a | Nothing`. These are usually paired. The `Eval` type is an identity monad from Haskell's [parallel](http://hackage.haskell.org/package/parallel) package. If developers desire to use another pure evaluator type, such as [Monad.Par](http://hackage.haskell.org/package/monad-par), they might simply use `bstratf runParAsync`.
 
- number of logically concurrent behaviors. In this sense, RDP is very lightweight and flexible for concurrency - i.e. developers could place the entire application into one partition, or divide it among many. 
+The above behaviors are a Sirea user's primary tools to control the whens and wheres of lazy evaluation. But lazy evaluation is not the only performance concern. Other concerns involve caching, memoization, choking signals, and eliminating redundant updates. 
 
+At the moment, Sirea unfortunately lacks standard idioms for memoization and caching. The traditional Haskell tricks for memoization (e.g. expressed in Luke Palmer's [memocombinators](http://hackage.haskell.org/package/data-memocombinators) package) can certainly be applied, but I fear those may accummulate too much memory over time. I've been exploring designs for windowed memoization, possibly using history with exponential decay (via a sequence or ringbuffers).
 
-For both *efficiency* and *snapshot consistency* between partitions, updates between partitions are batched. Batches from multiple partitions will be processed together. Multiple batch-updates from one partition will piggyback. The result is very high efficiency, and robust to both programmer errors and the update-ordering problem. 
+The notion of *choking signals* involves skipping high-frequency intermediate updates to a signal and showing only the occasional snapshot. This is a very different notion from filtering signals. Choking is inherently a stateful concept because it must hold onto information about the past (at the very least, when the last snapshot was selected). The motivation for choking is usually to either dampen feedback cycles (a dubious application) or to support a fast producer in feeding a slow consumer. In Sirea, choking will be modeled always with support of intermediate stateful resources, and I'm considering creating a dedicated resource just for choking. (Some resources may also perform their own ad-hoc choking, e.g. an OpenGL resource might not display faster than the framerate demanded even if there are many possible intermediate frames.)
 
-The *snapshot consistency* property allows each concurrent partition to compute a round of updates as though all partitions are frozen. The update at the end of each round
+An intelligent choke might support a *signifigance* function, i.e. choking based on time, but allowing a few extra values through if the values are somehow interesting. 
 
+For eliminating redundant updates, Sirea does have a ready answer: 
 
-Sirea 
+        badjeqf :: (BFmap b, Eq x) => b (S p x) (S p x) -- adjacent equality filter
 
-
-
-The usual answer to this problem is a *toplogical sort*,
-
-
-Dynamic behavior The behaviors a dynamic signal replaces often replacing older behaviors. The older networks eventually process their final relevant signal updates, at which point
-
-allowing them to be garbage collected.
-
-are garbage collected after they process their final signal updates. 
-
-The behavior representing the toplevel Sirea application can itself be und
-
-  allows these concrete dataflow networks to be installed and replaced at runtime. 
-
-
-Behaviors can represent continuous, distributed queries
-
- long-lived observer systems with continuous time-varying queries and control signals. 
-
- Concrete behaviors that provide access to effectful resources, such as sensors or shared state, often push more signal updates than they receive  (for highly stable resources) vice versa.
-
-
-
-
-
-Many behaviors provide access to sensors or shared state. It is impossible to predict such resources perfectly, so signals must often be updated. Those updates are propagated through a network established when compiling or installing a dynamic behavior. 
-
-, and signals from those resources often must be updated due to external actions.  if a human pushes a key on a keyboard, thi
-
-
-moving a mouse
-Some behaviors provide access to effectful resources, and signals must be update
-
-
- Some behaviors provide access to effectful resources, such as sensors or state. It is possible for the output signal to update more or less frequently than the input. When parallel pipelines exist primarily for effects, it can be convenient to think of them as modeling a multi-agent system.
-
-so it is possible that a the output signal for a behavior updates more or less frequently than the input signal. 
-
-
-
-Every behavior in RDP is part of a larger RDP behavior. RDP is behaviors "all the way down". Even the top-level Sirea application behavior can be understood as part of a larger behavior
-
-Some behaviors provide access to resources
-
-Some behaviors will provide access to resources, e.g. a behavior representing a filesystem might take as input a signal containing a filename, and respond with a signal containing the file contents. 
-
-If a behavior is performed fully for the declarative effects,
-
- Signal updates are propagated through the network, and may influence resources. To be active, a behavior must be part of a greater dataflow. It is dataflow "all the way down" in RDP, though the toplevel Sirea application behavior is bootstrapped by `runSireaApp`. Some resources may serve as sources or sinks, but the behaviors that 
-
-Resources may serve as sources or sinks, 
-
- though they must still be activated by the larger dataflow.
-
-
-
-To be active, a behavior must be part of some larger dataflow. RDP is e
-
-Some behaviors provide access to a resource.
-
-
-Behaviors describe computation-rich signal plumbing between resources. Behaviors can represent dataflows, networks, lenses, agents, and access to a resource. A behavior can leverage ad-hoc external resources for state, stability, and intelligence. Behaviors can precisely orchestrate multiple signals that model distributed, continuous queries or commands. 
-
-Behaviors are suitable for real-time data plumbing and data transforms. By *real-time* I mean operations that can be computed in a small bounded maximum time. Sirea's `bfmap` provides all pure Haskell functions, but users are strongly encouraged to use functions that can be computed in real-time or close to it. When long-running computations are needed, they can be modeled with incremental real-time steps in state.
-
-
-### Parallelism and Concurrency 
-
-
-(include discussion of consistency properties - snapshot consistency, eventual consistency, use of `bdelay`, relevance of anticipation)
-
-A nice feature of pipelines is they're easy to parallelize: 
-
-
-RDP supports a high level of potential parallelism. There is pipeline parallelism from (>>>) - computing a newer y and an older z in parallel. There is task parallelism from (***) - computing x' and y' at the same time. Dynamic behaviors Data parallelism is also readily supported (a `bspark` behavior is provided to help, there). 
-
-Due to continuous semantics, RDP allows a great deal of parallelism from the first three compositions. Pipeline parallelism, via (>>>), involves pipeline parallelism (from >>>, computing a newer y and an older z in parallel), task parallelism (from *** or &&&; computing x' and y' in parallel), 
-
-Since behaviors operate on continuous signals, the above actually represents a pipeline with potential for parallelism: fresh `x` values can be continuously computed in parallel with older `y` values. A vertical slice through the pipeline is effectively the signal type at that point, in this case `y`.
-
-RDP models concurrency in terms of task-parallel pipelines, i.e. using `bdup` to create a parallel pipeline, then `bfirst` and `bswap` to add different tasks to different pipelines. A couple useful composite behavior is `(***)`:
+This behavior can improve performance by eliminating many redundant signal updates. There is some cost to perform the filter, of course, so it should be used judiciously. But there may be significant downstream savings for `bfmap`, `bzap`, and similar, and much rework avoided. (*NOTE:* `bconst` has a simple variation of `badjeqf` built into it; this is the main advantage of using `bconst` instead of `bfmap . const`.)
 
 ### Behaviors as Arrows
 
 If you are familiar with the Arrows abstraction, invented by John Hughes circa 2000, then you have probably recognized several of the operators presented above: `(>>>)`, `(***)`, `(&&&)`, `(+++)`, `(|||)`, first, second, left, right. Sirea presents RDP as an arrowized model, albeit using `bfmap` instead of `arr`, and RDP offers many valuable properties not promised by arrow laws. Haskell's Control.Arrow class is not used. If you are unfamiliar with Arrows, or somewhat intimidated by them, do not fret! Like Monads, Arrows are best learned by using them, by osmosis and exposure, by understanding and manipulating toy examples. If you're feeling comfortable with the syntax and structure of RDP from the README so far, I do recommend reading [Understanding Arrows](http://en.wikibooks.org/wiki/Haskell/Understanding_arrows) in the Haskell wikibook.
 
 
-### Implementation and Extension of Behaviors
-
-Sirea provides one concrete behavior type, a GADT simply named `B`. The GADT symbolically represents implementation for many of the basic data-plumbing behaviors, such that they have no runtime costs. But most interesting behaviors - even `bfmap` - are defined with a `MkLnk` primitive. The essential operations and data are:
-
-    data MkLnk x y = MkLnk {
-      ln_build :: Lnk y -> IO (Lnk x)
-    }
-
-    data Lnk x where
-      LnkSig  :: LnkUp a -> Lnk (S p a)
-      LnkProd :: Lnk s a -> Lnk s b -> Lnk (a :&: b)
-      LnkSum  :: Lnk s a -> Lnk s b -> Lnk (a :|: b)
-
-    data LnkUp a = LnkUp {
-      ln_update :: SigUp a -> IO ()
-    }
-
-    data SigUp a = SigUp {
-      su_stable :: T
-      su_update :: Maybe (T, Sig a)
-    }
-    
-    unsafeLnkB :: MkLnk x y -> B x y
-
-The `ln_build` operation is executed when the behavior is first built. The behavior is built backwards - given the output target, you return the input target. Once built, `ln_update` will be called after each update, allowing the concrete signal values to be processed. _(Optimization is left out of the above representation; see the code for details.)_
-
-Sirea clients can add new primitive behaviors via `unsafeLnkB`, but must be cautious to avoid breaking RDP abstractions. Clients should be able to adapt most new resources using simple combinations of existing behaviors.
-
 Resources
 ---------
 
+(sensors, actuators, demand monitors, state: persistent state, animated state, (formally) volatile state)
+
+(under construction)
 
 ### Resources and Effectful Behaviors
 
@@ -697,53 +609,42 @@ Effects are valuable for programming open and extensible systems, but can make c
 
 Stateful resources are external to the RDP behavior, and access to those resources can be established by multiple dynamic behaviors. Orthogonal persistence is a natural consequence of dynamic behaviors and declarative semantics.
 
+## Modeling Services  
+
+(an agent can construct and share dynamic behaviors via a registry; that dynamic behavior becomes a service)
+
+
+## First-Class Frameworks
+
+(reactive semantics, very nice, no IoC; a framework abstracts as a simple set of RDP behaviors).
+
+
+
 
 
 
 RDP Laws and Properties
 -----------------------
 
+The trinity of composition is operators, operands, and properties. The operators are uniform: can be applied to every operand. The operands are closed: each composite is in the set of operands. The properties are inductive: they can be computed with knowledge of the operator and the properties of each operand. (*Note:* Properties that are *invariant* over the composition operators are trivially compositional.)
 
+Composition seems essential for large scale software development. Consider:
 
-### RDP Laws and Composition Properties
+* In large systems developers cannot afford to study the definition of every component. In open systems, they cannot look even if they wanted to. It becomes essential to reason based on the few properties that are easy to compute without knowledge of the definitions, i.e. compositional properties. 
+* Developers of large scale systems cannot afford to learn new ontologies for every component they wish to introduce. Further, large ontologies become annoying: it easily becomes expensive to add the translation glue between components and subtly heterogeneous data models. It is preferable if there are just a few standard operators for introducing components - i.e. composition operators. 
+* Large scale software is ultimately about systems and subsystems. Systems have no clear edges, not clear bottom, no clear top. Every subsystem is another system. I.e. systems are closed under composition. 
 
-The trinity of composition is operators, operands, and properties. The operators are universal: can be applied to every operand. The operands are closed: the composite is in the set of operands. The properties are inductive: can be computed with just knowledge of the operator and the properties of each operand. (*Note:* Properties that are *invariant* over the composition operators are trivially in the set of compositional properties.)
+Reactive Demand Programming was developed while prioritizing compositional properties as a first principle. 
 
-. The properties are inductive. The operators are standard and can be applied to every operand. The composite (result of composition) is in the set of operands. The properties can be computed just by knowing the operator and the properties of each operand. 
+Of course, RDP developers still benefit from knowledge of implementation details. And whitebox utilities might still support dependent types, rich logics, contracts and the like (though Sirea doesn't provide any of that). But compositional properties will lift much burden from developers, and will enable the whitebox systems to focus more on problem domains and data models, and somewhat less on race conditions or resource management.
 
-operands are *closed*, the operators finite and universal, and the properties are inductive.
-
-The set of operands must be *closed*: the result (composite) of every composition is an operand for further composition. The properties must be *inductive*: you can reason about properties of the composite just by knowing the operator and the properties of each operand.
-
-Compositional properties are essential for robust, modular, scalable, reusable code. Developers cannot afford to be digging into the implementation of each component each time they need to understand some property of the composite. And if we program against the compositional properties, we have much greater freedom to change the implementation of a . 
-
-
-
- The set of operands must be closed under t The set of operands must be closed under the operators. The laws allow us to reason  with the set of operands being closed under the operati
-
-* **closure** - the operands can be composed by the operators, and the result is suitable as another operand.
-
-
+(todo: decide how to format and describe properties listed in System.Behavior, plus duration coupling)
 
 
 Idioms and Patterns
 ===================
 
-
-RDP is effectful, but is limited to *declarative effects* - by which I mean effects that are (at any given logical instant, i.e. *spatially*) commutative and idempotent, and that hold over a time. Declarative effects offer many of the reasoning and refactoring benefits associated with pure code: expressions can easily be rearranged, duplicate expressions can be eliminated, or duplicates can be introduced so overlapping subprograms can be abstracted. 
-
-RDP is not the only paradigm with declarative effects. If you are unfamiliar with [Temporal Logic](http://www.eecs.berkeley.edu/Pubs/TechRpts/2009/EECS-2009-173.html), [Event Calculus](http://en.wikipedia.org/wiki/Event_calculus), [Synchronous Programming](http://en.wikipedia.org/wiki/Synchronous_programming_language), or [Concurrent constraint programming](http://en.wikipedia.org/wiki/Concurrent_constraint_logic_programming) then I do recommend researching some of those techniques to broaden your horizons. The [Berkeley Orders Of Magnitude](http://boom.cs.berkeley.edu/) project is making good use of temporal logic for similar reasons that RDP focuses on declarative effects - for scalability to distributed systems, and to simplify reasoning. 
-
-Due to the prevalence of message-passing concurrency, a common misconception is that concurrency is incompatible with synchronous behaviour. But concurrency just means that computations overlap in time in a semantically relevant way - i.e. they interact with each other. RDP behaviors interact by influencing and observing shared services and resources, including shared state.
-
-RDP differs from other declarative effects models in the following aspects:
-
-* RDP is *continuous* in time, rather than discrete time. Sirea models only discrete-varying behaviors, and actually uses a fixpoint representation of time (with nanosecond precision), but treats time as continuous with respect to semantics and logic.
-* RDP is *internally stateless*. State is regressed to the edges of the system, to external resources like databases. This is an important property for runtime upgrades, live programming, and resilience. It also simplifies orthogonal persistence.
-* RDP is uniformly *bidirectional*. Observable resources are aware of observers, and may be influenced by them. This is useful for robust resource management, e.g. activating services only when they are needed, and deactivating services that are no longer necessary. 
-* RDP enforces a *duration coupling* constraint. This ensures that behaviors, and effects they control, can be halted. This is important for process control and security in distributed systems. Unlike mobile computing, it is easy to ensure an RDP application will never escape its human administrators.
-* RDP is *open*. An application may be extended at runtime (via dynamic behavior) with access to new services and resources. RDP uses a universal time model to ensure behaviors compose properly in open systems. Resources and services are external and might be influenced or observed by parties outside local control.
-* RDP is *securable*, via [capability](n.wikipedia.org/wiki/Capability-based_security) patterns. Behaviors provide access and authority to specific external resources or services. There is no implicit data space like in traditional logic programming. [Ambient authority](http://en.wikipedia.org/wiki/Ambient_authority) can be eliminated, and securely emulated with context objects providing behaviors.
+(old material. Will move most of this into Resources section, with heavy modifications.)
 
 Between *declarative effects* and RDP's own unique properties, developers will need new idioms for problems that might have been trivial in imperative code. Consider imperative state manipulation: `(x := x + 1)`. If we tried to hold this effect over continuous time, over one millisecond say, would it mean we increment once? or a million times for a million nanoseconds? or infinite times? A developer would instead need to express an effect of the form `(x := x + 1 with 60ms cooldown)` to account for how an effect applies over time. (See the section on _Declarative State Models for RDP_, below.)
 
@@ -822,15 +723,6 @@ Of course, it is unlikely that performance will be competitive with a native con
 But if the model is shallow (to integrate with a control flow system) then performance should not be a significant issue. And for workflow (or control flow at distributed scales), the flexibility, extensibility, and robustness are generally more valuable than performance under ideal conditions. RDP has potential to be competitive with control flow and workflow systems even in their own domain. 
 
 
-## First-Class Frameworks, Servers, and Architectures
-
-
-
-
-## Behavior-Agents as Servers 
-
-
-
 ### Feedback and Delay
 
 A major concern with reactive programming in continuous time is *feedback* - when a signal output affects its own input. This is a natural concern, with physical cause - e.g. if we place a microphone near its associated amplifier, we often get very shrill feedback. Feedback is unstable and can consume a lot of energy very quickly.
@@ -882,6 +774,6 @@ But RDP is ultimately about open, declarative orchestration of *stateful* system
 
 ### MISCELLANEOUS
 
-* For distribution. State models can be created that are suitable for distribution and replication. DHTs, LDAP, and content-addressed networks are possibilities.
+* For distribution. State models can be created that are suitable for distribution and replication. DHTs, LDAP, and content-addressed networks are possibilities. (Distributed state models? Cloud Types?)
 * For live programming. The "main" behavior can be modified without disturbing state. An RDP application is one big, active declaration that can be modified at any time. 
 

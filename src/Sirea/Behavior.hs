@@ -632,18 +632,8 @@ class (Behavior b, Behavior b') => BDynamic b b' where
     -- 
     beval :: (SigInP p x) => DT -> b (S p (b' x y) :&: x) (y :|: S p ())
 
--- | evaluate, but drop the result. This is a common pattern with an
--- advantage of not needing a DT estimate. The response is reduction 
--- from the signal carrying b'.
-bexec :: (BDynamic b b', SigInP p x) => b (S p (b' x y_) :&: x) (S p ())
-bexec = (exec &&& ignore) >>> bsnd
-    where exec = bsynch >>> bprep >>> beval 0
-          ignore = bfst >>> bconst ()
-          bprep = bfirst (bfmap modb &&& bconst ()) >>> bassocrp 
-          modb b' = bsecond b' >>> bfst
-
 -- | provides the `x` signal again for use with a fallback behavior.
-bevalOrElse :: (SigInP p x, BDynamic b b') => DT -> b (S p (b' x y) :&: x) (y :|: (S p () :&: x))
+bevalOrElse :: (BDynamic b b', SigInP p x) => DT -> b (S p (b' x y) :&: x) (y :|: (S p () :&: x))
 bevalOrElse dt = bsynch >>> bsecond bdup >>> bassoclp >>> bfirst (beval dt)
              -- now have (y :|: S p ()) :&: x 
              >>> bfirst (bmirror >>> bleft bdup) >>> bswap 
@@ -652,6 +642,16 @@ bevalOrElse dt = bsynch >>> bsecond bdup >>> bassoclp >>> bfirst (beval dt)
              -- now have ((x :&: S p ()) :|: (x :&: y))
              >>> bleft bswap >>> bmirror >>> bleft bsnd
              -- now have (y :|: (S p () :&: x))
+
+-- | evaluate, but drop the result. This is a common pattern with an
+-- advantage of not needing a DT estimate. The response is reduction 
+-- from the signal carrying b'. 
+bexec :: (BDynamic b b', SigInP p x) => b (S p (b' x y_) :&: x) (S p ())
+bexec = (exec &&& ignore) >>> bsnd
+    where exec = bsynch >>> bprep >>> beval 0
+          ignore = bfst >>> bconst ()
+          bprep = bfirst (bfmap modb &&& bconst ()) >>> bassocrp 
+          modb b' = bsecond b' >>> bfst
 
 -- | bevalb, bexecb, bevalbOrElse simply constrain the BDynamic type
 -- a little. These are useful because Haskell type inference has...

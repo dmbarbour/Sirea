@@ -35,11 +35,23 @@ import Data.IORef
 -- the output is unused, which allows the MkLnk operation to control
 -- accordingly how much computation to perform. 
 --
+-- > type MkLnk x y = Lnk y -> IO (Lnk x)
+--
 type MkLnk x y = Lnk y -> IO (Lnk x)
 
 -- | A Lnk describes a complex product of LnkUp values, to 
 -- support all complex signal types - S, (:&:) and (:|:). 
---   type Lnk = LnkW LnkUp
+--
+-- > data Lnk x = 
+-- >     LnkDead :: Lnk x
+-- >     LnkSig  :: LnkUp a -> Lnk (S p a)
+-- >     LnkProd :: Lnk x -> Lnk y -> Lnk (x :&: y)
+-- >     LnkSum  :: Lnk x -> Lnk y -> Lnk (x :|: y)
+--
+-- Lnk is a GADT type. The use of `LnkDead` can be treated as a set
+-- of `ln_zero` values (`LnkUp` that does nothing), but is provided
+-- to easily perform dead code elimination.
+-- 
 type Lnk = LnkW LnkUp
 
 -- | LnkW is a GADT for a complex product of signals. 
@@ -66,8 +78,11 @@ data LnkUp a = LnkUp
     , ln_update :: !(SigUp a -> IO ())
     }
 
--- | ln_zero is a trivial LnkUp state, similar to LnkDead but hides
--- that the input is dropped.
+instance Monoid (LnkUp a) where
+    mempty  = ln_zero
+    mappend = ln_append
+
+-- | ln_zero is a trivial LnkUp state, like LnkDead but opaque.
 ln_zero :: LnkUp a
 ln_zero = LnkUp 
     { ln_touch = return ()
