@@ -48,9 +48,7 @@
 -- via discovery. 
 --
 module Sirea.DemandMonitor 
-    ( newDemandMonitor, newDemandSetMonitor
-    , newActivityMonitor, newKMaximumMonitor, newKMinimumMonitor
-    --, newDemandMonitorZeq
+    ( 
     ) where
 
 import Control.Applicative

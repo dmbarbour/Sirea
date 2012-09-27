@@ -21,6 +21,14 @@ import Data.Typeable
 import Data.IORef
 import Control.Monad (when, liftM)
 
+{- IDEA: a more useful, more declarative console.
+    Inputs manage a set of values (X=Y) that may be accessed by users.
+    Outputs manage a similar set of values. (X=A,B,C)
+    Might unify these notions, so user is just acting as a printer?
+    Also, some ability to query the console to replay old values.
+-}
+
+
 -- | For debugging, it's often useful to dump information to the
 -- console. The basic printer will print each unique message to a 
 -- line on the console. Behavior for redundant messages is up to
