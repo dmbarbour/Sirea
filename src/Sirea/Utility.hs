@@ -26,6 +26,9 @@ import Control.Monad (when, liftM)
     Outputs manage a similar set of values. (X=A,B,C)
     Might unify these notions, so user is just acting as a printer?
     Also, some ability to query the console to replay old values.
+  Unfortunately, seems a bit difficult to handle getLine in concurrent manner
+  compatible with ghci. Also, would prefer a persistent model, such as use of
+  a file. 
 -}
 
 

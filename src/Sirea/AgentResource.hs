@@ -20,8 +20,10 @@
 --
 -- The primary reason to use an AgentResource is to support resource
 -- adapters. It is often convenient to define a resource's behavior,
--- or at least big chunks of it, in terms of an RDP behavior. Agents
--- can support this division of labor without redundant effort.
+-- or at least segments of it, in terms of RDP behaviors. Also, the
+-- uniqueness of `invokeAgent` simplifies assertions of idempotence.
+-- Safe use of UnsafeOnUpdate is easier to validate if performed by
+-- an invoked agent.
 --
 -- To communicate more than demand for the agent's services requires
 -- indirect methods - shared state, demand monitor, or blackboard
@@ -37,13 +39,19 @@ import Sirea.Behavior
 import Sirea.BCX
 
 -- | Agent behaviors for AgentResource are defined in a typeclass.  
+--
 -- Use `invokeAgent` to compile and install the agent behavior when
 -- there is need for it. Each agent behavior is associated with a
--- partition and a duty. The duty should be a self-describing type.
+-- partition and a duty. 
+--
+-- Suggestion: Encapsulate a duty newtype and associated invokeAgent
+-- behavior within a module, such that clients cannot accidentally
+-- duplicate the agentBehaviorSpec within a SireaApp. Protect the
+-- uniqueness guarantee.
 class (Typeable p, Typeable duty) => AgentBehavior p duty where
-    -- | This should be instantiated as: agentBehavior _ = ...
+    -- | This should be instantiated as: agentBehaviorSpec _ = ...
     -- The `duty` parameter is undefined, used for its type.
-    agentBehavior :: duty -> BCX w (S p ()) (S p ())
+    agentBehaviorSpec :: duty -> BCX w (S p ()) (S p ())
 
 
 -- | To access an agent behavior as a resource, use `invokeAgent`.
@@ -57,7 +65,9 @@ class (Typeable p, Typeable duty) => AgentBehavior p duty where
 -- the behavior to be installed for each use. Due to idempotence,
 -- the resulting system would have the same effects. However, it
 -- will be more expensive if there is more than one instance of the
--- agent behavior installed and active. 
+-- agent behavior installed and active.
+--
+-- The uniqueness of  
 invokeAgent :: (AgentBehavior p duty) => duty -> BCX w (S p ()) (S p ())
 invokeAgent = error "TODO! invokeAgent"
 
