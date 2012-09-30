@@ -6,27 +6,51 @@ Sirea
 
 _an RDP application is a complex symphony of signals and declarative effects orchestrated in space and time_
 
-_an RDP application is one big, active, composite declaration that can be modified at any time_
+_RDP is stateless logic on a stateful grid_
 
 Everybody knows *"side-effects aren't compositional"*. But that statement is only true in general. There are useful subsets of side-effects that have nice properties - e.g. idempotence, commutativity, monotonicity. For a small subset of effects, one can achieve equational reasoning and refactoring on par with the very best _pure, law abiding_ programming models. I call these *declarative effects*. Any pure functional programming advocate also knows effects are rarely essential, i.e. that sufficient cleverness will find a wonderfully pure solution most problems. How much more could be achieved with just a little cleverness and a few, highly constrained, declarative effects?
 
-Reactive Demand Programming was developed as an answer to this question. RDP's particular effect model was inspired from a symmetric *observer effect* in physics and psychology: one cannot generally observe or query a system without altering its behavior. Of course, by ignoring the response, one can "observe" a system with the sole purpose of influence. In RDP, resources, state, and agents may indirectly react to a set of signals that may represent active queries, requests, or commands (collectively, *demands*). Signal processing is local, modular, and composable. Treating the signals as a *set* provides spatial idempotence and commutativity. 
+Reactive Demand Programming was developed as an answer to that question. 
+
+In RDP, the only effect is observing of the active set of demands by a resource. Those demands are typically queries or control signals. RDP's effect model was inspired from a symmetric *observer effect* in physics and psychology: one cannot observe a system without influencing its behavior. Since observation implies influence, it is possible to observe for the sole purpose of influence. Thus, only one concept is needed for query and control.
+
+Demands are represented as long-lived signals. Signal processing is local, modular, and composable. Treating the signals as a *set* is essential for RDP's spatial idempotence and commutativity. 
 
 The answer: *Anything worth doing* can be done with declarative effects. (Or, rather: *Anything worth being* can become with declarative effects.) This includes state, video, music, sensor networks, control systems, user interface. All can be adequately observed and influenced via the RDP paradigm. It does take new idioms and abstractions (especially new state models) to effectively adapt and utilize external resources.
 
-Reactive Demand Programming simultaneously delivers:
+What is Reactive Demand Programming?
+------------------------------------
 
-* the reasoning and composition benefits of pure dataflow models
-* the flexibility and adaptability of ad-hoc IO
-* the encapsulation and dynamic reconfigurability of OOP
-* the robust open composition of object capability model
-* the extensibility of publish-subscribe or blackboard systems
-* the concurrency and parallelism of multi-agent systems
-* the utilization and scalability of lightweight time-warp
+Most programmers, even those who rarely venture beyond imperative abstractions, are familiar with at least one declarative dataflow concept: the **spreadsheet**. RDP might be framed as a natural way to extend spreadsheets with functions and effects:
 
-RDP is not the first paradigm with highly declarative effects. Synchronous reactive programming, temporal logic programming, discrete event systems, and concurrent constraint systems each precede RDP by more than a decade. Use of sub-structural types for uniqueness or linearity have also been utilized to great effect. However, RDP is the only paradigm I am aware of that supports declarative effects in an open, extensible system.
+* Every cell is described by a function. Access to a cell always requires a parameter.
+* Cells carrying simple values are represented as functions that ignore their parameters. 
+* A cell's function may be evaluated continuously and concurrently with many parameters.
+* Some "special" cells represent externals such as mouse, keyboard, database, display.
+* Special cells can observe the full, concurrent *set* of parameters to influence values.
+* Functions may be used as parameters or results. (Cell names can be used as functions.)
 
-This README file is intended to serve as an introduction to both Sirea and RDP. It attempts to be concrete, to expose enough of the implementation aspects that a developer might have some confidence in RDP and feel comfortable with integrating their own resources. Feedback is welcome.
+The spreadsheet analogy does suggest the question: *how does one display a cell whose value is a function?* 
+
+Many wonderful answers to that question have been developed in other projects, such as [naked objects](http://en.wikipedia.org/wiki/Naked_objects), and [tangible values](http://en.wikipedia.org/wiki/Naked_objects). A simplistic answer would be to just query the cell with a value `Print` and display whatever is returned (numbers, text, SVG, etc.). Alternatively, one might use a visitor pattern: pass a canvas-abstraction to the cell, then allow the cell to print itself (potentially even print some interactive widgets). These aren't new ideas, but I think RDP will make them safer and easier than other paradigms.
+
+However, I mean to emphasize the *reactive* and *dataflow* aspect of spreadsheets. 
+
+In a spreadsheet, you can twiddle expressions, and the updates "instantaneously" propagate to downstream clients of the cell. 
+
+RDP, like a spreadsheet, enables dataflow. But RDP is a *bidirectional* dataflow model. Every downstream client is also *pushing* values upstream - function parameters. Those values are used in many ways: as database queries, to publish data, to register functions as services or plugins, control signals, and so on. The bidirectional flow makes RDP far more expressive, modular, extensible, and composable than traditional spreadsheets. 
+
+The *cost* of supporting bidirectional dataflow and effects on externals is that *RDP must abandon the illusion of "instantaneous" dataflow*. Dataflow takes time, especially when it involves a requests on external resources. RDP uses explicit, *logical* latency to support safe, consistent propagation and processing of values. It can take time for a change upstream to affect a downstream client, or for a change in a client to affect an upstream service. But it will be a very predictable amount of time.
+
+An RDP-based spreadsheet would be a wonderful application of RDP: for teaching RDP, for live programming, and as a potential killer application in its own right. I have many ideas for making it happen (do I use a subset of Haskell for the cells? can I leverage wiki-like concepts and webservices? can I leverage OO prototypes and traits?). However, it must wait until Sirea is further along.
+
+RDP does not use a spreadsheet nomenclature. But there are names for the corresponding elements in RDP:
+
+* Time-varying parameters and responses are formally modeled as **signals**.
+* The effectful "functions" of RDP are called **behaviors**. 
+* The "special" cells are said to access **resources**.
+
+The ability to share behaviors as values provides RDP a few of the benefits of OOP - reconfigurable modularity, secure encapsulation. It's quite feasible to develop an OORDP model - methods as RDP behaviors (instead of imperative procedures), and adding support for prototypes, traits, specialization, delegation. Sirea doesn't explore this.
 
 Sirea Status
 ------------
@@ -80,7 +104,7 @@ Reactive Demand Programming (in Sirea)
 
 The Reactive Demand Programming (RDP) view divides the world into three kinds of things: **resources**, **behaviors**, and **signals**. 
 
-* **Resources** might broadly be classed into sensors, actuators, and state. Specific examples include keyboard, mouse, joystick, webcam, microphone, monitor, speaker, filesystem, databases, network, printers. By nature, resources are external to RDP, but may be accessed by RDP behaviors. Resources cannot be created in RDP: there is no equivalent to OOP `new`. However, resources may be dynamically discovered at runtime, and clever manipulations of stateful resources (such as a filesystem) can model creation in terms of discovery (e.g. by computing a unique filename).
+* **Resources** might broadly be classed into sensors, actuators, state, and services. Specific examples include keyboard, mouse, joystick, webcam, microphone, monitor, speaker, filesystem, databases, network, printers. By nature, resources are external to RDP, but may be accessed by RDP behaviors. Resources cannot be created in RDP: there is no equivalent to OOP `new`. However, resources may be dynamically discovered at runtime, and clever manipulations of stateful resources (such as a filesystem) can model creation in terms of discovery (e.g. by computing a unique filename).
 
 * **Behaviors** describe computation-rich data plumbing between resources. Some behaviors will represent access to a resource, providing a capability to observe or influence it. But the majority of behaviors in an RDP application are often simple data plumbing and pure transforms (cf. Sirea.Behavior). RDP behaviors cannot accumulate state; all state is kept in external resources. A simple, linear behavior might gain a joystick signal from GLFW, transform that signal into controls for a robotic arm, `bcross` over to a partition representing the robot resource, then push the signal to the robotic arm. (`getJoyData >>> bfmap joyToRobotArmCtrl >>> bcross >>> controlArm`). RDP can express many independently concurrent behaviors, e.g. using `|*|`. Behaviors can be dynamic, i.e. there is a behavior to evaluate behaviors (`beval`).
 
@@ -124,7 +148,7 @@ Note that the states can be stored as a sequence of discrete updates, but full s
 
 (*Aside:* RDP does not use events. Events very strongly favor an imperative effects model, and require excessive use of internal state [1](http://awelonblue.wordpress.com/2012/07/01/why-not-events/). However, RDP has no difficulty representing short-lived states like the position of a key on the keyboard. Further, an RDP adapter to a keyboard resource may translate a stream of keyboard events into an RDP signal. Sirea will not "miss" any key states while you're observing the keyboard.)
 
-For RDP, the above signal is incomplete. Signals have a lifespan - a definite start time, and indefinite end time. This lifespan is not a property of the keyboard, but rather a property of the *observer* of the keyboard. An observer must start observing at some definite time. In Sirea, lifespan is represented by wrapping every signal value in a `Maybe` type, and use the `Nothing` value to indicate durations where no observation occurs.
+For RDP, the above signal is incomplete. Signals have a lifespan (also called activity cycle) - a definite start time, and indefinite end time. This lifespan is not a property of the keyboard, but rather a property of the *observer* of the keyboard. An observer must start observing at some definite time. In Sirea, lifespan is represented by wrapping every signal value in a `Maybe` type, and use the `Nothing` value to indicate durations where no observation occurs.
 
             ________  _________  ____________     Just Up ("w" not pressed)
             t0    t1__t2     t3__t4        t5     Just Down ("w" pressed)
@@ -173,13 +197,11 @@ The concrete signal type in Sirea is `Sig a`,
 
 ### Updating Signals
 
-RDP is generally push-based in the implementation. I.e. push updates for an SQL query signal, get query results pushed back. 
-
-Sirea will push signal updates through the behavior network. When RDP updates a signal, it updates the whole projected future of that signal. In the degenerate case, this might mean updating one value at a time. However, it is not unusual that multiple future values can be anticipated.
+Signal updates are not observable to the RDP developer, but are an important part of the Sirea implementation. Sire will push signal updates through the behavior network. Each update includes the full projected future of that signal, but later updates will replace some of that future. In the degenerate case, this might mean updating one value at a time. However, it is not unusual that a rich future (e.g. the next seven values) can be correctly anticipated.
 
         data SigUp a = SigUp 
             { su_state  :: !(Maybe (Sig a , T)) -- signal future after given time
-            , su_stable :: !(Maybe T)           -- update stability; like a heartbeat
+            , su_stable :: !(Maybe T)           -- update stability; also heartbeat
             }
 
 The `su_stable` associated with a signal update is a promise that future update times have a lower bound set by the stability value, where `Nothing` is forever (indicating the signal has received its last update). The main role of update stability is to support garbage collection of cached signals. (Caches are necessary when signals are combined, e.g. with `bzip` or `bmerge`, since the different signals may update at different times.)
@@ -578,27 +600,37 @@ The breadth and variety of of sensors, human input devices, output devices, and 
 
 The process of adapting a resource typically involves introducing a thread (to provide resource-specific polling, maintenance, or event loops) and making some state accessible to behaviors. Also, resources often have dependencies on other resources, configuration information, or state. It is convenient to push most logic into RDP, and to model a resource as exclusively controlled by another RDP application or agent.
 
-* *Partition*s can introduce new threads with developer controlled event loops
+* *Partition*s introduce threads with per-type programmable event loops
 * *PCX* simplifies access to state for resource proxies and adapters
 * *BCX* will distribute a `PCX` context object to primitive behaviors
-* *AgentResource* module models resources as controlled by separate RDP apps
+* *AgentResource* models resources as controlled by separate RDP apps
 * *DemandMonitor* pushes ad-hoc demand-tracking logics up into RDP
 
-Each of these is explained in the associated module. 
+Each of these is explained in an associated module. 
 
-Sirea 1.0 will include packages supporting the most commonly accessible resources - mouse, keyboard, graphics, web, state, sound, time. Developers should (hopefully!) need to write adapters only for more domain specific or esoteric resources and services, and even then only for resources that nobody else has adapted effectively. But when those situations occur, the aforementioned features will keep it from being too onerous.
+Sirea 1.0 will include packages supporting the most commonly accessible resources - mouse, keyboard, graphics, web, state, filesystem, sound, time. Developers should (hopefully!) need to write adapters only for more domain specific or esoteric resources and services, and even then only for resources that nobody else has adapted effectively. But when those situations occur, the aforementioned features will keep it from being too onerous.
 
-Useful idioms and specific resource classes are discussed further.
-
-### Mouse, Keyboard, Joystick
-
-### Graphics
-
-### Filesystem
+Specific resources will be discussed in thier corresponding packages. However, a few broad idioms will be discussed here.
 
 ### State
 
-### Clock
+RDP is stateless logic on a stateful grid: the motivation for developing RDP behaviors is, ultimately, to observe and influence stateful resources towards some end. Even sensors and actuators are, abstractly, means to observe and influence a stateful environment. State is always external to RDP behaviors. Orthogonal persistence is very natural. The precise temporal semantics make concurrent shared state much easier in RDP than it would be in most imperative models.
+
+However, programmers from imperative backgrounds must learn new ways of thinking about state and controlling it. RDP influence on state is commutative, idempotent, and continuous. There are many systems that have these characteristics: 
+
+* *tuple space systems* where demands insert or delete tuples on a set
+* *rules based systems* where demands impose rules that predictably influence state
+* *timed state systems* where states are animated by timeouts, cooldowns, or schedules
+* *machine learning* where the state is implicit to a learning or clustering model, but is not easy to control.
+* *history based state* which simply records the values pushed to it, possibly with some expiration or decay model
+
+A simplistic rules-based state model is the *reactive state transition system.* The resource is in some state, initially `0`. Each demand adds a directed bridge between states, such as `(4,5)`. The state follows a predictable path across these bridges, going as far as it can. If rule `(0,4)` is added, the state will transition from `0` to `4` then immediately from `4` to `5` (assuming that bridge is still available). Ambiguity might be resolved predictably by favoring the lowest numbered state. An instantaneous cycle might be resolved by settling in the lowest state. 
+
+Reactive state transition could serve a similar purpose as a state machine. It could be augmented with time, e.g. by adding a cooldown time to each transition. It could also be augmented with a stack, e.g. for a "structured" state transition system that requires every trip to be a round trip (a very useful constraint).
+
+There are much more expressive rules systems available, e.g. based on term rewriting or temporal logic.
+
+An advantage of universally external state (besides orthogonal persistence) is the reduced competition or interference between state models. RDP behaviors can easily orchestrate many heterogeneous state resources, and developers may introduce new ones if those from **sirea-state** prove insufficient. 
 
 ### Demand Monitors
 
@@ -620,105 +652,30 @@ Demand monitors and activity monitors are typically composed into more complex b
 
 Demand monitors have a severe weakness: a large set of demands will tend to be much less stable than any of the contributing signals. This is because an update to any constituent signal will require an update to the monitored signal. A suggested practice for demand monitors is to use many fine-grained demand monitors, one for each role or responsibility. Also, if possible, favor variations of demand monitors that narrow the set of responses (e.g. the activity monitor or a k-maximum monitor).
 
-### State
-
-
-### Windowed History
-
-
-### Pluggable Overlay Networks
-
-
-### Sensors
-
-Sensors include user input devices - mouse, keyboard, joystick, accelerometers, microphones. Sensors include video, cameras, lidar, radar, sonar. There are sensors to detect touch, vibration, capacitance, chemicals, motions, magnetic fields. There are sensors to track locations, temperatures, doors. There are sensors for emotional state and brainwaves. There are many sensors, esoteric and otherwise, and many more are developed every year. 
-
-RDP is a reactive paradigm, so it is easy to integrate sensors with RDP programs - no need for awkward callbacks, polling, or event loops. Just query a behavior that provides access to the sensor. Of course, someone must first develop adapters between Sirea and the given sensor - which very well might involve callbacks, polling, or per-sensor event loops. 
-
-The developers of sensor adapters must decide how to represent sensor outputs as time-varying values in Sirea. 
-
-Many sensors (mouse, keyboard, joystick, video) are obvious in their adaptations. They already represent useful, time-varying world states. Others sensors, such as microphones, are somewhat less so. For example, a microphone might present sound information as a time-varying voltage or pressure, but instantaneous pressure isn't very useful information for understanding sounds. (Also, while Sirea is efficient, it would be pointlessly wasteful to process sound as a pressure signal updating at 44kHz.) An effective and efficient representation for sound might instead be a vector of estimated intensities for different frequencies, presented at a much lower frequency (perhaps 220 Hz).
-
-Signals in RDP cannot directly represent instantaneous events. However, event-sensors can be effectively adapted in at least two ways: short-term memory or framing. For short-term memory, new events are stored, and old events are removed (or archived), and the RDP behavior continuously observes the intermediate state. If events are very high frequency, that state could be choked for performance, which essentially leads to the framing technique: events accumulate into frames, and the next frame is being accumulated while the current one is displayed. Choosing a frame-rate will involve an efficiency vs. latency tradeoff. (Both of these designs involve coupling with state resources.)
-
-Active sensors - such as radar, lidar, sonar - should generally be activated based on demand signals. Discontinuous or event-controlled sensors - such as cameras - require a more sophisticated adaptation. For cameras, one might offer some ability to statefully "schedule" an activation (which would be quite useful if orchestrating many cameras). 
-
-Sirea will not begin its life with a large library sensors, just a few basics (mouse, keyboard, joystick). This is an area where developers will be able to easily contribute useful new packages. 
-
-### Actuators
-
-By actuators, I broadly mean output devices - graphics, sound, printers, haptics, robotics, weaponry. 
-
-RDP is able to influence an actuator by a *set* of concurrent demand signals. When adapting actuators to RDP, developers are forced to face the issue of concurrent influence very early in design. (Though, this can be countered in Sirea using the *Agent Resource* idiom described later.) 
-
-
-### State
-
-Reactive Demand Programming would be incomplete without a state model. (Literally. Without state, RDP would not be Turing complete.) State is always an external resource. Consequently, orthogonal persistence is trivial for RDP (and Sirea implements it). 
-
-
-
-
-Schema changes can still be a challenge, though can be addressed by introducing an agent behavior to translate or synchronize between schemas.
-
-, and avoids many upgrade issues (though developers will still need to handle schem
-
-which offers some nice advantages. For example, orthogonal persistence is trivial in RDP (and is implemented for Sirea). 
-
-### Resource Discovery 
-
-
-
 ### Resource Management
 
+Resources in RDP systems are generally *demand-driven*, i.e. driven by the set of demand signals that query or influence the resource. 
 
-generally include sensors, actuators, and state. User input devices such as mouse, keyboard, monitor, microphone, speakers, joystick, touchscreen, etc. are all resources. Services provide indirect access to composite resources, and may usefully be treated as resources. 
+Demand driven resource management is naturally very robust: If a demand signal is disrupted for *any* reason (e.g. decision, network failure, switching dynamic behaviors), it will be removed from the set of demands on the resource. If all demands are removed, the resource can return to an idle or hibernation state, and resource proxies (handles, buffers, etc.) can be removed from process memory. Conversely, when demand on a resource is introduced - or some time before, using *anticipation* - it is easy to load the necessary resources, prepare local proxies and buffers, and so on. 
 
- to sensors, actuators, and state. Foreign services may usefully be treated as resources. Devices for user interaction - mouse, keyboard, monitor, speakers - can generally be classified as sensors or actuators. Many devices, such as touchscreens or joysticks with force feedback, include aspects of both sensor and actuator.
+RDP structurally enforces a property called *duration coupling*: for every behavior, the input signal has the same activity of the output signal (modulo delay). Basically, you only get a value while you're demanding one. Duration coupling ensures that, when demand is disrupted upstream, it is disrupted downstream after a very predictable latency. It also makes job control and shutdown very easy in RDP. An application is halted but cutting the initial demand signal, and this naturally propagates through the entire RDP behavior. 
 
-Resources used in RDP are typically sensors, actuators, state, and services. Examples include keyboard, mouse, joystick, webcam, microphone, monitor, speaker, filesystem, database, network, printer, google, wolfram alpha, and so on. Resources are external to RDP. They are not created or destroyed by an RDP program (no new or delete). However, resources may be *discovered* at runtime. And by 'discovering' resources from an abstract infinite space (such as names in a filesystem) it is possible to simulate runtime creation of some resources. 
+Demand driven resource management is sufficient for most cases. However, for long-term disruption tolerance of remote resources, relying on a demand signal will be inadequate. In those cases, one can manage resources statefully: manipulate state, and have a remote agent maintain demands on your behalf. Explicit code distribution is a possibility, here: push code for a behavior to the remote service, then a remote agent can compile and activate that behavior. 
 
+(*Note:* RDP's communication model is designed to adequately handle *short-term* disruption, i.e. communication brownouts. Anticipation provides a decent estimate of demands, and corrections can be made for state and many resources. Long-term disruption, however, must be explicitly modeled at least at a few network gateway behaviors.)
 
-### Feedback
+Effective resource management for open systems - even in the face of malign or buggy code - was among RDP's primary design criteria. RDP handles resource management more effectively than any other paradigm I'm familar with. (No need for messy timeouts or ephemeron tables.)
 
-
-
-### Resources and Effectful Behaviors
-
-Using effectful behaviors, we can observe the mouse position, obtain file states, and control a camera - just to name a few. (The trivial input signal for bmousepos is still relevant for specifying the duration of observation.) There can be effectful behaviors for each resource, and for collections and views of resources. A consequence is a simple type such as: 
-   
-    bmain     :: B (S p ()) (S p ())
-
-is a potential signature for RDP application, much like `void main()` is a potential signature for procedural applications. Behind that trivial signature, an RDP application is a complex symphony of signals and declarative effects orchestrated in space and time.
-
-Effects are valuable for programming open and extensible systems, but can make code unclear or more difficult to reuse. RDP avoids or mitigates many problems of effectful and concurrent programming. See discussion below on _Declarative Effects and Concurrency_.
+### Resource Discovery
 
 
-Stateful resources are external to the RDP behavior, and access to those resources can be established by multiple dynamic behaviors. Orthogonal persistence is a natural consequence of dynamic behaviors and declarative semantics.
 
-### Resource Management
+### Agent Resources
 
-Quite Trivial
-
-* _Demand Driven Resource Management & Process Control._ RDP enforces a property called "duration coupling" - the output signal of a behavior has the same activity as the input signal, perhaps delayed a small amount. This is useful for process control: you can halt any RDP program or subprogram by cutting the control signal. Further, resource acquisition and activation is driven by input signals - i.e. demand driven. Resources can be released and return to a passive state when demands on that resource are halted. (*Aside:* duration coupling is the reason RDP signals cannot be created or destroyed and are not first class.)
-
-### Agent Resource
+### Providing Services
 
 
-### Demand Monitors
-
-### Declarative State
-
-### Discovery Idioms
-
-### Reset Idioms
-
-### Modeling Services  
-
-(an agent can construct and share dynamic behaviors via a registry; that dynamic behavior becomes a service)
-
-
-### First-Class Frameworks
+### Frameworks and Overlays
 
 (reactive semantics, very nice, no IoC; a framework abstracts as a simple set of RDP behaviors).
 
@@ -787,26 +744,10 @@ The holistic, set-based view of simultaneous demands will also force developers 
 
 ### Declarative State
 
-Traditional state models have been developed for imperative programs - *serializable* updates, mutual exclusion, discrete time. RDP needs state models suitable for control by signals - continuous, concurrent, collaborative, commutative, compositional, and idempotent. Support for speculation and `bpeek` is also very desirable.
-
-Surprisingly, that broad set of constraints allows a very large design space, which includes many simple, familiar, and usable state models. Here are a few valid approaches to state with RDP:
-
-* simple set manipulation: 
-    * signals may add and remove records from a set
-    * add and remove simultaneously is resolved arbitrarily
 * reactive state transition:
     * state is integer
     * signals contribute possible transitions
     * transition whenever opportunity exists
-* animated reactive term rewriting:
-    * state is (term, time debt)
-    * signals introduce term-rewrite rules
-    * each rule has attributes (max debt, new debt), each > 0.
-    * when a rule is applied, new debt is added to time debt.
-    * rules are not applied unless max debt >= time debt
-    * time debt continuously, linearly reduces towards zero
-
-Since all state models are *external* to RDP (i.e. modeled as external services), it is not difficult to add orthogonal persistence. It is also not difficult to dream up new ones and add them to an application via library or plugin. There are interesting state models one could create for continuous signals (e.g. based on bezier curves, follow the carrot, integrals of forces). 
 
 It's also easy to augment or create variations on existing models, though this tends to trade simplicity for other features (often a dubious tradeoff, but sometimes worth making). For example, animated reactive term rewriting might be modified with built in rules (for performance), delayed rewrites (easier scheduling), key-based ownership types (for security, control), and variation to terms rewriting (such as graph rewriting). Implicit computation of (max debt, new debt) attributes would also be nice.
 
@@ -817,15 +758,6 @@ State models may be non-deterministic, but it is highly preferable (for debuggin
 An interesting possibility is to seek *stability without stateful semantics*. Stateful semantics refers to systematically preserving information from past into present time. Stability doesn't require information be preserved, only that avoid changing unnecessarily - something that can *naturally* be achieved by use of non-deterministic semantics. Stability is suitable in cases where you don't strongly care *what* the information is so long as it's consistent and stable - potential domains would include UI layout, live dependency injection, or a path planning system. Constraint logic programming and many machine learning techniques offer [effective approaches](http://awelonblue.wordpress.com/2012/03/14/stability-without-state/) to stability.
 
 Stateless stability can help alleviate need for real state, and thus simplify reasoning about systems (especially during partial failure and recover).
-
-*NOTE:* Reactive state transition and reactive term rewriting potentially allow for non-determinism. Fortunately these could be resolved arbitrarily. E.g. for ambiguous state transition, choose the lowest available integer. For reactive term rewriting, access to structure of rules would be necessary to impose deterministic ordering on them. Non-determini
-
-*NOTE:* If you need *differences* between past and present values (e.g. to redraw the dirty rectangles), then RDP offers a stateless alternative: use `bpeek` to instead find differences between present and future values. This works up to a small constant time, though can work longer if preceded by `bdelay` to recover stability.
-
-*NOTE:* Sirea and RDP will automatically remember values where necessary. No state is needed to combine signals with `bzip`, and use of `badjeqf` can help filter updates that would be identical in order to improve stability. If *memoization* is desired, you should either use [lazy Haskell techniques](http://hackage.haskell.org/package/MemoTrie-0.5) (at risk of space leak!) or use a dedicated state model.
-
-*NOTE:* State IS necessary if you want to model choking of updates, e.g. such that you see at most one update each second. Choking uses state to record the selected value. Animated state, such as *animated reactive term rewriting*, can model choking quite elegantly. *Not that choking is elegant.* Be cautious about choking; it can mask feedback issues without solving them (often better to take the hit, *find* the problem, solve it by design).
-
 
 
 ## Modeling Control Flow and Workflow
