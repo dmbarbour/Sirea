@@ -32,15 +32,13 @@ Most programmers, even those who rarely venture beyond imperative abstractions, 
 
 The spreadsheet analogy does suggest the question: *how does one display a cell whose value is a function?* 
 
-Many wonderful answers to that question have been developed in other projects, such as [naked objects](http://en.wikipedia.org/wiki/Naked_objects), and [tangible values](http://en.wikipedia.org/wiki/Naked_objects). A simplistic answer would be to just query the cell with a value `Print` and display whatever is returned (numbers, text, SVG, etc.). Alternatively, one might use a visitor pattern: pass a canvas-abstraction to the cell, then allow the cell to print itself (potentially even print some interactive widgets). These aren't new ideas, but I think RDP will make them safer and easier than other paradigms.
+Wonderful answers to that question have been developed in other projects, such as [naked objects](http://en.wikipedia.org/wiki/Naked_objects), and [tangible values](http://en.wikipedia.org/wiki/Naked_objects). A simplistic answer would be to just query the cell with a value `Print` and display whatever is returned (numbers, text, SVG, etc.). Alternatively, one might use a visitor pattern: pass a canvas-abstraction to the cell, then allow the cell to print itself (potentially even print some interactive widgets). RDP will express these abstractions more easily and effectively than the paradigms for which they were initially developed.
 
 However, I mean to emphasize the *reactive* and *dataflow* aspect of spreadsheets. 
 
-In a spreadsheet, you can twiddle expressions, and the updates "instantaneously" propagate to downstream clients of the cell. 
+RDP, like a spreadsheet, enables dataflow. But RDP is a *bidirectional* dataflow model. Every downstream client is also *pushing* values upstream: parameters. Those values are used in many ways: as database queries, to publish data, to register functions as services or plugins, control signals, and so on. The bidirectional flow makes RDP far more expressive, modular, extensible, and composable than traditional spreadsheets. 
 
-RDP, like a spreadsheet, enables dataflow. But RDP is a *bidirectional* dataflow model. Every downstream client is also *pushing* values upstream - function parameters. Those values are used in many ways: as database queries, to publish data, to register functions as services or plugins, control signals, and so on. The bidirectional flow makes RDP far more expressive, modular, extensible, and composable than traditional spreadsheets. 
-
-The *cost* of supporting bidirectional dataflow and effects on externals is that *RDP must abandon the illusion of "instantaneous" dataflow*. Dataflow takes time, especially when it involves a requests on external resources. RDP uses explicit, *logical* latency to support safe, consistent propagation and processing of values. It can take time for a change upstream to affect a downstream client, or for a change in a client to affect an upstream service. But it will be a very predictable amount of time.
+The *cost* of supporting bidirectional dataflow and effects on externals is *RDP must abandon the illusion of "instantaneous" dataflow*. Dataflow takes time, especially when it involves a requests on external resources, and that time is essential to dampen and understand any feedback properties. RDP uses explicit, *logical* latency to support safe, consistent propagation and processing of values. It can take time for a change upstream to affect a downstream client, or for a change in a client to affect an upstream service. But it will be a very predictable amount of time.
 
 An RDP-based spreadsheet would be a wonderful application of RDP: for teaching RDP, for live programming, and as a potential killer application in its own right. I have many ideas for making it happen (do I use a subset of Haskell for the cells? can I leverage wiki-like concepts and webservices? can I leverage OO prototypes and traits?). However, it must wait until Sirea is further along.
 
@@ -359,7 +357,7 @@ In RDP, the `|*|` operator introduces a behavior that can only be observed throu
 
 Here, developers can justifiably understand `buildImage` as an agent with a very specific duty. The same developer, in a different context, might understand `buildImage` as a pipeline. This flexibility is useful; which understanding serves best will depend on context. The same can be said of `displayImage`. Multi-agent systems work best when the agents do not name directly interact or name one another: this keeps agents disentangled, and provides developers much freedom to add, remove, or replace agents. However, multi-agent systems often interact indirectly through shared resources in an open system . In this case, `buildImage` and `displayImage` interact indirectly, through the filesystem.
 
-Sirea encourages the agent view at the higher level. The Sirea.AgentResource module simplifies breaking a complex application into one agent per task. A typical `SireaApp` might be a composite of toplevel agents.
+Sirea encourages the agent view at the higher level. The Sirea.AgentResource module simplifies breaking a complex application into one agent per task. A typical `SireaApp` might be considered a single agent or a composite of toplevel agents.
 
 ### Behavior Switching Networks
 
@@ -606,11 +604,11 @@ The process of adapting a resource typically involves introducing a thread (to p
 * *AgentResource* models resources as controlled by separate RDP apps
 * *DemandMonitor* pushes ad-hoc demand-tracking logics up into RDP
 
-Each of these is explained in an associated module. 
+Those are explained in detail in the associated modules. 
 
 Sirea 1.0 will include packages supporting the most commonly accessible resources - mouse, keyboard, graphics, web, state, filesystem, sound, time. Developers should (hopefully!) need to write adapters only for more domain specific or esoteric resources and services, and even then only for resources that nobody else has adapted effectively. But when those situations occur, the aforementioned features will keep it from being too onerous.
 
-Specific resources will be discussed in thier corresponding packages. However, a few broad idioms will be discussed here.
+Specific resources will be discussed in thier corresponding packages. However, a few broad resources and idioms will be discussed here.
 
 ### State
 
@@ -632,6 +630,8 @@ There are much more expressive rules systems available, e.g. based on term rewri
 
 An advantage of universally external state (besides orthogonal persistence) is the reduced competition or interference between state models. RDP behaviors can easily orchestrate many heterogeneous state resources, and developers may introduce new ones if those from **sirea-state** prove insufficient. 
 
+An important restriction on state in RDP is that state cannot hold onto dynamic behaviors. This restriction is valuable for security, resource management, and persistence. Sirea enforces this property via Haskell's type system. In a distributed system, this can be structurally enforced at serialization. To record a behavior statefully (e.g. for mobile agent abstractions), represent that behavior as code or data, then compile that code into the dynamic behavior.
+
 ### Demand Monitors
 
 Resources may be influenced by the set of active, concurrent demands. Thus, a simple, useful resource could respond to demands with the set of active, concurrent demands. This concept is called the **demand monitor**, and is of great practical value for RDP systems. Demand monitors and a few variants are among the few resources provided by **sirea-core**.
@@ -648,7 +648,7 @@ One variation of demand monitor is possibly the simplest useful resource: the **
         B (S p ()) (S p ())   -- receives activity
         B (S p ()) (S p Bool) -- monitors activity
 
-Demand monitors and activity monitors are typically composed into more complex behaviors to track demands and use of resources. Demand monitors are also useful as a volatile blackboard for communication between agents, or as a registry for publishing available services or plugins.
+Demand monitors and activity monitors are typically composed into more complex behaviors to track demands and use of resources. Demand monitors are also useful as a volatile blackboard for communication between agents, or as a registry for publishing available services or plugins (dynamic behaviors).
 
 Demand monitors have a severe weakness: a large set of demands will tend to be much less stable than any of the contributing signals. This is because an update to any constituent signal will require an update to the monitored signal. A suggested practice for demand monitors is to use many fine-grained demand monitors, one for each role or responsibility. Also, if possible, favor variations of demand monitors that narrow the set of responses (e.g. the activity monitor or a k-maximum monitor).
 
@@ -660,156 +660,55 @@ Demand driven resource management is naturally very robust: If a demand signal i
 
 RDP structurally enforces a property called *duration coupling*: for every behavior, the input signal has the same activity of the output signal (modulo delay). Basically, you only get a value while you're demanding one. Duration coupling ensures that, when demand is disrupted upstream, it is disrupted downstream after a very predictable latency. It also makes job control and shutdown very easy in RDP. An application is halted but cutting the initial demand signal, and this naturally propagates through the entire RDP behavior. 
 
-Demand driven resource management is sufficient for most cases. However, for long-term disruption tolerance of remote resources, relying on a demand signal will be inadequate. In those cases, one can manage resources statefully: manipulate state, and have a remote agent maintain demands on your behalf. Explicit code distribution is a possibility, here: push code for a behavior to the remote service, then a remote agent can compile and activate that behavior. 
+Demand driven resource management is sufficient for most cases, especially those relevant within a single process. 
 
-(*Note:* RDP's communication model is designed to adequately handle *short-term* disruption, i.e. communication brownouts. Anticipation provides a decent estimate of demands, and corrections can be made for state and many resources. Long-term disruption, however, must be explicitly modeled at least at a few network gateway behaviors.)
+Stateful resource management can still be expressed, if necessary: model a separate RDP agent to observe state and maintain the demands on behalf of the client. This might be necessary in a distributed system, for long-term disruption tolerance, possibly by a mobile agent abstraction (push code to the remote partition that can compile to an RDP behavior). As with any explicit resource management, discipline and design are necessary to use it safely.
 
-Effective resource management for open systems - even in the face of malign or buggy code - was among RDP's primary design criteria. RDP handles resource management more effectively than any other paradigm I'm familar with. (No need for messy timeouts or ephemeron tables.)
+RDP is designed to support resource management and sane partial failures in open distributed systems with buggy or malign services and clients. RDP has no need for global GC, ephemeron tables, or messy hand-written timeouts. 
 
 ### Resource Discovery
 
+RDP supports runtime discovery of resources via first-class dynamic behaviors. Discovery of resources will be achieved through an intermediate resource (e.g. broker, registry, matchmaker). By discovering and reactively utilizing available resources, RDP applications can adapt themselves for their environments. Rather than a static configuration, RDP applications can continue to adapt as the environments change over time. 
 
+Resources are always external to RDP behaviors. Consequently, RDP lacks an equivalent to the `new` expression often used in OOP - no `newIORef` or `newUnique`. (Use of `new` plays havoc with dynamic behaviors, orthogonal persistence, extensibility, and declarative properties.) Fortunately, simple resource discovery idioms can achieve the same purpose:
 
-### Agent Resources
+* compute stable unique locators for resources
+* locate resource in an abstract resource space
 
-### Providing Services
+A locator might involve URLs, session keys, domain values, and so on. The *stability* of the locator should be on the same order as the desired lifetime. The *abstract resource space* is a resource that can be navigated via arbitrary locators to find useful resources, generally in a default state.
 
+A tree-shaped resource space, where each subtree is a recursive resource space, is nearly ideal: 
 
-### Frameworks and Overlays
+* path names can be stabilized using meaningful domain values
+* can be securely partitioned; no path from child to parent
+* subtree-level operations feasible: reset, clone, splice
+* parent can easily observe and influence child resources
+* readily supports orthogonal persistence and versioning
 
-(reactive semantics, very nice, no IoC; a framework abstracts as a simple set of RDP behaviors).
+You're probably thinking, "hey, that's basically a filesystem!" And you're right. A filesystem metaphor to manage resources is *superior in every way* to use of `new`. The tree structure is discoverable, extensible, auditable, persistable, securable, composable, and suitable for declarative access. With a little discipline to ensure stability of schema and locators, the tree structure effectively supports live programming. The ability to audit and discover resources is useful for visual presentation, developer awareness, and debugging. 
 
+Sirea includes abstractions for resource discovery: *PCX* supports type-based resource discovery (via Data.Typeable) and a *ResourceSpace* uses strings for discovery. Users of Sirea, at least those not involved with developing resource adapters, should never need `new`.
 
+(*Note:* one may also provide resources or services. An agent becomes a service provider by publishing a dynamic behavior and metadata to a shared registry, such that potential clients can discover it.)
 
-* _Ad-Hoc Workflow and Control flow._ With state, RDP can model arbitrary workflow or control flow systems. RDP's ability to express ad-hoc queries and wait for ad-hoc conditions makes RDP very expressive in this role, far more so than most native workflow and control flow systems. Further, RDP will retain its fringe benefits such as persistence, extensibility, and speculative evaluation. Of course, RDP is unlikely to be as efficient as a compiled control flow system. But for control flows, RDP systems should rarely need more than a shallow model at a border between systems. And for workflow, RDP's flexibility, anticipation, and persistence will generally prove more valuable than efficiency.
+### First-Class Frameworks and Overlay Networks
 
-* _First Class, Composable Frameworks._ The combination of reactive temporal semantics, open system, and dynamic behaviors makes it easy in RDP to represent ad-hoc frameworks in a first-class manner. There is no need for inversion of control, just continuous observation and influence. The frameworks are composable - a single RDP behavior can easily orchestrate several frameworks, continuously translating and transferring data between them. This feature should be very valuable for staged metaprogramming (e.g. modeling DSLs, interpreters) and for development and integration of architectures.
+RDP provides a feature I've never seen in another paradigm: effective support for first-class, composable *frameworks*. Leveraging first-class behaviors, bidirectional reactive dataflow, and support for effects, many systems that would require painful inversion of control and concurrent event managers in an imperative OOP model can be represented as straight behaviors in RDP. Since frameworks are just behaviors, multiple frameworks are easily composed and will have precise, predictable concurrency properties.
 
+Similarly, RDP is suitable for modeling first-class overlay networks: a single behavior can span many partitions and manage communication between them. By publishing a few services for external agents, these overlay networks can introduce ad-hoc patterns for communication. They can also perform many network-layer optimizations, such as caching or content-delivery.
 
+My intuition is that these features make RDP far more expressive than I have yet imagined or fathomed. At the moment, I only imagine to use frameworks for easy staged metaprogramming: to model compilers, service brokers, etc.
 
+### Ad-Hoc Control Flow and Workflow 
 
-RDP Laws and Properties
------------------------
+Programming with control flow is implicitly, and pervasively, stateful. To achieve scalability, developers redundantly duplicate the implicit state to make it explicit, e.g. with Command Patterns and queues and Object Relational Mappers. Implicit state in control flow models seems to be a source of many scalability woes. 
 
-*Reactive Demand* Programming is so named because it supports composition and precise control of long-lived, time-varying, concurrent demand signals. Demands in RDP are *authoritative* because RDP is designed for object capability security. RDP is a *bidirectional* reactive paradigm: one can easily demand information from sensors or state resources, and one may analyze and manipulate that information to form more demands. Resources in RDP are *demand-driven*. 
+RDP is not implicitly stateful. RDP is not a control-flow paradigm. 
 
-At any given instant, a resource is influenced by the *set* of active demands that reach it. Processing demand signals as a *set* at any given instant - i.e. such that ordering, replication, and history of the signals is irrelevant - forms the foundation for RDP's declarative effects. *Expressions in RDP are spatially commutative and idempotent ultimately because demand signals are treated that way by resources.*
+However, RDP systems can model explicit state resources, and RDP systems easily react to changes in state by causing more changes in state. With some cooperative discipline and design, developers can model any control flow component: mailboxes, stacks, queues, data streaming, promise pipelining, barriers, etc.. RDP is very expressive for modeling ad-hoc control flow systems. Further, many of RDP's fringe benefits survive the control-flow abstraction: orthogonal persistence, precise logical concurrency, speculative evaluation and anticipation, ability to audit and debug control state in live systems. Finally, control flow will be at higher levels, since the underlying RDP can handle a lot of drudge-work for data gathering, data synchronization, job control, and low-level resource management.
 
+With a little abstraction, RDP could prove to be an expressive and pleasant foundation for a hybrid declarative-imperative programming style. The flexibility and fring benefits are especially valuable for [workflows](http://en.wikipedia.org/wiki/Workflow), which are essentially problem-specific, persistent control flows.
 
+But I strongly encourage developers to favor declarative designs. Imperative abstraction invites imperative issues. Control flow should be a technique approached with second thoughts and reluctance. Simpler declarative effects will often suffice.
 
-The trinity of composition is operators, operands, and properties. The operators are uniform: can be applied to every operand. The operands are closed: each composite is in the set of operands. The properties are inductive: they can be computed with knowledge of the operator and the properties of each operand. (*Note:* Properties that are *invariant* over the composition operators are trivially compositional.)
-
-Composition seems essential for large scale software development. Consider:
-
-* In large systems developers cannot afford to study the definition of every component. In open systems, they cannot look even if they wanted to. It becomes essential to reason based on the few properties that are easy to compute without knowledge of the definitions, i.e. compositional properties. 
-* Developers of large scale systems cannot afford to learn new ontologies for every component they wish to introduce. Further, large ontologies become annoying: it easily becomes expensive to add the translation glue between components and subtly heterogeneous data models. It is preferable if there are just a few standard operators for introducing components - i.e. composition operators. 
-* Large scale software is ultimately about systems and subsystems. Systems have no clear edges, not clear bottom, no clear top. Every subsystem is another system. I.e. systems are closed under composition. 
-
-Reactive Demand Programming was developed while prioritizing compositional properties as a first principle. 
-
-Of course, RDP developers still benefit from knowledge of implementation details. And whitebox utilities might still support dependent types, rich logics, contracts and the like (though Sirea doesn't provide any of that). But compositional properties will lift much burden from developers, and will enable the whitebox systems to focus more on problem domains and data models, and somewhat less on race conditions or resource management.
-
-(todo: decide how to format and describe properties listed in System.Behavior, plus duration coupling)
-
-_an RDP application is a complex symphony of signals and declarative effects orchestrated in space and time_
-
-_an RDP application is one big, active declaration that can be modified at any time_ (Metacircular, dynamic, reactive behaviors = live)
-
-
-
-
-Idioms and Patterns
-===================
-
-(old material. Will move most of this into Resources section, with heavy modifications.)
-
-Between *declarative effects* and RDP's own unique properties, developers will need new idioms for problems that might have been trivial in imperative code. Consider imperative state manipulation: `(x := x + 1)`. If we tried to hold this effect over continuous time, over one millisecond say, would it mean we increment once? or a million times for a million nanoseconds? or infinite times? A developer would instead need to express an effect of the form `(x := x + 1 with 60ms cooldown)` to account for how an effect applies over time. (See the section on _Declarative State Models for RDP_, below.)
-
-OTOH, many RDP features or patterns would be difficult to express in imperative code. RDP is not *less* expressive than imperative, but is *differently* expressive.
-
-Effects in RDP are controlled by input signals to effectful behaviors. These signals are called *demands* in a similar sense that messages intended to cause effects are often called *commands*. But where commands are processed one at a time, demands that hold at any given time are processed simultaneously - as a set. Consider the earlier example for controlling a camera:
-
-    bcamctl   :: B (S p PanTiltZoom) (S p ())
-
-This behavior receives a PanTiltZoom signal that might control actuator efforts or provide a carrot for end-goal positions (depending on how PanTiltZoom is specified). But the same behavior could be invoked from multiple locations in an RDP behavior (possibly from multiple applications), resulting in simultaneous PanTiltZoom demands on the actuators. In many cases those demands will be compatible such as `pan left` and `zoom in` simultaneously. 
-
-However, RDP provides no guarantee that demands are conflict free. It is possible to express systems that demand `pan left` and `pan right` on the same camera at the same time. Similar can be expressed in message passing systems, of course, and an implicit, indeterministic race would determine which command wins. For RDP, there are no implicit races. There is only a set of demands. Resolution must be continuous, commutative, idempotent - declarative. *But resolution may still be arbitrary.* For example:
-
-* take no action, report conflicts via another behavior
-* favor inertia, whichever direction the camera is already moving
-* combine as new behavior, e.g. pan left, pan right, repeat
-* favor left arbitrarily because it is lower in lexicographic order
-
-The holistic, set-based view of simultaneous demands will also force developers to confront the issue of conflicts early in their designs. Developers can aim to avoid conflicts before they happen or make them easier to resolve - e.g. control distribution of the `bcamctl` behavior, or express camera commands in terms of weighted constraints. Between avoiding conflicts early in design and resolving them with holistic intelligence (able to resolve many concurrent demands at once), RDP *should* more readily support open, pluggable, extensible programs than many other paradigms - though I've yet to verify this property.
-
-### Declarative State
-
-* reactive state transition:
-    * state is integer
-    * signals contribute possible transitions
-    * transition whenever opportunity exists
-
-It's also easy to augment or create variations on existing models, though this tends to trade simplicity for other features (often a dubious tradeoff, but sometimes worth making). For example, animated reactive term rewriting might be modified with built in rules (for performance), delayed rewrites (easier scheduling), key-based ownership types (for security, control), and variation to terms rewriting (such as graph rewriting). Implicit computation of (max debt, new debt) attributes would also be nice.
-
-Sirea shall provide a few simple state models, including the three described above, complete with *persistence by default*. But none have been implemented yet. And they won't be part of the core package.
-
-State models may be non-deterministic, but it is highly preferable (for debugging, regression tests, anticipation, replication for fault tolerance, etc.) that they are deterministic. For state transition, when given two transitions the process could favor the lower integer. For term rewriting, the process could impose a simple arbitrary ordering on rules (assuming they aren't opaque).
-
-An interesting possibility is to seek *stability without stateful semantics*. Stateful semantics refers to systematically preserving information from past into present time. Stability doesn't require information be preserved, only that avoid changing unnecessarily - something that can *naturally* be achieved by use of non-deterministic semantics. Stability is suitable in cases where you don't strongly care *what* the information is so long as it's consistent and stable - potential domains would include UI layout, live dependency injection, or a path planning system. Constraint logic programming and many machine learning techniques offer [effective approaches](http://awelonblue.wordpress.com/2012/03/14/stability-without-state/) to stability.
-
-Stateless stability can help alleviate need for real state, and thus simplify reasoning about systems (especially during partial failure and recover).
-
-
-## Modeling Control Flow and Workflow
-
-Other than integration with control flow systems (which is a significant concern), there are not very many problems that are well aligned with control flow paradigms. However, the broad and flexible notions of [workflow](http://en.wikipedia.org/wiki/Workflow) does cover useful ground. 
-
-Programming with control flow is implicitly, and pervasively, stateful. The state includes control pointers, stacks, continuations, event queues, and mailboxes. The more sophisticated control flow paradigms, such as join calculus, introduce more sophisticated control state, such as barriers. Workflows similarly use a great deal of state, barriers, and similar. 
-
-Programmers working in control flow paradigms rarely think about implicit state. Out of sight is out of mind. On occasion, however, they are confronted with concerns for persistence, runtime upgrade, partial failure, recovery, unreliable communications, concurrency, job control, resource management, visualization, debugging, and extension. To address these concerns, programmers must often make explicit the implicit, e.g. with command patterns, transactions, saving workflow state to a database. External state is both easy to persist and easy to visualize with independent programs.
-
-Reactive Demand Programming does not provide implicit state. But external state can be utilized, and RDP does enable an agent to wait on ad-hoc conditions. By using state to model propagation of control and the conditions of resources, and by modeling agents as waiting on ad-hoc conditions for state, RDP can flexibly, extensibly, persistently, and robustly model any control flow or workflow systems. 
-
-Of course, it is unlikely that performance will be competitive with a native control flow system. 
-
-But if the model is shallow (to integrate with a control flow system) then performance should not be a significant issue. And for workflow (or control flow at distributed scales), the flexibility, extensibility, and robustness are generally more valuable than performance under ideal conditions. RDP has potential to be competitive with control flow and workflow systems even in their own domain. 
-
-
-### Bridging Paradigms
-
-Animated reactive term rewriting is incredibly expressive. Expressing a Turing machine with reactive term rewriting is no challenge at all. A few well-chosen built in types and rules could even allow highly competitive performance (i.e. via runtime compilation of terms, simple namespaces within a term, perhaps leveraging OpenCL).
-
-If you are unfamiliar with term rewrite systems, look up Maude and broaden your horizons. The *reactive* variation on term rewriting flips when rules and terms are provided (and who provides them). The *animated* variation enforces incremental processing and makes the timing of state updates deterministic and declarative. But *animated reactive* term rewriting has the same amazing expressiveness as the traditional variation.
-
-If it were just modifying state locally, that would be sufficient for a closed process. 
-
-But shared state can also serve as a powerful basis for IO and side-effects in open systems. 
-
-Shared state is often discouraged in imperative programming because of many issues with concurrency. Developers must reason about *permutations* of observation and influence. But *declarative state*, especially for RDP, is much nicer: commutative, idempotent combinations; holistic processing of updates; precise logical timing; never a missed update; ad-hoc conditions on any combination of observable states. 
-
-Shared state can support a [blackboard metaphor](http://en.wikipedia.org/wiki/Blackboard_system). 
-
-Agents use signals to write a task into shared state representing the board, e.g. "print this document". A printer agent could then modify the request to claim it, e.g. adding "agent Orion has accepted this task". Orion would then print the document, and update the term with status information as it runs. When finished, the original writer can remove the term. 
-
-A blackboard allows rich and robust interaction, far more so than procedure calls or messaging:
-
-* no blind wait; easily observe intermediate and incremental status
-* modify request: pause, abort, prioritize; simple job control
-* loose coupling, ambient programming; no direct reference to agent
-* open extensibility, plugins; easily introduce new agents to board
-* offline, disruption tolerant; agents available at different times
-* collaborative: agents to split big tasks, combine results
-
-For security and performance reasons, it would be a bad idea to have one big blackboard for the world. Instead we would use lots of small blackboards, and a few agents to selectively synchronize between them when conditions are right (observing one board, writing to another).
-
-Between modeling machines with animated state and open interaction between agents, any ad-hoc control flow or [workflow pattern](http://en.wikipedia.org/wiki/Workflow_patterns) can be expressed. And will benefit from the robust, resilient nature of RDP.
-
-But RDP is ultimately about open, declarative orchestration of *stateful* systems - sensors, actuators, UI, and databases. Use of external state is often essential in RDP architectures and design patterns.
-
-*NOTE:* the notion of logically deterministic timeouts initially struck me as terribly odd, as though counter to their purpose. But timeouts still serve a valuable role when modeling incremental computations in shared state, e.g. computing a better move in a game. And deterministic timeouts makes for reproducible errors, easy maintenance, and better reasoning about timing.
-
-### MISCELLANEOUS
-
-* For distribution. State models can be created that are suitable for distribution and replication. DHTs, LDAP, and content-addressed networks are possibilities. (Distributed state models? Cloud Types?)
-* For live programming. The "main" behavior can be modified without disturbing state. An RDP application is one big, active declaration that can be modified at any time. 
 

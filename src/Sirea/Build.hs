@@ -18,13 +18,7 @@
 -- the input signal (S P0 ()) to active at current wall-clock time.
 -- Stability is several seconds, increased incrementally by later 
 -- step operations. Stopper respects stability, so it takes seconds
--- to halt a SireaApp in that manner. For precise shutdown use state 
--- and dynamic behavior to model halted, paused, disabled behavior 
--- for the application as a whole.
---
--- It is recommended that Sirea applications be designed resilient
--- against crash, power loss, or abrupt killing of the whole Haskell 
--- process. This requires attention to use of state.
+-- to halt a SireaApp in that manner. 
 --
 module Sirea.Build
     ( buildSireaApp
@@ -180,9 +174,9 @@ beginApp cw rfSD lu =
            let tStable = tNow `addTime` dtStability in
            let su = SigUp { su_state = Just (s_always (), tStart)
                           , su_stable = Just tStable } in
-           let nextStep = maintainApp tc0 gs rfSD lu tStable in
+           let nextStep = maintainApp cw tc0 gs rfSD lu tStable in
            tStart `seq`
-           setStartupTime cp0 tStart >>
+           setStartTime cp0 tStart >>
            ln_update lu su >> -- activation!
            schedule dtStep (addTCRecv tc0 nextStep)
 
@@ -197,20 +191,34 @@ schedule dt op = assert (usec > 0) $ void $
 -- active signal on a regular basis; performed within main thread.
 -- At any given time, one maintenance operation is either queued in
 -- the main thread or delayed by a 'schedule' thread.
-maintainApp :: TC -> GobStopper -> IORef StopData -> LnkUp () -> T -> IO ()
-maintainApp tc0 gs rfSD lu tStable =
+maintainApp :: PCX w -> TC -> GobStopper -> IORef StopData -> LnkUp () -> T -> IO ()
+maintainApp cw tc0 gs rfSD lu tStable =
     readIORef rfSD >>= \ sd ->
     if shouldStop sd 
-      then let su = SigUp { su_state = Just (s_never, tStable)
+      then -- SHUTDOWN APPLICATION
+           let su = SigUp { su_state = Just (s_never, tStable)
                           , su_stable = Nothing } in
            ln_update lu su >> -- indicate signal inactive in future.
            schedule dtStability (addTCRecv tc0 (shutdownEvent tc0 gs rfSD))
       else getTime >>= \ tNow ->
-           let tStable' = tNow `addTime` dtStability in
-           let su = SigUp { su_state = Nothing, su_stable = Just tStable' } in
-           let nextStep = maintainApp tc0 gs rfSD lu tStable' in
-           ln_update lu su >>
-           schedule dtStep (addTCRecv tc0 nextStep)
+           if (tNow > (tStable `addTime` dtRestart))
+                then -- RESTART APPLICATION (halt and restore activity)
+                    let tRestart = tNow `addTime` dtStep in
+                    let tStable' = tNow `addTime` dtStability in
+                    let sig = s_switch s_never tRestart (s_always ()) in
+                    let su = SigUp { su_state = Just (sig, tStable)
+                                   , su_stable = Just tStable' } in
+                    let nextStep = maintainApp cw tc0 gs rfSD lu tStable' in
+                    tRestart `seq` 
+                    setStartTime (findInPCX cw) tRestart >>
+                    ln_update lu su >>
+                    schedule dtStep (addTCRecv tc0 nextStep)
+                else -- NORMAL MAINTENANCE 
+                    let tStable' = tNow `addTime` dtStability in
+                    let su = SigUp { su_state = Nothing, su_stable = Just tStable' } in
+                    let nextStep = maintainApp cw tc0 gs rfSD lu tStable' in
+                    ln_update lu su >>
+                    schedule dtStep (addTCRecv tc0 nextStep)
 
 -- this is the last phase of shutdown - actually stopping threads
 -- and eventually calling the Stopper event for the main thread.
@@ -221,6 +229,7 @@ shutdownEvent tc0 gs rfSD = runGobStopper gs finiStop
 
 -- Tuning parameters for the stability maintenance tasks:
 --
+--   dtRestart   : how long frozen to cause restart
 --   dtStability : how far ahead to stabilize
 --   dtStep      : period between stability updates
 --
@@ -228,7 +237,8 @@ shutdownEvent tc0 gs rfSD = runGobStopper gs finiStop
 -- `btouch` and similar structures that compute based on stability.
 -- These values also can have an impact on idling overheads.
 --
-dtStability, dtStep :: DT
+dtRestart, dtStability, dtStep :: DT
+dtRestart   = 1.20  -- how long a pause to cause a restart
 dtStability = 0.30  -- stability of main signal (how long to halt)
 dtStep      = 0.06  -- periodic event to increase stability
 
@@ -271,7 +281,6 @@ basicSireaAppLoop rfContinue stepper =
                  addStepperEvent stepper (putMVar mvWait ()) >>
                  takeMVar mvWait 
           loop = basicSireaAppLoop rfContinue stepper 
-    
 
 -- | bUnsafeExit - used with runSireaApp or beginSireaApp; effect is
 -- killThread on the main thread after signal becomes active. This 
@@ -307,25 +316,35 @@ instance Typeable ExitR where
 instance Resource ExitR where
     locateResource _ = liftM ExitR $ newIORef False
 
--- | bStartTime - obtain start time of the RDP application. This can 
--- be useful to model volatile state, to model actions relative to
--- startup times, and for other tasks.
+-- | bStartTime - obtain logical start time of current contiguous
+-- period of activity. Usually, this corresponds to the application
+-- start time, but if any long pause is detected in the main loop,
+-- Sirea will "restart" the application by setting the main signal
+-- to inactive for a period of time. In that case, the start time 
+-- will change.
 --
--- NOTE: this does not account for stop, sleep, or hibernate. If the
--- goal is robust behavior after disruption, a more robust mechanism
--- is required.
+-- Use cases for start time: naming log files, special handling of 
+-- continuity-sensitive resources (e.g. volatile state).
+--
 bStartTime :: BCX w (S P0 ()) (S P0 T)
 bStartTime = unsafeLinkBCX $ \ cw -> 
-    return . (ln_lumap (mklu cw))
-    where mklu cw lu =
-            let cp0 = findInPCX cw :: PCX P0 in
-            let rfST = rfStartTime $ findInPCX cp0 in
-            let touch' = ln_touch lu in
-            let update' su = 
-                    readIORef rfST >>= \ tStart ->
-                    let su' = su_fmap (s_const tStart) su in
-                    ln_update lu su'
-            in LnkUp { ln_touch = touch', ln_update = update' }
+    let cp0 = findInPCX cw :: PCX P0 in
+    let rfST = rfStartTime $ findInPCX cp0 in
+    return . naivelyReportValue rfST
+
+-- naivelyReportValue is relying on the fact that the change in
+-- value of the reference is always accompanied by a change in the
+-- signal due to the toplevel. It isn't useful except for start and
+-- restart times. 
+naivelyReportValue :: IORef v ->  Lnk (S p v) -> Lnk (S p ())
+naivelyReportValue _ LnkDead = LnkDead
+naivelyReportValue rf (LnkSig lu) = (LnkSig lu')
+    where lu' = LnkUp { ln_touch = touch', ln_update = update' }
+          touch' = ln_touch lu
+          update' su = 
+            readIORef rf >>= \ v ->
+            let su' = su_fmap (s_const v) su in
+            ln_update lu su'
 
 newtype StartTime = StartTime { rfStartTime :: IORef T }
 instance Typeable StartTime where
@@ -336,9 +355,9 @@ instance Resource StartTime where
         where trf = newIORef t0
               t0  = timeFromDays 0
 
--- sets the startup time for one SireaApp.
-setStartupTime :: PCX P0 -> T -> IO () 
-setStartupTime cp0 t = writeIORef (rfStartTime $ findInPCX cp0) t
+-- sets the start time for one SireaApp.
+setStartTime :: PCX P0 -> T -> IO () 
+setStartTime cp0 t = writeIORef (rfStartTime $ findInPCX cp0) t
 
 
 
