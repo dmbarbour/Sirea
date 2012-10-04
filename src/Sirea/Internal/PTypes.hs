@@ -6,10 +6,12 @@ module Sirea.Internal.PTypes
     , runTCStep
     , addTCRecv, addTCEvent
     , addTCWork, addTCSend
+    , getTCTime
     , tcToStepper
     ) where
 
 import Sirea.PCX
+import Sirea.Time
 import Data.Typeable
 import Data.IORef
 import Control.Applicative
@@ -72,6 +74,7 @@ data Stopper = Stopper
 --    tc_recv :: either event or work; atomic
 --    tc_work :: phased tasks, repeats until empty; not atomic
 --    tc_send :: tasks to perform at end of round; not atomic
+--    tc_time :: (convenience) time of the step, computed at most once per step. 
 -- These are not heavily optimized; they don't need to be, since
 -- there are a bounded number of tasks in any queue at once, and
 -- received operations are pre-grouped in batches.
@@ -80,6 +83,7 @@ data TC = TC
     , tc_recv :: IORef (Either Event Work)
     , tc_work :: IORef (Maybe Work)
     , tc_send :: IORef Work
+    , tc_time :: IORef (Maybe T)
     }
 type Event = IO ()
 type Work = IO ()
@@ -89,6 +93,7 @@ newTC = TC <$> newIORef False
            <*> newIORef (Left (return ()))
            <*> newIORef Nothing
            <*> newIORef (return ())
+           <*> newIORef Nothing
 
 instance Typeable TC where
     typeOf _ = mkTyConApp tycTC []
@@ -111,7 +116,7 @@ tcToStepper tc = Stepper
  
 runTCStep :: TC -> IO ()
 runTCStep tc = mask_ $
-    runTCWork (tc_work tc) >>
+    writeIORef (tc_time tc) Nothing >> -- reset time
     runTCRecv (tc_recv tc) >>
     runTCWork (tc_work tc) >>
     runTCSend (tc_send tc)
@@ -126,7 +131,7 @@ runTCRecv rfRecv =
           performWork work = work
 
 -- TCWork will execute multiple phases.
--- Usually there is only one phase.
+-- Usually, there is only one phase.
 runTCWork :: IORef (Maybe Work) -> IO ()
 runTCWork rfw = 
     readIORef rfw >>= \ mbWork ->
@@ -168,6 +173,19 @@ addTCWork tc newWork = modifyIORef (tc_work tc) addWork
 addTCSend :: TC -> Work -> IO ()
 addTCSend tc newWork = modifyIORef (tc_send tc) addWork
     where addWork oldWork = (oldWork >> newWork)
+
+-- TODO: Consider tweaking Sirea to tolerate leap seconds
+-- and validate that time is running forward.
+getTCTime :: TC -> IO T
+getTCTime tc =
+    let rf = tc_time tc in
+    readIORef rf >>= \ mbT ->
+    case mbT of
+        Just tm -> return tm
+        Nothing ->
+            getTime >>= \ tm ->
+            writeIORef rf (Just tm) >>
+            return tm
 
 
 -- TO CONSIDER:

@@ -53,6 +53,8 @@ class ( Category b
       ) => Behavior b
 
 -- | bfwd is just another name for Control.Category.id.
+--     f >>> bfwd = f
+--     bfwd >>> f = f
 bfwd :: (Category b) => b x x
 bfwd = id
 
@@ -203,16 +205,12 @@ bstratf runF = bfmap (runF . fmap return) >>> bstrat
 --     (&&&) - create and define multiple pipelines at once
 --     bvoid - branch behavior just for side-effects, drop result
 --
--- Various Laws or Properties:
+-- Various Laws or Properties (assuming valid RDP operands):
 --
 -- Factor First: bfirst f >>> bfirst g = bfirst (f >>> g)
 -- Spatial Idempotence: bdup >>> (f *** f) = f >>> bdup
---     Lemma: bvoid f >>> bvoid f = bvoid f
---     Lemma: f |*| f = f
 -- Spatial Commutativity: bfirst f >>> bsecond g = bsecond g >>> bfirst f
 --     Lemma: (f *** g) >>> (f' *** g') = (f >>> f') *** (g >>> g')
---     Lemma: bvoid f >>> bvoid g = bvoid g >>> bvoid f
---     Lemma: f |*| g = g |*| f
 -- Associative Identity (Product, Left): bassoclp >>> bassocrp = id
 -- Associative Identity (Product, Right): bassocrp >>> bassoclp = id
 -- Commutative Identity (Product): bswap >>> bswap = id
@@ -257,13 +255,17 @@ bvoid f = bdup >>> bfirst f >>> bsnd
 -- Agents may provide services to other agents by publishing dynamic
 -- behaviors to a shared space where other agents can discover them.
 --
--- The |*| operator makes treating behaviors as agents convenient.
--- It is associative, commutative, and formally idempotent, though
--- the Haskell optimizer won't take advantage of idempotence. 
+-- The |*| operator makes treating behaviors as agents (or threads,
+-- or processes) very convenient:
 --
 --   > main = runSireaApp $ alice |*| bob |*| charlie |*| dana
 --
--- (One may also treat operands as concurrent threads or processes.)
+-- The operator is commutative, associative, and idempotent, though
+-- these properties are not utilized by any optimizer at the moment.
+-- The definition is very simple:
+--
+--   > f |*| g = bvoid f >>> bvoid g
+--
 (|*|) :: (BProd b) => b x y -> b x z -> b x x
 (|*|) f g = bvoid f >>> bvoid g
 
@@ -719,6 +721,7 @@ bevalbOrElse = bevalOrElse
                 (bright f) . (bleft g) = (bleft g) . (bright f)
 "bsecond.bfirst" forall f g .
                 (bsecond f) . (bfirst g) = (bfirst g) . (bsecond f)
+
  #-}
 
 

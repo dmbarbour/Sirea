@@ -282,6 +282,10 @@ ob_deliver ob dst =
 -- adds one to the count. Wait either decrements count or adds one
 -- event to the list.
 --
+-- Sirea is designed to be wait-free modulo the batch-level pushback
+-- buffers between threads. The semaphore is used to model pushback. 
+-- Semaphore should not be used by any Sirea code outside this file. 
+--
 type Semaphore = IORef (Either Int [Event])
 
 -- | create a new semaphore with a given initial count

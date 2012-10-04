@@ -59,10 +59,6 @@ import Sirea.Behavior
 import Sirea.B
 import Sirea.Link
 import Sirea.Time
-
--- I don't want DemandMonitor implemented with any special internals
--- but I do want to share the internals of DemandMonitor with ORef
--- for simple resource adapters. So the internals are separated:
 import Sirea.Internal.DemandMonitorData 
 
 -- | Create a list-based demand monitor in the IO monad. The list

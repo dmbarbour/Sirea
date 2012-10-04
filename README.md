@@ -36,13 +36,13 @@ Wonderful answers to that question have been developed in other projects, such a
 
 However, I mean to emphasize the *reactive* and *dataflow* aspect of spreadsheets. 
 
-RDP, like a spreadsheet, enables dataflow. But RDP is a *bidirectional* dataflow model. Every downstream client is also *pushing* values upstream: parameters. Those values are used in many ways: as database queries, to publish data, to register functions as services or plugins, control signals, and so on. The bidirectional flow makes RDP far more expressive, modular, extensible, and composable than traditional spreadsheets. 
+RDP, like a spreadsheet, enables dataflow. But RDP is a *bidirectional* dataflow model. In addition to receiving values, every downstream client is also *pushing* values upstream: parameters. Those values are used in many ways: as database queries, as control signals, to publish data, and to register services or plugins. The bidirectional flow makes RDP far more expressive, modular, extensible, and composable than traditional spreadsheets.
 
-The *cost* of supporting bidirectional dataflow and effects on externals is *RDP must abandon the illusion of "instantaneous" dataflow*. Dataflow takes time, especially when it involves a requests on external resources, and that time is essential to dampen and understand any feedback properties. RDP uses explicit, *logical* latency to support safe, consistent propagation and processing of values. It can take time for a change upstream to affect a downstream client, or for a change in a client to affect an upstream service. But it will be a very predictable amount of time.
+The *cost* of supporting bidirectional dataflow and effects on externals is *RDP must abandon the illusion of "instantaneous" dataflow*. Dataflow takes time, especially when it involves a requests on external resources. Time is essential to dampen and understand any feedback properties. RDP uses explicit, *logical* latency to support safe, consistent propagation and processing of values. It can take time for a change upstream to affect a downstream client, or for a change in a client to affect an upstream service. But it will be a very predictable amount of time.
 
-An RDP-based spreadsheet would be a wonderful application of RDP: for teaching RDP, for live programming, and as a potential killer application in its own right. I have many ideas for making it happen (do I use a subset of Haskell for the cells? can I leverage wiki-like concepts and webservices? can I leverage OO prototypes and traits?). However, it must wait until Sirea is further along.
+An RDP-based spreadsheet would be a wonderful application of RDP: for teaching RDP, for live programming, and as a potential killer application in its own right. I have many ideas for making it happen (do I use a subset of Haskell for the functions? can I leverage wiki-like concepts and webservices? can I leverage OO prototypes and traits for richly typed cells?). However, it must wait until Sirea is further along.
 
-RDP does not use a spreadsheet nomenclature. But there are names for the corresponding elements in RDP:
+RDP does not use a spreadsheet nomenclature. But there are names for corresponding elements in RDP:
 
 * Time-varying parameters and responses are formally modeled as **signals**.
 * The effectful "functions" of RDP are called **behaviors**. 
@@ -92,9 +92,11 @@ The weaknesses of Sirea RDP belong more to Sirea than to RDP.
 
 * Developers must use a point-free style for RDP behaviors in Sirea. This a very rewarding style, and the full power of Haskell functions is still available for static information (clean, staged programming). But newcomers seem to find point-free intimidating. While I'd like to answer this concern with a higher layer language that can compile to behaviors, it is low priority for Sirea.
 
-* Sirea does not track resource usage for safety. It is easy to express open feedback loops, analogous to placing microphone near its amplifier. There are idioms to avoid such loops (e.g. for blackboard metaphor, don't put replies onto same board as requests), and there are idioms to dampen loops (e.g. `bdelay` or clever use of `badjeqf`). But Sirea provides no static warnings. Developers must learn the idioms and use discipline. (Though, a few of Sirea's constructs will dynamically detect local cycles and forcibly dampen them, emitting a runtime warning.)
+* Sirea lacks static support for reasoning about open feedback loops, and uses a very simplistic damping model. Consequently, developers must be disciplined about feedback for demand monitors, shared state, and similar.
 
 * RDP is designed for [object capability model](http://en.wikipedia.org/wiki/Object-capability_model) systems, using dynamic behaviors as runtime composable capabilities. (This is reflected, for example, in having fine-grained capabilities for many resources.) Sirea, however, is designed to be convenient in context of Haskell's module and type systems, and uses types to obtain ambient resources. I am not entirely comfortable with this tradeoff; it isn't necessary if one reifies the module and linking system (e.g. service registry and matchmaker). 
+
+* Sensitive to OS clock; rapid shifts in the OS estimate of time can cause Sirea to fail. It is best to amortize a time-shift by making the clock run faster or slower for some duration. Never run backwards. A forward jump more than about a second will be modeled as a restart (as if someone had hibernated the app). Sirea uses an simplistic representation of UTC time; it is not sensitive to time-zone shifts, but might fail for leap-seconds if the OS represents them.
 
 
 Reactive Demand Programming (in Sirea)

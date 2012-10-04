@@ -200,7 +200,7 @@ maintainApp cw tc0 gs rfSD lu tStable =
                           , su_stable = Nothing } in
            ln_update lu su >> -- indicate signal inactive in future.
            schedule dtStability (addTCRecv tc0 (shutdownEvent tc0 gs rfSD))
-      else getTime >>= \ tNow ->
+      else getTCTime tc0 >>= \ tNow -> 
            if (tNow > (tStable `addTime` dtRestart))
                 then -- RESTART APPLICATION (halt and restore activity)
                     let tRestart = tNow `addTime` dtStep in
@@ -215,6 +215,7 @@ maintainApp cw tc0 gs rfSD lu tStable =
                     schedule dtStep (addTCRecv tc0 nextStep)
                 else -- NORMAL MAINTENANCE 
                     let tStable' = tNow `addTime` dtStability in
+                    assert (tStable' > tStable) $ -- right now, can't handle running clock quickly backwards
                     let su = SigUp { su_state = Nothing, su_stable = Just tStable' } in
                     let nextStep = maintainApp cw tc0 gs rfSD lu tStable' in
                     ln_update lu su >>
@@ -325,6 +326,10 @@ instance Resource ExitR where
 --
 -- Use cases for start time: naming log files, special handling of 
 -- continuity-sensitive resources (e.g. volatile state).
+--
+-- Bad Idea: scheduling relative to application startup. Just don't.
+-- Always favor a design that is robust to pausing or restarting the
+-- application, which means scheduling based on state or Clock.
 --
 bStartTime :: BCX w (S P0 ()) (S P0 T)
 bStartTime = unsafeLinkBCX $ \ cw -> 

@@ -57,7 +57,6 @@ import Data.Typeable
 import Data.IORef
 import Control.Concurrent (forkIO)
 import GHC.Conc (labelThread)
-import Control.Applicative
 
 -- | Cross between partitions. Note that this behavior requires the
 -- `b` class itself to encapsulate knowledge of how the partitions
@@ -108,41 +107,22 @@ class (Typeable p) => Partition p where
 -- cause any stepper event to trigger.
 --
 -- Note: Worker threads can be useful to handle synchronous IO, such
--- as with filesystem or socket. In general, however, you'll want to
--- model a rendezvous or semaphore - i.e. the worker thread halts if
--- the partition thread isn't keeping up. (This helps control memory
--- and processing costs.)
+-- as with filesystem or sockets. But if you use this technique, use
+-- bounded buffers to constrain use of memory.
 onNextStep :: (Partition p) => PCX p -> IO () -> IO ()
 onNextStep = addTCRecv . findInPCX
 
 -- | getStepTime will obtain the real (wall clock) time associated
 -- with the most recent step. The value is actually computed on the
 -- first request in each step, then cleared at the start of the next
--- step. But all requests within a given step will observe the same
--- value. This is useful for many RDP behaviors.
+-- step. All requests within a given step will observe a consistent
+-- value, which simplifies reasoning. And getting time is expensive,
+-- so this can be much cheaper.
 --
 -- Note: getStepTime is not mt-safe. It must only be used from the
 -- associated partition thread that runs stepper events.
 getStepTime :: (Partition p) => PCX p -> IO T
-getStepTime cp =
-    let tc = findInPCX cp in
-    let rfSTC = (getStepTimeCache . findInPCX) cp in
-    readIORef rfSTC >>= \ mbT ->
-    case mbT of
-        Just tm -> return tm
-        Nothing ->
-            getTime >>= \ tm ->
-            writeIORef rfSTC (Just tm) >>
-            addTCWork tc (writeIORef rfSTC Nothing) >>
-            (return $! tm)
-
-newtype StepTimeCache = StepTimeCache { getStepTimeCache :: IORef (Maybe T) }
-instance Typeable StepTimeCache where
-    typeOf _ = mkTyConApp tycSTC []
-        where tycSTC = mkTyCon3 "sirea-core" "Sirea.Partition.Internal" "StepTimeCache"
-instance Resource StepTimeCache where
-    locateResource _ = StepTimeCache <$> newIORef Nothing
-
+getStepTime = getTCTime . findInPCX
 
 -- | Pt is a type for trivial partitions. These partitions have no
 -- responsibilities, other than to process available RDP updates as

@@ -15,36 +15,10 @@ import Sirea.Link
 
 -- | DemandAggr: keep track of incoming demand updates. 
 --
--- REGARDING FEEDBACKS CYCLES:
---
--- Touches and updates to a demand monitor may be cyclic in nature
--- due to natural "open feedback loops". An example you have likely
--- experienced is placing a microphone near its amplifier, which oft
--- results in a shrill screech unless there is a chip dedicated to
--- eliminating it. Developers are discouraged from modeling cycles.
--- Often, cycles can be eliminated by using finer-grained resources,
--- e.g. multiple demand monitors for different roles. However: 
---
---   * Cycles cannot always be prevented in an open system. 
---   * RDP and Sirea should be robust to cycles when they occur.
---
--- Here, robust means: no deadlock, no livelock, and developers can
--- reason about soft real-time performance and resource consumption.
--- This is achieved by choking updates, as a damping mechanism for
--- the feedback. (In addition to demand monitors, state models need
--- such mechanisms.)
---
--- If cycles occur, the natural case involves latency between update
--- and feedback. In this case, the damping works very well since we
--- only delay processing of an anticipated future until we're a bit
--- closer to that future. This is called "temporal recursion". If no
--- latency exists, then we have instantaneous feedback which ideally
--- should be computed as an open network fixpoint. In that case, the
--- damping can damage consistency, and a warning will be printed.
---
--- By choking with temporal recursion in combination with adjacent
--- equality filters, a demand monitor can regain a lot of stability
--- that would otherwise be lost to cycles. 
+-- DemandAggr will also dynamically dampen cycles by the simplistic
+-- means of constraining to one round of outputs per runStepper.
+-- Cyclic updates are delayed until the next round of stability
+-- updates unless they are indirected through another partition.
 -- 
 data DemandAggr e z = DemandAggr 
     { de_active     :: !(IORef Bool)        -- to detect cyclic touch or update
