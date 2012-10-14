@@ -17,7 +17,7 @@ import Control.Arrow (second)
 import Data.IORef
 import Data.List (foldl')
 import Data.Maybe (isNothing)
-import qualified Data.HashTable as HT
+import qualified Sirea.Internal.Table as Table
 import Sirea.Internal.BTypes
 import Sirea.Internal.STypes
 import Sirea.Internal.LTypes
@@ -26,6 +26,10 @@ import Sirea.Internal.BCompile
 import Sirea.Time
 import Sirea.Signal
 
+
+type Key = Table.Key
+type Table = Table.Table
+
 -- import Debug.Trace
 
 --import Sirea.Internal.BImpl
@@ -33,7 +37,7 @@ import Sirea.Signal
 -- how far ahead should we establish behaviors?
 -- should make this dynamic, based on observed stability.
 dt_compile_future :: DT
-dt_compile_future = 3 -- seconds into future 
+dt_compile_future = 3.0 -- seconds into future 
 
 -- Evaluate a behavior provided dynamically.
 --
@@ -219,7 +223,7 @@ buildUpdateRange rfTt tu st =
     return range
 
 -- a trivial function for sequential indexes
-takeIdx :: IORef Int -> IO Int
+takeIdx :: IORef Key -> IO Key
 takeIdx rf =
     readIORef rf >>= \ n0 ->
     let n = succ n0 in
@@ -500,7 +504,7 @@ loadUpdates tStable tu sk (lo:hi:xs) =
 -- expirations for those links could be achieved by HMAC provided on
 -- establishing the merge-link. (RDP is intended to set up without 
 -- any round-trip handshaking.)
-mkMergeLnkFactory :: Lnk y -> IO (Int -> Lnk y)
+mkMergeLnkFactory :: Lnk y -> IO (Key -> Lnk y)
 mkMergeLnkFactory LnkDead = 
     return (const LnkDead)
 mkMergeLnkFactory (LnkProd f s) = 
@@ -529,22 +533,22 @@ mkMergeLnkFactory (LnkSig lu) =
 -- keep algorithmic costs down.
 data MergeLnk a = MergeLnk 
     { mln_touch_ct :: IORef Int -- count of touches
-    , mln_table :: HT.HashTable Int (SigSt a)
+    , mln_table :: Table (SigSt a)
     , mln_tmupd :: IORef (Maybe T)
     }
 mkMergeLnk :: IO (MergeLnk a)
 mkMergeLnk = MergeLnk <$> newIORef 0 
-                      <*> HT.new (==) fromIntegral
+                      <*> Table.new
                       <*> newIORef Nothing
 
-mln_get :: MergeLnk a -> Int -> IO (SigSt a)
-mln_get mln n = maybe st_zero id `fmap` HT.lookup (mln_table mln) n
+mln_get :: MergeLnk a -> Key -> IO (SigSt a)
+mln_get mln n = maybe st_zero id `fmap` Table.get (mln_table mln) n
 
-mln_put :: MergeLnk a -> Int -> SigSt a -> IO ()
-mln_put mln n st = void $ HT.update (mln_table mln) n st
+mln_put :: MergeLnk a -> Key -> SigSt a -> IO ()
+mln_put mln n st = void $ Table.put (mln_table mln) n (Just st)
 
 -- touch, and return whether this is the first touch
-mln_touch :: MergeLnk a -> Int -> IO Bool
+mln_touch :: MergeLnk a -> Key -> IO Bool
 mln_touch mln n =
     mln_get mln n >>= \ st ->
     if (st_expect st) then return False else
@@ -556,7 +560,7 @@ mln_touch mln n =
     return (1 == ct')
 
 -- update, and return whether this is the last expected update
-mln_update :: MergeLnk a -> Int -> SigUp a -> IO Bool
+mln_update :: MergeLnk a -> Key -> SigUp a -> IO Bool
 mln_update mln n su =
     -- update the associated signal
     mln_get mln n >>= \ st ->
@@ -587,7 +591,7 @@ mln_update mln n su =
 -- signals, which is proportional to update frequency for the dynamic
 -- behavior.
 --
-fnMergeEval :: MergeLnk a -> LnkUp a -> Int -> LnkUp a
+fnMergeEval :: MergeLnk a -> LnkUp a -> Key -> LnkUp a
 fnMergeEval mln lu idx = LnkUp { ln_touch = touch, ln_update = update }
     where touch = 
             mln_touch mln idx >>= \ bFirstTouch ->
@@ -597,7 +601,7 @@ fnMergeEval mln lu idx = LnkUp { ln_touch = touch, ln_update = update }
             when bLastExpectedUpdate emitMergedSignal
           emitMergedSignal =
             -- operate on elements as collection.
-            HT.toList (mln_table mln) >>= \ lSt -> -- original state of hashtable
+            Table.toList (mln_table mln) >>= \ lSt -> -- original state of hashtable
             let tmStable = foldl' leastTime Nothing $ map (st_stable . snd) lSt in
             mapM_ (mergeEvalGC mln tmStable) lSt >> -- manual garbage collection of history
             readIORef (mln_tmupd mln) >>= \ tmUpd -> -- time of update
@@ -616,21 +620,17 @@ fnMergeEval mln lu idx = LnkUp { ln_touch = touch, ln_update = update }
                     ln_update lu su
 
 -- need to GC the hashtable based on lowest stability forall elements.
-mergeEvalGC :: MergeLnk a -> Maybe T -> (Int,SigSt a) -> IO ()
+mergeEvalGC :: MergeLnk a -> Maybe T -> (Key,SigSt a) -> IO ()
 mergeEvalGC mln Nothing (idx,_) = 
-    --trace ("delete index " ++ show idx ++ " @ inf") $
-    HT.delete (mln_table mln) idx
+    Table.put (mln_table mln) idx Nothing
 mergeEvalGC mln (Just tm) (idx,st) = 
     let (x,sf) = s_sample (st_signal st) tm in
     let bDone = isNothing x && s_is_final sf tm in
     if bDone 
-        then --trace ("delete index " ++ show idx ++ " @ " ++ show tm) $
-             HT.delete (mln_table mln) idx
+        then Table.put (mln_table mln) idx Nothing
         else let st' = st { st_signal = sf } in
              st' `seq` 
---             trace ("gckeep index " ++ show idx ++ " @ " ++ show tm ++ "\n"
---                 ++ showSt tm st') $
-             void (HT.update (mln_table mln) idx st')
+             Table.put (mln_table mln) idx (Just st')
 
 -- leastTime where `Nothing` is forever (upper bound)
 leastTime :: Maybe T -> Maybe T -> Maybe T

@@ -36,11 +36,11 @@ Wonderful answers to that question have been developed in other projects, such a
 
 However, I mean to emphasize the *reactive* and *dataflow* aspect of spreadsheets. 
 
-RDP, like a spreadsheet, enables dataflow. But RDP is a *bidirectional* dataflow model. In addition to receiving values, every downstream client is also *pushing* values upstream: parameters. Those values are used in many ways: as database queries, as control signals, to publish data, and to register services or plugins. The bidirectional flow makes RDP far more expressive, modular, extensible, and composable than traditional spreadsheets.
+RDP, like a spreadsheet, enables dataflow. But RDP is a *bidirectional* dataflow model. In addition to receiving values, every downstream client is also *pushing* values upstream: parameters. Those values are used in many ways: as database queries, as control signals, to publish data, or to register services. The bidirectional flow makes RDP far more expressive, modular, extensible, and composable than traditional spreadsheets.
 
 The *cost* of supporting bidirectional dataflow and effects on externals is *RDP must abandon the illusion of "instantaneous" dataflow*. Dataflow takes time, especially when it involves a requests on external resources. Time is essential to dampen and understand any feedback properties. RDP uses explicit, *logical* latency to support safe, consistent propagation and processing of values. It can take time for a change upstream to affect a downstream client, or for a change in a client to affect an upstream service. But it will be a very predictable amount of time.
 
-An RDP-based spreadsheet would be a wonderful application of RDP: for teaching RDP, for live programming, and as a potential killer application in its own right. I have many ideas for making it happen (do I use a subset of Haskell for the functions? can I leverage wiki-like concepts and webservices? can I leverage OO prototypes and traits for richly typed cells?). However, it must wait until Sirea is further along.
+An RDP-based spreadsheet would be a wonderful application of RDP: for teaching RDP, for live programming, and as a potential killer application in its own right. However, it must wait until Sirea is further along.
 
 RDP does not use a spreadsheet nomenclature. But there are names for corresponding elements in RDP:
 
@@ -48,7 +48,7 @@ RDP does not use a spreadsheet nomenclature. But there are names for correspondi
 * The effectful "functions" of RDP are called **behaviors**. 
 * The "special" cells are said to access **resources**.
 
-The ability to share behaviors as values provides RDP a few of the benefits of OOP - reconfigurable modularity, secure encapsulation. It's quite feasible to develop an OORDP model - methods as RDP behaviors (instead of imperative procedures), and adding support for prototypes, traits, specialization, delegation. Sirea doesn't explore this.
+Using its bidirectional dataflows and dynamic behaviors, RDP can represent multi-agent systems, ad-hoc workflows, OO patterns, frameworks, overlay networks. In combination with external state resources, RDP is a complete paradigm for general purpose programming.
 
 Sirea Status
 ------------
@@ -92,7 +92,7 @@ The weaknesses of Sirea RDP belong more to Sirea than to RDP.
 
 * Developers must use a point-free style for RDP behaviors in Sirea. This a very rewarding style, and the full power of Haskell functions is still available for static information (clean, staged programming). But newcomers seem to find point-free intimidating. While I'd like to answer this concern with a higher layer language that can compile to behaviors, it is low priority for Sirea.
 
-* Sirea lacks static support for reasoning about open feedback loops, and uses a very simplistic damping model. Consequently, developers must be disciplined about feedback for demand monitors, shared state, and similar.
+* Sirea lacks static support for reasoning about open feedback loops, lacks any support for optimizing network fixpoints, and uses a very simplistic damping model. Consequently, developers must be disciplined about cyclic feedback for demand monitors, shared state, and similar.
 
 * RDP is designed for [object capability model](http://en.wikipedia.org/wiki/Object-capability_model) systems, using dynamic behaviors as runtime composable capabilities. (This is reflected, for example, in having fine-grained capabilities for many resources.) Sirea, however, is designed to be convenient in context of Haskell's module and type systems, and uses types to obtain ambient resources. I am not entirely comfortable with this tradeoff; it isn't necessary if one reifies the module and linking system (e.g. service registry and matchmaker). 
 

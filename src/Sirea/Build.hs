@@ -25,6 +25,7 @@ module Sirea.Build
     , runSireaApp
     , beginSireaApp
     , SireaApp
+    , SireaAppObject(..)
     , bUnsafeExit
     , bStartTime
     ) where
@@ -78,24 +79,29 @@ type SireaApp = forall w . BCX w (S P0 ()) (S P0 ())
 unwrapSireaApp :: SireaApp -> BCX w (S P0 ()) (S P0 ())
 unwrapSireaApp app = app
 
--- | SireaObject is the result of compiling a SireaApp. It provides:
+-- | SireaAppObject manages life cycle of an initialized SireaApp:
 -- 
 --     Stepper - for user-controlled event loops
 --     Stopper - to halt the application gracefully
---     PCX P0  - to integrate main partition resources 
+--     PCX P0  - integrate resources controlled by main thread (*) 
 --
 -- These types are defined in the Partition and PCX modules. The P0
 -- partition is thus similar to other partitions, excepting Stopper
 -- is provided to halt the whole app. Stopper is not instantaneous;
 -- continue to runStepper until Stopper event is called.
+--
+-- (*) It is not recommended that the main thread be used for any
+-- resources, since it can be difficult to reuse such in another
+-- application. If possible, shift resource tasks into external
+-- threads. 
 -- 
-data SireaObject = SireaObject 
+data SireaAppObject = SireaAppObject 
     { sireaStepper :: Stepper
     , sireaStopper :: Stopper
     , sireaContext :: PCX P0
     }
 
--- | Build the SireaApp behavior, generating a SireaObject. Access
+-- | Build the SireaApp behavior, generating a SireaAppObject. Access
 -- to the Stepper allows the user to embed the SireaApp in another
 -- event loop, and access to Context supports integrating resources
 -- controlled by the main event loop. 
@@ -105,7 +111,7 @@ data SireaObject = SireaObject
 -- (Explicitly hooking up resources detracts from the declarative 
 -- programming experience, and is not readily extensible.)
 --
-buildSireaApp :: SireaApp -> IO SireaObject
+buildSireaApp :: SireaApp -> IO SireaAppObject
 buildSireaApp app = 
     -- new generic context; fresh global space for the app
     newPCX >>= \ cw -> 
@@ -137,17 +143,17 @@ zeroStopper = Stopper
     { runStopper = return ()
     , addStopperEvent = id -- run stopper event immediately
     } 
-zeroObject :: PCX w -> SireaObject
+zeroObject :: PCX w -> SireaAppObject
 zeroObject cw = 
-    SireaObject { sireaStepper = zeroStepper
-                , sireaStopper = zeroStopper
-                , sireaContext = findInPCX cw
-                }
-
+    SireaAppObject { sireaStepper = zeroStepper
+                   , sireaStopper = zeroStopper
+                   , sireaContext = findInPCX cw
+                   }
+  
 -- Build from a LnkUp, meaning there is something listening to the
 -- signal. This doesn't actually initialize the signal, but does set
 -- the app to kickstart on the first runStepper operation.
-buildSireaBLU :: PCX w -> LnkUp () -> IO SireaObject
+buildSireaBLU :: PCX w -> LnkUp () -> IO SireaAppObject
 buildSireaBLU cw lu =
     newIORef emptyStopData >>= \ rfSD ->
     let cp0     = findInPCX cw :: PCX P0 in
@@ -155,9 +161,9 @@ buildSireaBLU cw lu =
     addTCRecv tc0 (beginApp cw rfSD lu) >> -- add kickstart
     let stepper = tcToStepper tc0 in
     let stopper = makeStopper rfSD in
-    return $ SireaObject { sireaStepper = stepper
-                         , sireaStopper = stopper
-                         , sireaContext = findInPCX cw }
+    return $ SireaAppObject { sireaStepper = stepper
+                            , sireaStopper = stopper
+                            , sireaContext = findInPCX cw }
           
 -- task to initialize application (performed on first runStepper)
 -- a slight delay is introduced before everything really starts.
@@ -243,12 +249,14 @@ dtRestart   = 1.20  -- how long a pause to cause a restart
 dtStability = 0.30  -- stability of main signal (how long to halt)
 dtStep      = 0.06  -- periodic event to increase stability
 
--- | If you don't need to run the stepper yourself, consider use of
--- runSireaApp. This will simply run the application until the main
--- thread receives a killThread signal or other AsyncException, such
--- as a ctrl+c user interrupt. At that point it will try to shutdown 
--- gracefully. Use of `bUnsafeExit` may cause this signal from
--- within the application.
+-- | If you don't need to run the stepper yourself (that is, if you
+-- don't need full control of the main thread event loop), consider 
+-- use of runSireaApp. 
+--
+-- This will run the application until killThread or AsyncException,
+-- such as ctrl+c interrupt. At that point it will try to shutdown 
+-- gracefully. Use of `bUnsafeExit` causes an async killThread from
+-- within the application behavior.
 --
 --    runSireaApp app = buildSireaApp app >>= beginSireaApp
 --
@@ -256,16 +264,18 @@ runSireaApp :: SireaApp -> IO ()
 runSireaApp app = buildSireaApp app >>= beginSireaApp
 
 -- | beginSireaApp activates a forever loop to process the SireaApp.
--- It is stopped by killing the thread. Halting is not immediate;
--- may continue to run until all threads ready to halt.
-beginSireaApp :: SireaObject -> IO ()
+-- Stopped by asynchronous exception, such as killThread or ctrl+c 
+-- user interrupt. (note: a double-kill will abort graceful kill)
+beginSireaApp :: SireaAppObject -> IO ()
 beginSireaApp so =
     let stepper = sireaStepper so in
     let stopper = sireaStopper so in
     newIORef True >>= \ rfContinue ->
-    addStopperEvent stopper (writeIORef rfContinue False) >>
+    let onStop = writeIORef rfContinue False in
+    addStopperEvent stopper onStop >>
     let loop = basicSireaAppLoop rfContinue stepper in
-    loop `catch` \ e -> onAsyncException e (runStopper stopper >> loop)
+    let onSignal = runStopper stopper in
+    loop `catch` \ e -> onAsyncException e (onSignal >> loop)
 
 -- Haskell's exception mechanism requires a little help to derive
 -- which exceptions are processed by which handlers.
@@ -281,14 +291,11 @@ basicSireaAppLoop rfContinue stepper =
     where wait = newEmptyMVar >>= \ mvWait  ->
                  addStepperEvent stepper (putMVar mvWait ()) >>
                  takeMVar mvWait 
-          loop = basicSireaAppLoop rfContinue stepper 
+          loop = basicSireaAppLoop rfContinue stepper
 
 -- | bUnsafeExit - used with runSireaApp or beginSireaApp; effect is
--- killThread on the main thread after signal becomes active. This 
--- causes the application to begin halting gracefully. Halt a Sirea 
--- application from within the application. Should not be used if 
--- you plan to perform an external kill, since a double kill will 
--- abort graceful exit. 
+-- killThread on the main thread when first activated, initiating a
+-- graceful shutdown. 
 --
 -- The behavior of bUnsafeExit is not precise and not composable. If
 -- developers wish to model precise shutdown behavior, they should

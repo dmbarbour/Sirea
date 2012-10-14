@@ -59,7 +59,7 @@ import Sirea.Behavior
 import Sirea.B
 import Sirea.Link
 import Sirea.Time
-import Sirea.Internal.DemandMonitorData 
+import Sirea.Internal.DemandMonitorData
 
 -- | Create a list-based demand monitor in the IO monad. The list
 -- should be treated as a set (behavior independent of duplication

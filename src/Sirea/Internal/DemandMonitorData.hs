@@ -1,43 +1,221 @@
 
 -- Utilities for tracking demands and monitors of demand.
+--
+-- Currently this is separated into two responsibilities:
+--   * aggregation of demands
+--   * distribution of signals to monitors
+--
+-- Intermediate filtration of equal values or choking of
+-- full updates to control cycles is suggested.
+--
+-- The composition is performed by the DemandMonitor module.
+-- 
 module Sirea.Internal.DemandMonitorData
-    ( DemandAggr(..), DD(..)
+    ( DemandAggr, newDemandAggr, newDemandLnk
+    --, MonitorDist, newMonitorDist, newMonitorLnk
     ) where
 
-import qualified Data.HashTable as HT
+import qualified Sirea.Internal.Table as Table
 import Data.IORef
+import Data.Maybe (fromMaybe, isNothing)
+import Data.List (foldl')
 import Control.Applicative
-import Control.Monad (unless, when)
+import Control.Monad (unless, when, void)
 import Control.Exception (assert)
 import Sirea.Signal
 import Sirea.Time
 import Sirea.Link
 
--- | DemandAggr: keep track of incoming demand updates. 
+-- Using some utilities from other internals rather than reproducing them.
+import Sirea.Internal.LTypes (SigSt(..), st_zero, st_poke, st_sigup)
+
+type Table = Table.Table
+type Key = Table.Key
+
+-- TUNING:
+-- 
+-- hist:
+-- DemandAggr will automatically keep a certain amount of "extra" 
+-- history to admit late-arriving demands sources. How much? Well,
+-- this does have a cost to stability, so it shouldn't be much! 
+-- Also, the use of anticipation helps mitigate the requirement,
+-- so it doesn't need to be very much. 
 --
--- DemandAggr will also dynamically dampen cycles by the simplistic
--- means of constraining to one round of outputs per runStepper.
--- Cyclic updates are delayed until the next round of stability
--- updates unless they are indirected through another partition.
+dt_daggr_hist :: DT
+dt_daggr_hist = 0.03  -- how much history to keep? (observed stability - dt_hist)
+
+-- | DemandAggr: aggregates and processes many concurrent demands.
+--
+-- NOTE: DemandAggr will block propagation of cyclic updates from
+-- within the current step. Such updates will eventually deliver, 
+-- due to the periodic global stability updates. This will dampen
+-- local cycles; if developers need cycles to operate reliably,
+-- they must cross partitions.
 -- 
 data DemandAggr e z = DemandAggr 
-    { de_active     :: !(IORef Bool)        -- to detect cyclic touch or update
-    , de_touchCt    :: !(IORef Int)         -- count of non-cyclic touches
-    , de_nextid     :: !(IORef Int)         -- next hashtable ID
-    , de_table      :: !(HT.HashTable Int (DD e)) -- tracking demand data
-    , de_hist       :: !(DT)                -- buffer to support straggling demands
-    , de_fchoke     :: !(DT)                -- choke for temporal recursion...
-    , de_nzip       :: !([Sig e] -> Sig z)  -- compute the result signal
-    , de_peq        :: !(z -> z -> Bool)    -- for adjacency equality filters
-    , de_update     :: !(IORef (Maybe T))   -- lowest update time (at the moment)
-    , de_next       :: !(LnkUp z)           -- 
+    { da_active     :: !(IORef Bool)        -- to detect cyclic touch or update
+    , da_touchCt    :: !(IORef Int)         -- count of non-cyclic touches
+    , da_nextid     :: !(IORef Key)         -- next hashtable ID
+    , da_tmup       :: !(IORef (Maybe T))   -- lowest update time (at the moment)
+    , da_stable     :: !(IORef (Maybe T))   -- track last reported stability
+    , da_table      :: !(Table (SigSt e))   -- tracking demand data
+    , da_nzip       :: !([Sig e] -> Sig z)  -- compute the result signal
+    , da_next       :: !(LnkUp z)           -- process the updated signal
     }
 
-data DD e = DD
-    { dd_signal :: !(Sig e)
-    , dd_expect :: !Bool
-    , dd_stable :: !(Maybe T)
-    }
+-- | Create a demand aggregator, given the output target.
+newDemandAggr 
+    :: ([Sig e] -> Sig z)
+    -> (LnkUp z)
+    -> IO (DemandAggr e z)
+newDemandAggr zpf zlu = DemandAggr 
+    <$> newIORef False -- inactive
+    <*> newIORef 0     -- untouched
+    <*> newIORef 80000 -- initial key
+    <*> newIORef Nothing -- not updated
+    <*> newIORef Nothing -- no reported stability
+    <*> Table.new      -- no demands
+    <*> pure zpf       -- provided zip function
+    <*> pure zlu       -- provided 
+
+getIndex :: IORef Key -> IORef (Maybe Key) -> IO Key
+getIndex rfNxt rfK =
+    readIORef rfK >>= \ mk ->
+    case mk of
+        Just k -> return k
+        Nothing ->
+            readIORef rfNxt >>= \ k0 ->
+            let k = succ k0 in
+            k `seq`
+            writeIORef rfNxt k >>
+            writeIORef rfK (Just k) >>
+            return k
+
+-- increment touch and return whether it is the first touch.
+incTouch :: IORef Int -> IO Bool
+incTouch rf =
+    readIORef rf >>= \ n ->
+    let n' = succ n in
+    n' `seq` writeIORef rf n' >>
+    (return $! 1 == n')
+
+-- decrement touch and return whether it is the last touch.
+decTouch :: IORef Int -> IO Bool
+decTouch rf =
+    readIORef rf >>= \ n ->
+    let n' = pred n in
+    n' `seq` writeIORef rf n' >>
+    (return $! 0 == n')
+
+
+-- | Create a new link to an existing demand aggregator.
+newDemandLnk :: DemandAggr e z -> IO (LnkUp e)
+newDemandLnk da =
+    newIORef Nothing >>= \ rfIdx -> -- to acquire index later.
+    let getIdx = (getIndex . da_nextid) da rfIdx in
+    let touch = getIdx >>= touchDaggr da in
+    let update su = getIdx >>= \ ix -> updateDaggr da ix su in
+    let lu = LnkUp { ln_touch = touch, ln_update = update } in
+    return lu
+
+touchDaggr :: DemandAggr e z -> Key -> IO ()
+touchDaggr da k = 
+    readIORef (da_active da) >>= \ bCycle ->
+    unless bCycle $ Table.get (da_table da) k >>= \ mbSt ->
+    let st = fromMaybe st_zero mbSt in
+    unless (st_expect st) $
+        let st' = st_poke st in
+        Table.put (da_table da) k (Just st') >>
+        incTouch (da_touchCt da) >>= \ bFirst ->
+        when bFirst $
+            writeIORef (da_active da) True >>
+            ln_touch (da_next da) >>
+            writeIORef (da_active da) False
+
+updateDaggr :: DemandAggr e z -> Key -> SigUp e -> IO ()
+updateDaggr da k su =
+    -- track earliest time-of-update. 
+    readIORef (da_tmup da) >>= \ tmup ->
+    let tmsu = fmap snd $ su_state su in
+    let tmup' = leastTime tmup tmsu in
+    writeIORef (da_tmup da) tmup' >>
+    -- update the element and the touch-count
+    Table.get (da_table da) k >>= \ mbSt ->
+    let st  = fromMaybe st_zero mbSt in
+    let st' = st_sigup su st in
+    Table.put (da_table da) k (Just st') >>
+    when (st_expect st) (void $ decTouch (da_touchCt da)) >>
+    -- deliver the updates (if possible)
+    maybeDeliverDaggr da
+
+-- deliver aggregated demands if nothing is holding us back
+maybeDeliverDaggr :: DemandAggr e z -> IO ()
+maybeDeliverDaggr da =
+    readIORef (da_active da) >>= \ bActive ->
+    readIORef (da_touchCt da) >>= \ nTouchCt ->
+    let bWait = bActive || (0 /= nTouchCt) in
+    unless bWait $ 
+        writeIORef (da_active da) True >> -- block cycles
+        deliverDaggr da >>
+        writeIORef (da_active da) False
+
+-- deliver aggregated demands, perform GC, etc.
+deliverDaggr :: DemandAggr e z -> IO ()
+deliverDaggr da =
+    -- obtain the collection of demand signals
+    let tbl = da_table da in
+    Table.toList tbl >>= \ lst -> 
+    -- compute and validate stability (could change validation fail
+    -- to warning and use recorded stability, but fail means demand
+    -- source may have lost information)
+    readIORef (da_stable da) >>= \ tmRecordedStability -> 
+    let tmDemandStability = foldl' leastTime Nothing $ fmap (st_stable . snd) lst in
+    let tmTargetStability = fmap (`subtractTime` dt_daggr_hist) tmDemandStability in
+    let tmStable = (max <$> tmRecordedStability <*> tmTargetStability) <|> tmTargetStability in
+    assert (monotonicStability tmRecordedStability tmDemandStability) $
+    writeIORef (da_stable da) tmStable >> -- note that recorded stability < stability of inputs
+    -- perform garbage collection of elements in the table
+    mapM_ (tblGC tbl tmStable) lst >>
+    -- compute the update.
+    readIORef (da_tmup da) >>= \ tmUpd ->
+    writeIORef (da_tmup da) Nothing >>
+    case tmUpd of
+        Nothing ->
+            let su = SigUp { su_state = Nothing, su_stable = tmStable } in
+            ln_update (da_next da) su
+        Just tm ->
+            let lsigs = fmap (st_signal . snd) lst in
+            let sigz = da_nzip da lsigs in
+            let sigzTrim = s_trim sigz tm in
+            let su = SigUp { su_state = Just (sigzTrim,tm), su_stable = tmStable } in
+            ln_update (da_next da) su
+
+
+
+-- need to GC the hashtable based on lowest stability forall elements.
+tblGC :: Table (SigSt a) -> Maybe T -> (Key,SigSt a) -> IO ()
+tblGC tbl Nothing (idx,_) = Table.put tbl idx Nothing
+tblGC tbl (Just tm) (idx,st) = 
+    let (x,sf) = s_sample (st_signal st) tm in
+    let bDone = isNothing x && s_is_final sf tm in 
+    if bDone -- no need for demand before next update?
+        then Table.put tbl idx Nothing
+        else let st' = st { st_signal = sf } in
+             st' `seq` Table.put tbl idx (Just st')
+
+
+leastTime :: Maybe T -> Maybe T -> Maybe T
+leastTime l r = (min <$> l <*> r) <|> l <|> r
+    
+monotonicStability :: Maybe T -> Maybe T -> Bool
+monotonicStability (Just t0) (Just tf) = (tf >= t0)
+monotonicStability _ _ = True
+
+    
+
+
+                
+    
 
 {-
 

@@ -28,6 +28,8 @@ module Sirea.Internal.BImpl
     , keepAliveB
     , unsafeAutoSubscribeB, OnSubscribe, UnSubscribe
     , buildTshift -- for BDynamic
+    , lnEqShift, wrapEqFilter
+    --, tchokeB, wrapTChoke
     ) where
 
 import Prelude hiding (id,(.))
@@ -682,6 +684,10 @@ lnkFwd (LnkSig lu) = LnkSig lu
 -- would otherwise be redundant, with a given limit for how far into
 -- the future we should search for the first change. The given eq
 -- function might be a semi-decision on equality, in general.
+--
+-- TODO: consider filtering in incremental steps up to a distance in
+-- the future, or how to make this more dynamic to the actual update
+-- style. 
 unsafeEqShiftB :: DT -> (a -> a -> Bool) -> B (S p a) (S p a)
 unsafeEqShiftB dt eq = mkLnkB id (buildEqShift dt eq)
 
@@ -727,6 +733,27 @@ eqShift eq as bs tLower tUpper =
           activeWhileEq Nothing Nothing = Just ()
           activeWhileEq _ _ = Nothing
           sampleActive = (/= Nothing) . snd
+
+
+-- | Wrap a LnkUp in an equality filter. This involves keeping an 
+-- intermediate cache. (Implementation is same used by badjeqf.)
+wrapEqFilter :: DT -> (z -> z -> Bool) -> LnkUp z -> IO (LnkUp z)
+wrapEqFilter dteqf zeq zlu =
+    newIORef st_zero >>= \ rfz ->
+    --lnEqShift :: DT -> (a -> a -> Bool) -> IORef (SigSt a) -> LnkUp a -> LnkUp a    
+    return $ lnEqShift dteqf zeq rfz zlu
+
+
+-- TODO: tchokeB
+-- 
+-- This behavior is aimed to help control cycles. Updates too far 
+-- ahead of the current stability will be delayed.
+--
+-- Wrap a LnkUp with a stability delay. This involves delaying an
+-- update that would occur too far ahead of stability, unless the
+-- stability has also
+
+
 
 -- | phaseUpdateB 
 --
