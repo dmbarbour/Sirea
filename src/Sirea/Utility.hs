@@ -4,7 +4,7 @@
 -- have been written by a Sirea client.
 module Sirea.Utility
     ( HasPrinter(..), bprint
-    , BUndefined(..), bundefined, bundefinedk
+    , BUndefined(..), bundefined
     -- , BUnit(..)
     ) where
 
@@ -21,14 +21,15 @@ import Data.Typeable
 import Data.IORef
 import Control.Monad (when, liftM)
 
-{- IDEA: a more useful, more declarative console.
-    Inputs manage a set of values (X=Y) that may be accessed by users.
-    Outputs manage a similar set of values. (X=A,B,C)
-    Might unify these notions, so user is just acting as a printer?
-    Also, some ability to query the console to replay old values.
+{- IDEA: a more useful, more declarative console?
+
   Unfortunately, seems a bit difficult to handle getLine in concurrent manner
-  compatible with ghci. Also, would prefer a persistent model, such as use of
-  a file. 
+  compatible with ghci. Also, volatile and subsequently inaccessible console
+  input seems a poor match for a reactive paradigm and orthogonal persistence.
+  A user-input file might work much better.
+
+  Observing keyboard state and building persistent state is also good, but
+  should be achieved via a keyboard binding (e.g. in sirea-glfw)
 -}
 
 
@@ -46,9 +47,11 @@ bprint :: (HasPrinter b p, BFmap b, BProd b)
 bprint showFn = bvoid $ bfmap showFn >>> bprint_
 
 -- BPrint for BCX P0. At the moment: not quite correct for the
--- reprint behavior. Could fix? but demand monitors would help.
--- Anyhow, idea is that it will reprint messages after a few 
--- seconds if they have not been printed recently. 
+-- reprint behavior. Currently will reprint messages after a 
+-- few seconds if they have not been printed recently. 
+--
+-- TODO: Fix printB for precise tracking of demands. Probably
+-- use demand monitor & agent resource?
 instance HasPrinter (BCX w) P0 where bprint_ = printB
 
 printB :: BCX w (S P0 String) (S P0 ())
@@ -109,28 +112,24 @@ class BUnit b x where
 -- behaviors. `bundefined` serves a similar role to `undefined` in
 -- Haskell. Direct use of `undefined` might fail at compile time, 
 -- even if embedded in dead code. `bundefined` will only fail if
--- there is stable, active demand for the undefined response.
---
--- Alternatively, one could use:
---
---   bconst undefined >>> bforce (`seq` ())
---
--- But this would only be useful for a single output signal, and it
--- might fail due to anticipation of a future that never stabilizes.
+-- there is stable, active input signal, and a consumer for the 
+-- undefined result.
 -- 
 class BUndefined b where bundefined_ :: (SigInP p y) => b (S p ()) y
 
 bundefined :: (BUndefined b, BFmap b, SigInP p y) => b (S p x) y
 bundefined = bconst () >>> bundefined_
 
-bundefinedk :: (BUndefined b, BFmap b, BProd b, SigInP p y) => b (S p x :&: x') y
-bundefinedk = bfst >>> bundefined
-
 instance BUndefined B where bundefined_ = undefinedB
 instance BUndefined (BCX w) where bundefined_ = (wrapBCX . const) undefinedB
 
 -- undefinedB is only live code if there is demand on `y`.
 -- This would be unsafe without `y` being entirely in p.
+-- 
+-- Here `undefinedIO` basically kills the process if we stabilize on an
+-- active input signal, but it's okay so long as we don't stabilize an
+-- active signal to the undefined behavior. (It's also okay if we never
+-- 
 undefinedB :: (SigInP p y) => B (S p ()) y 
 undefinedB = unsafeOnUpdateBL (return undefinedIO) >>> unsafeLinkB mkKeepAlive
     where mkKeepAlive = return . sendNothing
@@ -139,8 +138,7 @@ undefinedB = unsafeOnUpdateBL (return undefinedIO) >>> unsafeLinkB mkKeepAlive
 
 -- undefinedB is a bit more sophisticated than just dropping signal.
 -- Need to send an inactive signal, properly, in order to perform 
--- any merges further on. (hmmm... a bit difficult is dealing with
--- the bcross case!)
+-- any merges further on. 
 sendNothing :: Lnk y -> Lnk (S p ())
 sendNothing LnkDead = LnkDead
 sendNothing (LnkProd x y) = (sendNothing x) `lnPlus` (sendNothing y)

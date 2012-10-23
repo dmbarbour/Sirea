@@ -32,7 +32,7 @@ Most programmers, even those who rarely venture beyond imperative abstractions, 
 
 The spreadsheet analogy does suggest the question: *how does one display a cell whose value is a function?* 
 
-Wonderful answers to that question have been developed in other projects, such as [naked objects](http://en.wikipedia.org/wiki/Naked_objects), and [tangible values](http://en.wikipedia.org/wiki/Naked_objects). A simplistic answer would be to just query the cell with a value `Print` and display whatever is returned (numbers, text, SVG, etc.). Alternatively, one might use a visitor pattern: pass a canvas-abstraction to the cell, then allow the cell to print itself (potentially even print some interactive widgets). RDP will express these abstractions more easily and effectively than the paradigms for which they were initially developed.
+Wonderful answers to that question have been developed in other projects, such as [naked objects](http://en.wikipedia.org/wiki/Naked_objects), and [tangible values](http://conal.net/papers/Eros/). A simplistic answer would be to just query the cell with a value `Print` and display whatever is returned (numbers, text, SVG, etc.). Alternatively, one might use a visitor pattern: pass a canvas-abstraction to the cell, then allow the cell to print itself (potentially even print some interactive widgets). RDP will express these abstractions more easily and effectively than the paradigms for which they were initially developed.
 
 However, I mean to emphasize the *reactive* and *dataflow* aspect of spreadsheets. 
 
@@ -49,6 +49,11 @@ RDP does not use a spreadsheet nomenclature. But there are names for correspondi
 * The "special" cells are said to access **resources**.
 
 Using its bidirectional dataflows and dynamic behaviors, RDP can represent multi-agent systems, ad-hoc workflows, OO patterns, frameworks, overlay networks. In combination with external state resources, RDP is a complete paradigm for general purpose programming.
+
+It may help to read some of RDP's background and motivations:
+* a comment that helped some people: [a journey towards RDP](http://lambda-the-ultimate.org/node/4606#comment-72986)
+* the mailing list [reactive-demand@googlegroups.com](https://groups.google.com/forum/#!forum/reactive-demand)
+* the [author's blog](http://awelonblue.wordpress.com/)
 
 Sirea Status
 ------------
@@ -446,7 +451,7 @@ Reactive Demand Programming has strong potential to abstract, install, and exten
 
 Unfortunately, Sirea does none of these things! For convenience with Haskell's module system, Sirea uses type-driven resource access, which is effectively an ambient authority (unless types are propagated in certain ways). Sirea does not enforce real time anything (though does encourage soft real time). 
 
-Sirea's scope is limited to the Haskell process. In Sirea, the notion of a *partition* equates to a humble Haskell thread. The binding of resources to threads in Haskell is mostly for convenience (e.g. for easier state resources, organization) and occasionaly for safety (e.g. for FFI resources, OpenGL TLS, GLFW event queues, etc.). But within this limited scope, Sirea does model *automatic code distribution*. Partitions are named by type. A concrete signal `(S Foo x)` specifies a signal exists in partion `Foo`. A unique thread for that partition will be created (based on a `Partition` typeclass) when the partition is needed. 
+Sirea's scope is limited to the Haskell process. In Sirea, the notion of a _partition_ equates to a humble Haskell thread. The binding of resources to threads in Haskell is mostly for convenience (e.g. for easier state resources, organization) and occasionaly for safety (e.g. for FFI resources, OpenGL TLS, GLFW event queues, etc.). But within this limited scope, Sirea does model *automatic code distribution*. Partitions are named by type. A concrete signal `(S Foo x)` specifies a signal exists in partion `Foo`. A unique thread for that partition will be created (based on a `Partition` typeclass) when the partition is needed. 
 
 The `bcross` behavior allows signals to move between Sirea partitions:
 
@@ -600,7 +605,7 @@ The breadth and variety of of sensors, human input devices, output devices, and 
 
 The process of adapting a resource typically involves introducing a thread (to provide resource-specific polling, maintenance, or event loops) and making some state accessible to behaviors. Also, resources often have dependencies on other resources, configuration information, or state. It is convenient to push most logic into RDP, and to model a resource as exclusively controlled by another RDP application or agent.
 
-* *Partition*s introduce threads with per-type programmable event loops
+* *Partitions* introduce threads with programmable actions between RDP steps
 * *PCX* simplifies access to state for resource proxies and adapters
 * *BCX* will distribute a `PCX` context object to primitive behaviors
 * *AgentResource* models resources as controlled by separate RDP apps

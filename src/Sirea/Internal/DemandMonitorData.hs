@@ -3,7 +3,7 @@
 --
 -- Currently this is separated into two responsibilities:
 --   * aggregation of demands
---   * distribution of signals to monitors
+--   * distribution of a signals to many observers
 --
 -- Intermediate filtration of equal values or choking of
 -- full updates to control cycles is suggested.
@@ -12,7 +12,7 @@
 -- 
 module Sirea.Internal.DemandMonitorData
     ( DemandAggr, newDemandAggr, newDemandLnk
-    --, MonitorDist, newMonitorDist, newMonitorLnk
+    , MonitorDist, newMonitorDist, extractEmitLnk, newMonitorLnk
     ) where
 
 import qualified Sirea.Internal.Table as Table
@@ -20,29 +20,33 @@ import Data.IORef
 import Data.Maybe (fromMaybe, isNothing)
 import Data.List (foldl')
 import Control.Applicative
-import Control.Monad (unless, when, void)
+import Control.Monad (unless, when, void, sequence_, mapM_)
 import Control.Exception (assert)
 import Sirea.Signal
 import Sirea.Time
 import Sirea.Link
-
--- Using some utilities from other internals rather than reproducing them.
-import Sirea.Internal.LTypes (SigSt(..), st_zero, st_poke, st_sigup)
+import Sirea.Internal.LTypes
 
 type Table = Table.Table
 type Key = Table.Key
 
 -- TUNING:
 -- 
--- hist:
 -- DemandAggr will automatically keep a certain amount of "extra" 
 -- history to admit late-arriving demands sources. How much? Well,
--- this does have a cost to stability, so it shouldn't be much! 
+-- this does have a cost to stability, so it shouldn't be much. 
 -- Also, the use of anticipation helps mitigate the requirement,
 -- so it doesn't need to be very much. 
 --
+-- MonitorDist also keeps history to accommodate late-arriving 
+-- observers. However, this history has no significant costs other 
+-- than storage. It can be a fair bit longer. 
+--
 dt_daggr_hist :: DT
-dt_daggr_hist = 0.03  -- how much history to keep? (observed stability - dt_hist)
+dt_daggr_hist = 0.03
+
+dt_mdist_hist :: DT
+dt_mdist_hist = 0.21   
 
 -- | DemandAggr: aggregates and processes many concurrent demands.
 --
@@ -211,261 +215,136 @@ monotonicStability :: Maybe T -> Maybe T -> Bool
 monotonicStability (Just t0) (Just tf) = (tf >= t0)
 monotonicStability _ _ = True
 
+
+-- | MonitorDist supports output to multiple observers (monitors) of
+-- a resource. MonitorDist is very simple; most of the logic is at
+-- each observer link. All MonitorDist does is ensure fresh updates
+-- will reach the observer links.
+data MonitorDist z = MonitorDist 
+    { md_signal     :: !(IORef (SigSt z)) -- primary signal
+    , md_nextid     :: !(IORef Key)       -- hashtable key
+    , md_table      :: !(Table (LnkUp z)) -- collection of observers
+    }
+
+-- | track a new set of observers
+newMonitorDist :: IO (MonitorDist z)
+newMonitorDist = MonitorDist
+    <$> newIORef (st_poke st_zero) -- poke ensures initial observers wait for initial update
+    <*> newIORef 60000 -- a single observer may use many keys, one on each install
+    <*> Table.new      -- table of observers, initially empty
+
+-- | Support update of the observed signal. Signal should always be
+-- active; it is masked by the signal of each observer.
+extractEmitLnk :: MonitorDist z -> LnkUp z
+extractEmitLnk md = LnkUp { ln_touch = touch, ln_update = update }
+    where touch = 
+            readIORef (md_signal md) >>= \ st ->
+            unless (st_expect st) $
+                let st' = st_poke st in
+                writeIORef (md_signal md) st' >>
+                Table.toList (md_table md) >>=
+                mapM_ (ln_touch . snd) 
+          update su =
+            -- first, record the signal for newcoming observers
+            readIORef (md_signal md) >>= \ st ->
+            let bExpected = st_expect st in
+            let st' = st_sigup su st in
+            let stc = (`st_clear` st') . (`subtractTime` dt_mdist_hist) in
+            let stGC = maybe st_zero stc (su_stable su) in
+            stGC `seq` -- GC older values in signal
+            writeIORef (md_signal md) stGC >>
+            -- second, deliver signal update to all existing observers
+            Table.toList (md_table md) >>= \ lst ->
+            unless bExpected (mapM_ (ln_touch . snd) lst) >> -- touch, if needed
+            mapM_ ((`ln_update` su) . snd) lst -- update
     
-
-
-                
-    
-
-{-
-
-newDemandAggr :: ([Sig e] -> Sig z) 
-              -> 
-IO (DemandAggr e z)
-
-
-
--- DemandMonitorData
---   currently a couple tables and some stateful summary data
---   (the stateful data is used to keep algorithmic costs down)
+-- | create a new observer link. The signal to MonitorDist is masked
+-- by the unit signal representing observer activity. 
 --
--- zipfn: a function to combine signal sources; must be commutative
--- peqfn: a partial equality function; return true iff two values 
---   are known to be equal; may return false if unknown
--- history: buffer to accommodate straggling (newcoming) monitors or
---   demand sources. (Might later want to split so that new monitors
---   are supported longer than new sources? think about it.)
---
--- The DemandMonitorData currently assumes (possibly incorrectly) 
--- that the current demand stability is a decent estimate of new
--- demand or monitor times. 
--- 
-data DemandMonitorData e z = DemandMonitor
-    { dmd_zipfn     :: !([Sig e] -> Sig z)     -- zip the demand signals
-    , dmd_peqfn     :: !(z -> z -> Bool)       -- clean up redundant updates
-    , dmd_history   :: !(DT)                   -- for eventual consistency
-    , dmd_signal    :: !(IORef (Sig z))        -- last reported signal
-    , dmd_stable    :: !(IORef (Maybe T))      -- last reported stability
-    , dmd_update    :: !(IORef (Maybe T))      -- earliest demand update
-    , dmd_dtouch    :: !(IORef Int)            -- # expected updates on demand facets
-    , dmd_mtouch    :: !(IORef Int)            -- # expected updates on monitor facets
-    , dmd_nxtid     :: !(IORef Int32)          -- create local unique ID for table
-    , dmd_dTable    :: !(HT.HashTable (DemandData e))
-    , dmd_mTable    :: !(HT.HashTable (MonitorData z))
-    }
-data DemandData e = DemandData
-    { dd_sig :: !(SigSt e) -- current demand status
-    }
-data MonitorData z = MonitorData
-    { md_sig :: !(SigSt ()) -- monitoring status 
-    , md_lnk :: !(LnkUp z)  -- to receive monitor updates
-    , md_upd :: !(Maybe T)  -- recent update time (if any)
-    }
+-- The link will be installed and uninstalled from the MonitorDist
+-- automatically, whenever there is significant change in state.
+-- Installation is evaluated on update to the () signal. Uninstall
+-- happens after LnkUp z is emitted.
+newMonitorLnk :: MonitorDist z -> LnkUp z -> IO (LnkUp ())
+newMonitorLnk md lzo =
+    -- state of each observer link consists of a pair,
+    -- tracking installation, index, and input state.
+    newIORef Nothing >>= \ rfIdx -> -- installed? if so, index?
+    newIORef sm_zero >>= \ rfSigM -> -- state of signals?
+    return (lnMonitor md lzo rfIdx rfSigM)
 
-dd_zero :: DemandData e
-dd_zero = DemandData st_zero
+-- test: should this resource be installed?
+--   this is a conservative test; it may answer True in some cases
+--   where the resource doesn't need to be installed, so long as it
+--   answers False eventually when observer signal becomes inactive.
+shouldBeInstalled :: SigM a b -> Bool
+shouldBeInstalled sm = 
+    let tMin = leastTime (sm_stable sm) (sm_tmup sm) in
+    case tMin of
+        Nothing -> False
+        Just tm ->  
+            let sig = (st_signal . sm_lsig) sm in
+            let done = s_term sig tm in
+            not done
 
-md_zero :: LnkUp z -> MonitorData z
-md_zero lu = MonitorData st_zero lu Nothing
+uninstallMD, installMD :: MonitorDist z -> LnkUp z -> IORef (Maybe Key) -> IORef (SigM () z) -> IO ()
+installMD md lzi rfIdx rfSigM =
+    readIORef rfIdx >>= \ mbk ->
+    case mbk of
+        Just _ -> return ()
+        Nothing ->
+            -- prepare for future z inputs 
+            readIORef (md_nextid md) >>= \ k0 ->
+            let k = succ k0 in
+            k `seq` 
+            writeIORef (md_nextid md) k >>
+            writeIORef rfIdx (Just k) >>
+            Table.put (md_table md) k (Just lzi) >>
+            -- obtain initial state for z signal
+            readIORef (md_signal md) >>= \ sz ->
+            readIORef rfSigM >>= \ sm ->
+            let sm' = sm { sm_rsig = sz } in
+            writeIORef rfSigM sm' 
 
-touchMD :: MonitorData z -> MonitorData z 
-touchMD md = 
-    let st = md_sig md in
-    let st' = st_poke st in
-    md { md_sig = st' }
+uninstallMD md _ rfIdx rfSigM =
+    readIORef rfIdx >>= \ mbk ->
+    case mbk of
+        Nothing -> return ()
+        Just k  -> -- clear associated states!
+            Table.put (md_table md) k Nothing >>
+            writeIORef rfSigM sm_zero >>
+            writeIORef rfIdx Nothing 
 
-newDemandMonitorData 
-    :: ([Sig e] -> Sig z) -- nzip
-    -> (z -> z -> Bool)   -- peq
-    -> DT                 -- how much to accommodate stragglers?
-    -> IO (DemandMonitorData e z)
-newDemandMonitorData nzip peq dtHist =
-    assert (dtHist >= 0) $ 
-    DemandMonitorData
-        <$> pure nzip 
-        <*> pure peq
-        <*> pure dtHist
-        <*> newIORef (nzip []) -- current signal
-        <*> newIORef (Nothing) -- current signal stability
-        <*> newIORef (Nothing) -- earliest demand update
-        <*> newIORef 0      -- initial touch count
-        <*> newIORef 400000 -- arbitrary starting index
-        <*> HT.new (==) HT.hashInt
-        <*> HT.new (==) HT.hashInt
-
--- obtain the index for a new demand or monitor facet 
--- (must be performed in demand monitor's thread)
-getIndex :: DemandMonitorData e z -> IORef (Maybe Int) -> IO Int
-getIndex dmd rf = readIORef rf >>= maybe newIndex return
-    where rfNxt = dmd_nxtid dmd 
-          newIndex = readIORef rfNxt >>= \ n ->
-                     let n' = succ n in
-                     n' `seq` 
-                     writeIORef rfNxt n' >>
-                     writeIORef rf (Just n') >>
-                     return n'
-
--- touch monitor data (if it is not already recorded as touched)
--- this will touch a specific monitor, and add it if necessary.
-touchMonitorData :: DemandMonitorData e z -> Int -> LnkUp z -> IO ()
-touchMonitorData dmd ix lu =
-    HT.lookup (dmd_mTable dmd) ix >>= \ mbmd ->
-    let md = maybe (md_zero lu) id mbmd in
-    unless ((st_expect . md_sig) md) $
-        let md' = touchMD md in
-        let rfct = dmd_mtouch dmd in
-        HT.update (dmd_mTable dmd) ix md' >>
-        readIORef rfct >>= \ ct ->
-        (writeIORef rfct $! succ ct) >>
-        ln_touch (md_lnk md') 
-
--- touch demand data (if it is not already touched)
--- first touch will cause touch of all present monitors
-touchDemandData :: DemandMonitorData e z -> Int -> IO ()
-touchDemandData dmd ix =
-    HT.lookup (dmd_dTable dmd) ix >>= \ mbdd ->
-    let dd = maybe (dd_zero) id mbdd in
-    unless ((st_expect . dd_sig) dd) $
-        let dd' = touchDD dd in
-        HT.update (dmd_dTable dmd) ix dd' >>
-        readIORef (dmd_dtouch dmd) >>= \ ct ->
-        let ct' = succ ct in
-        ct' `seq` writeIORef (dmd_dtouch dmd) ct' >>
-        when (1 == ct') (touchAllMonitors dmd)
-
--- whenever we first touch a demand-data, we'll deliver a touch on
--- all monitors. This is not recorded anywhere, so may be redundant
--- with touchMonitorData. (That is okay; touch is idempotent; it 
--- matters more that the touch happens.)
-touchAllMonitors            
-        
-        
-
-    case mbmd of
-        Nothing -> addTouched (md_zero lu)
-        Just md -> 
-            unless ((st_expect . md_sig) md) $
-                addTouch
-                let md' = touchMD md in
-                
-            let md = m
-HT.insert (dmd_mTable 
-
--- strict modifyIORef (why isn't this standard?)
-modifyIORef' :: IORef a -> (a -> a) -> IO ()
-modifyIORef' rf fn =
-
-getDemandData :: DemandMonitorData e z -> Int -> IO (DemandData e)
-getDemandData dmd ix = maybe dd_zero id `fmap` HT.lookup (dmd_dTable dmd) ix
-
-expectingDemandUpdates :: DemandMonitorData e z -> IO Bool
-expectingDemandUpdates dmd = (> 0) <$> readIORef (dmd_dtouch dmd)
-
-expectingMonitorUpdates :: DemandMonitorData e z -> IO Bool
-expectingMonitorUpdates dmd = (> 0) <$> readIORef (dmd_mtouch dmd)
-
-expectingUpdates :: DemandMonitorData e z -> IO Bool
-expectingUpdates dmd = 
-    expectingDemandUpdates dmd >>= \ bD ->
-    if bD then return True else
-    expectingMonitorUpdates dmd
-
--- getMonitorData may need to `touch` a new monitor if the touch
--- count for demands is > 0. The LnkUp is only used when a fresh
--- MonitorData is needed.
-getMonitorData :: DemandMonitorData e z -> Int -> LnkUp z -> IO (MonitorData z)
-getMonitorData dmd ix lu = HT.lookup (dmd_mTable dmd) ix >>= maybe newMon return 
-    where newMon = 
-            expectingDemandUpdates dmd >>= \ bAutoTouch ->
-            if (not bAutoTouch) then return md else
-            HT.insert (dmd_mTable dmd) ix md >>
-            touchMonitorData dmd ix >>
-            
-
-            
-            
- let md = md_zero lu in
-                    HT.insert (dmd_mTable dmd) ix md >>
-                    readIORef (dmd_dtouch dmd) >>= \ nTouchCtD ->
-                    when (nTouchCtD > 0) (touchMonitorData dmd ix lu) >>
-                    readIORef (dmd_dtouch dmd) >>= \ nTouchCtD ->
-                    when (nTouchCtD > 0) $
+-- this is very similar to ln_withSigM except the second element is
+-- automatically installed to and uninstalled from the associated
+-- MonitorDist.
+lnMonitor :: MonitorDist z -> LnkUp z -> IORef (Maybe Key) -> IORef (SigM () z) -> LnkUp ()
+lnMonitor md lzo rfIdx rfSigM = loi
+    where loi = LnkUp { ln_touch = pokeO, ln_update = updateO }
+          lzi = LnkUp { ln_touch = pokeZ, ln_update = updateZ }
+          onPoke fn =   
+            readIORef rfSigM >>= \ sm ->
+            writeIORef rfSigM (fn st_poke sm) >>
+            unless (sm_waiting sm) (ln_touch lzo)
+          pokeO = onPoke sm_update_l
+          pokeZ = onPoke sm_update_r
+          updateO su = modifyIORef rfSigM (sm_sigup_l su) >> maybeInstall >> emit
+          updateZ su = modifyIORef rfSigM (sm_sigup_r su) >> emit
+          maybeInstall =
+            readIORef rfSigM >>= \ sm ->
+            when (shouldBeInstalled sm) $ 
+                installMD md lzi rfIdx rfSigM
+          maybeUninstall =
+            readIORef rfSigM >>= \ sm ->
+            unless (shouldBeInstalled sm) $
+                uninstallMD md lzi rfIdx rfSigM
+          emit =
+            readIORef rfSigM >>= \ sm ->
+            unless (sm_waiting sm) $
+                let sm' = sm_cleanup (sm_stable sm) sm in
+                sm' `seq` writeIORef rfSigM sm' >>
+                maybeUninstall >>
+                let su = sm_emit (flip s_mask) sm in 
+                ln_update lzo su
                         
-                        touchMonitorData dmd ix lu
-                    let bTouch = (nTouch > 0) in
-                    if (not btouch) then 
-
--- get the demand data associated with a particular demand source.
-dmd_getDemandData :: DemandMonitorData e z -> Int -> IO (DemandData e)
-dmd_getDemandData dmd ix = maybe dd_zero id `fmap` HT.lookup (dmd_demand dmd) ix
-
--- get monitor data (subscription times, 
-dmd_getMonitorData :: DemandMonitorData e z -> Int -> LnkUp z -> IO (MonitorData z)
-dmd_getMonitorData dmd ix lu = 
-    HT.lookup (dmd_monitor dmd) ix >>= \ mmd ->
-    case mmd of
-        Just md -> return md
-        Nothing -> 
-            let md = md_zero lu in
-
-            
-
-
-
-dmd_touchDemandFacet :: DemandMonitorData e z -> Int -> IO ()
-dmd_touchDemandFacet dmd ix = 
-    dmd_getDemandData dmd ix >>= \ dd ->
-    let st = dd_sig dd in
-    let bTouched = st_expect st in
-    unless bTouched $
-        let st' = st_poke st in
-        let dd' = dd { dd_sig = st' } in
-        HT.update (dmd_demand dmd) ix dd' >>
-        readIORef (dmd_expect dmd) >>= \ nTC ->
-            
-        let dd' = dd { dd_sig = st
-    if bTouched
-        then 
-error "TODO!"
- {-            loadIndex >>= \ ix ->
-            dmd_getDemandData dmd ix >>= \ dd ->
-            let st = dd_sig dd in
-            unless (st_expect st) $  -}
-
-dmd_updateDemandFacet :: DemandMonitorData e z -> Int -> SigUp e -> IO ()
-dmd_updateDemandFacet dmd n su = error "TODO!"
-
-
-
-dmd_touchMonitorFacet :: DemandMonitorData e z -> Int -> IO ()
-dmd_touchMonitorFacet = error "TODO!"
-
-dmd_updateMonitorFacet :: DemandMonitorData e z -> Int -> SigUp () -> IO ()
-dmd_updateMonitorFacet = error "TODO!"
-
-
--- a demand facet will receive demand updates and touches. It does 
--- not propagate the signal! This is a sink. Client should apply a 
--- process for proper duration coupling. 
-newDemandFacet :: DemandMonitorData e z -> IO (LnkUp e)
-newDemandFacet dmd =
-    newIORef Nothing >>= \ rfIndex -> -- GUID would be better for distributed system
-    let loadIndex = getIndex (dmd_dTable dmd) rfIndex in
-    let touch = loadIndex >>= dmd_touchDemandFacet dmd in
-    let update su = loadIndex >>= \ ix -> dmd_updateDemandFacet dmd ix su in
-    return $ LnkUp { ln_touch = touch, ln_update = update }
-
--- a newMonitorFacet will create a monitor facet. This tracks the
--- demand signal for masking against the active signal. 
-newMonitorFacet :: DemandMonitorData e z -> LnkUp z -> IO (LnkUp ())
-newMonitorFacet dmd lu =
-    newIORef Nothing >>= \ rfIndex -> -- GUID would be better for distributed system
-    let loadIndex = getIndex (dmd_mTable dmd) rfIndex in
-    let touch = loadIndex >>= \ ix -> dmd_touchMonitorFacet dmd ix in
-    let update su = loadIndex >>= \ ix -> dmd_updateMonitorFacet dmd ix su in
-    return $ LnkUp { ln_touch = touch, ln_update = update }
-
--}
-
-
 
