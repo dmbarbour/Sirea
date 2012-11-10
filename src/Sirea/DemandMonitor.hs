@@ -1,54 +1,34 @@
 {-# LANGUAGE GADTs #-}
 
--- | RDP behaviors are effectful, albeit in a constrained manner. 
--- RDP will influence resources via a set of concurrently active 
--- signals at any given instant.
+-- | RDP behaviors are effectful, albeit in a constrained manner. A
+-- resource's state can be influenced by the set of demands on it. A
+-- behavior that observes the resource may respond based on present
+-- and anticipated resource state.  
 --
--- Among the simplest useful resources for RDP is a demand monitor.
--- A demand monitor allows developers to observe the set of active
--- demands. Demand monitors are memoryless; after demand halts, it
--- is no longer observed. Demand monitors enable a reflective style
--- for programming, i.e. developers observe presence of behaviors
--- by their reflection in a demand monitor.
+-- A simple kind of resource is Demand Monitors.
 --
--- This allows indirect communication - one-to-many, many-to-many.
--- It is analogous to a bulletin board or registry, albeit without 
--- persistent state. Demand monitors are also a suitable primitive
--- for explaining many-to-one observation by a resource of demands.
--- Demand monitors are useful for open or extensible systems, where
--- new agents can join and contribute behaviors.
+-- The state of a demand monitor resource is simply equal to the set
+-- of demands on it at a given instant. Demands are imposed through
+-- a behavior called the demand facet. The state of the resource is
+-- monitored through behaviors called monitor facets.
 --
--- Every demand monitor has two associated behaviors: one to publish
--- demand, one to monitor it. These are called the demand facet and
--- the monitor facet, respectively. Using dynamic behaviors, it is
--- possible to separate these facets to enforce secure communication
--- patterns (cf. object capability model). 
+-- Demand monitors have a number of useful applications: as volatile
+-- registries or blackboards for modeling agent environments, and as
+-- building blocks for AgentResource based resource adapters. Demand
+-- monitor is basis for one-to-many and many-to-many communications.
 --
--- A difficulty with demand monitors is that they are very unstable.
--- When demands change at independent frequency, the set of demands
--- fluctuates more rapidly than any individual demand. Consequently,
--- demand monitors are most suitable for highly stable demands, or
--- for relatively few publishers (few-to-many). 
+-- The weakness of demand monitors is stability. 
 --
--- To improve stability, some specializations exist - monitors that
--- return only the highest or lowest demands, or only report whether
--- active demand exists. 
+-- Simply put, the stability of a demand set tends to aggregate the 
+-- instability of every contributing demand. To help mitigate this, 
+-- monitor facets may provide a constrained view to filter redundant
+-- updates.
 --
--- The volatile, stateless semantics of demand monitors are valuable
--- for reasoning about correctness over time. Demand monitor is not
--- the only model with this property; for example, it is possible to
--- achieve similar characteristics for constraint systems. Stability
--- of constraint systems could even be superior: maintain a solution
--- with minimal changes over time to adapt changing constraints.
---
--- This module provides concrete implementations of demand monitors
--- and a few variations (activity monitors, minimum and maximums).
--- While several operations create `new` monitors, those are for
--- developers; clients should obtain demand monitors as resources
--- via discovery. 
+-- Demand monitors are an abundant resources. They are accessible as
+-- both toplevel resources and elements of dynamic resource spaces. 
 --
 module Sirea.DemandMonitor 
-    ( 
+    (
     ) where
 
 import Control.Applicative
@@ -59,20 +39,42 @@ import Sirea.Behavior
 import Sirea.B
 import Sirea.Link
 import Sirea.Time
+import Sirea.Partition
+import Sirea.PCX
 import Sirea.Internal.DemandMonitorData
+import Sirea.Internal.BImpl (wrapEqFilter)
 
--- | Create a list-based demand monitor in the IO monad. The list
--- should be treated as a set (behavior independent of duplication
--- and ordering). If `e` is Ord, suggest use of newDemandSetMonitor
--- so it is an actual set.
+-- Tuning: should probably make this more accessible, but...
 --
--- This is generally not for direct use by Sirea clients; instead,
--- it serves as a primitive for a ResourceSpace or BCX, which can
--- introduce a demand monitor where it is needed.
-newDemandMonitor :: IO (B (S p e) (S p ()) , B (S p ()) (S p [e]))
-newDemandMonitor = newDemandMonitorBase sigListZip bothNil
-    where bothNil [] [] = True -- nils are equal
-          bothNil _ _ = False -- everything else is unknown
+-- To increase stability of demand monitors, push some updates into
+-- the future (relative stability) if equal up to that point.
+-- How far to seek the first diff?
+--
+dt_eqf :: DT
+dt_eqf = 3.6
+
+-- newDemandMonitorBase is the basis for other demand monitors.
+-- developers to control the zip function and an adjacency filter.
+newDemandMonitorBase :: (Partition p) 
+                     => ([Sig e] -> Sig z) -- n-zip function
+                     -> (z -> z -> Bool)   -- partial equality (false if unknown)
+                     -> PCX p -- partition resources (for time
+                     -> IO (B (S p e) (S p ()), B (S p ()) (S p z)) 
+newDemandMonitorBase zfn eqfn cp = 
+    let tStep = getStepTime cp in
+    newMonitorDist (zfn []) tStep >>= \ md ->
+    wrapEqFilter dt_eqf eqfn (mainMonitorLnk md) >>= \ monEqf -> 
+    newDemandAggr monEqf zfn tStep >>= \ da ->
+    return (demandFacetB da, monitorFacetB md)
+
+demandFacetB :: DemandAggr e z -> B (S p e) (S p ())
+demandFacetB da = bvoid (unsafeLinkB lnDem) >>> bconst ()
+    where lnDem ln = assert (ln_dead ln) $ LnkSig <$> newDemandLnk da
+
+monitorFacetB :: MonitorDist z -> B (S p ()) (S p z)
+monitorFacetB md = unsafeLinkB lnMon
+    where lnMon LnkDead = return LnkDead -- dead code elim.
+          lnMon (LnkSig lu) = LnkSig <$> newMonitorLnk md lu
 
 
 -- sigListZip will essentially zip a collection of signals into a
@@ -88,27 +90,7 @@ sigListZip = foldr (s_full_zip jf) (s_always [])
   where jf (Just x) (Just xs) = Just (x:xs)
         jf _ xs = xs
 
--- newDemandMonitorZeq is similar to newDemandMonitorZ, but adds
--- an adjacency equality filter to the result. The equality filter
--- will eliminate redundant updates over time, and eliminate some
--- redundancies in the short term (by delaying updates). These
--- eliminations can reduce rework downstream.
---
--- See also: the notes for newDemandMonitorZ
-newDemandMonitorZeq :: (Eq z) => ([Sig e] -> Sig z) 
-                    -> IO (B (S p e) (S p ()) , B (S p ()) (S p z))
-newDemandMonitorZeq = flip newDemandMonitorBase (==)
 
--- | newDemandSetMonitor will provide the output as an ordered set 
--- of the inputs, with duplicates eliminated. It will also perform
--- filtering of duplicate sets, to avoid redundant updates. This 
--- should be preferred to the simple list-based demand monitor, as
--- it is far more deterministic and stable, but not all types have
--- ordinal properties.
---
--- The resulting set is ordered from lowest to highest.
-newDemandSetMonitor :: (Ord e) => IO (B (S p e) (S p ()), B (S p ()) (S p [e]))
-newDemandSetMonitor = newDemandMonitorZeq (sigMergeSortSet compare)
 
 -- merge-sort a list of signals, eliminating duplicates as we go.
 -- My (unproven) intuition is that a merge-sort in this manner will
@@ -125,7 +107,9 @@ sigMergeSortSet cmp ss =
     let sigTl = sigMergeSortSet cmp ssTl in
     s_zip (mergeListSet cmp) sigHd sigTl
 
--- merge two list-sets into a new list-set
+-- merge two list-sets into a new list-set. A list-set is
+-- already ordered and without duplicates, which simplifies
+-- comparison. 
 mergeListSet :: (e -> e -> Ordering) -> [e] -> [e] -> [e]
 mergeListSet _ [] ys = ys
 mergeListSet _ xs [] = xs
@@ -136,17 +120,73 @@ mergeListSet cmp xs@(x:xs') ys@(y:ys') =
         GT -> y:(mergeListSet cmp xs  ys')
 
 
--- | newActivityMonitor is a demand-monitor that returns whether or
--- not there is any active demand on the demand facet. This is very
--- stable to changes, and useful for many systems. 
-newActivityMonitor :: IO (B (S p ()) (S p ()), B (S p ()) (S p Bool))
-newActivityMonitor = newDemandMonitorZeq sigAny
-
 sigAny :: [Sig a] -> Sig Bool
 sigAny sigs = s_full_map isActive sigsMerged
     where sigsMerged = foldr (<|>) empty sigs
           isActive Nothing  = Just False
           isActive (Just _) = Just True
+
+-- take the k minimum or maximum elements. (Min and max is much
+-- more stable than taking the middle elements, which could 
+-- vary based on changes at either end.)
+sigKMin :: (Ord e) => Int -> [Sig e] -> Sig [e]
+sigKMin k = fmap (take k) . (sigMergeSortSet compare)
+
+sigKMax :: (Ord e) => Int -> [Sig e] -> Sig [e]
+sigKMax k = fmap (take k) . (sigMergeSortSet (flip compare))
+
+
+{-
+
+-- | Create a list-based demand monitor in the IO monad. The list
+-- should be treated as a set (behavior independent of duplication
+-- and ordering). If `e` is Ord, suggest use of newDemandSetMonitor
+-- so it is an actual set.
+--
+-- This is generally not for direct use by Sirea clients; instead,
+-- it serves as a primitive for a ResourceSpace or BCX, which can
+-- introduce a demand monitor where it is needed.
+newDemandMonitor :: PCX p -> IO (B (S p e) (S p ()) , B (S p ()) (S p [e]))
+newDemandMonitor = newDemandMonitorBase sigListZip bothNil
+    where bothNil [] [] = True -- nils are equal
+          bothNil _ _ = False -- everything else is unknown
+
+
+
+-- newDemandMonitorZeq is similar to newDemandMonitorZ, but adds
+-- an adjacency equality filter to the result. The equality filter
+-- will eliminate redundant updates over time, and eliminate some
+-- redundancies in the short term (by delaying updates). These
+-- eliminations can reduce rework downstream.
+--
+-- See also: the notes for newDemandMonitorZ
+newDemandMonitorZeq :: (Eq z) 
+                    => ([Sig e] -> Sig z)
+                    -> PCX p 
+                    -> IO (B (S p e) (S p ()) , B (S p ()) (S p z))
+newDemandMonitorZeq = flip newDemandMonitorBase (==)
+
+-- | newDemandSetMonitor will provide the output as an ordered set 
+-- of the inputs, with duplicates eliminated. It will also perform
+-- filtering of duplicate sets, to avoid redundant updates. This 
+-- should be preferred to the simple list-based demand monitor, as
+-- it is far more deterministic and stable, but not all types have
+-- ordinal properties.
+--
+-- The resulting set is ordered from lowest to highest.
+newDemandSetMonitor :: (Ord e) => PCX p -> IO (B (S p e) (S p ()), B (S p ()) (S p [e]))
+newDemandSetMonitor = newDemandMonitorZeq (sigMergeSortSet compare)
+
+
+
+
+
+-- | newActivityMonitor is a demand-monitor that returns whether or
+-- not there is any active demand on the demand facet. This is very
+-- stable to changes, and useful for many systems. 
+newActivityMonitor :: PCX p -> IO (B (S p ()) (S p ()), B (S p ()) (S p Bool))
+newActivityMonitor = newDemandMonitorZeq sigAny
+
 
 -- | newKMaximumMonitor will monitor a list of the top K demands (if
 -- that many exist), rated and sorted based on Ordinal functions. 
@@ -156,57 +196,27 @@ sigAny sigs = s_full_map isActive sigsMerged
 -- Motivation: top K demands is probably more stable than N demands, 
 -- assuming N > K. Computation costs are also under better control.
 -- Improves stability and performance relative to DemandSetMonitor. 
-newKMaximumMonitor :: (Ord e) => Int -> IO (B (S p e) (S p ()), B (S p ()) (S p [e]))
+newKMaximumMonitor :: (Ord e) => Int -> PCX p -> IO (B (S p e) (S p ()), B (S p ()) (S p [e]))
 newKMaximumMonitor k =
     if (k <  1) then return (bconst (), bconst []) 
                 else newDemandMonitorZeq (sigKMax k) 
 
--- take the k max; could be much more optimal if I sorted in the
--- opposite direction (to eliminate the reverse)
-sigKMax :: (Ord e) => Int -> [Sig e] -> Sig [e]
-sigKMax k = fmap (take k) . (sigMergeSortSet (flip compare))
 
 -- | newKMinimumMonitor is simply the KMaximiumMonitor inverted.
-newKMinimumMonitor :: (Ord e) => Int -> IO (B (S p e) (S p ()), B (S p ()) (S p [e]))
+newKMinimumMonitor :: (Ord e) => Int -> PCX p -> IO (B (S p e) (S p ()), B (S p ()) (S p [e]))
 newKMinimumMonitor k = 
     if (k <  1) then return (bconst (), bconst []) 
                 else newDemandMonitorZeq (sigKMin k)
 
-sigKMin :: (Ord e) => Int -> [Sig e] -> Sig [e]
-sigKMin k = fmap (take k) . (sigMergeSortSet compare)
+-}
 
--- NOTE: As tempting as a `median monitor` might be, it is not a 
--- viable construct in RDP. Due to spatial idempotence, RDP is not
--- allowed to count equivalent demands. I could return the "middle"
--- demand (not including duplicates), but it doesn't correspond to 
--- any useful statistic, and would not be especially stable.
+    
+{-
+    
+    --( DemandAggr, newDemandAggr, newDemandLnk
+    --, MonitorDist, newMonitorDist, mainMonitorLnk, newMonitorLnk    new
+    
 
--- how much history to keep, to accommodate straggling monitors or  
--- demand resources. This can often be kept small; anticipation of
--- dynamic behaviors will cover most concerns. A larger value will
--- offer a greater range for eventual consistency, but also increase
--- buffering costs and delays operations that wait for stability. 
---
--- NOTE: I could probably split the demand monitor history to
--- separately support straggling demand sources (which reduces the
--- stability) and straggling monitors (which merely increases the
--- local history buffer). I haven't found a strong motivation to do
--- so, yet.
-dmd_default_history :: DT
-dmd_default_history = 0.025
-
--- newDemandMonitorBase is the basis for other demand monitors.
--- It allows developers to control the zip function and an
--- adjacency filter.
---
--- The equality function may be partial; it should return False if
--- the equality is not known or computation of equality would be
--- divergent.
---
-newDemandMonitorBase :: ([Sig e] -> Sig z) -- n-zip function
-                     -> (z -> z -> Bool)   -- partial equality (false if unknown)
-                     -> IO (B (S p e) (S p ()), B (S p ()) (S p z)) 
-newDemandMonitorBase zfn eqfn = error "TODO: newDemandMonitorBase!"
   {-  newDemandMonitorData zfn eqfn dmd_default_history >>= \ dmd ->
     return (demandFacetB dmd, monitorFacetB dmd)
 
@@ -287,6 +297,6 @@ sigBest bt = foldr (s_full_zip jf) (s_always [])
           jf _ xs = xs
 
 
-
+-}
 
 

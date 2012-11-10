@@ -7,7 +7,7 @@
 -- nothing is destroyed. Developers will use discovery idioms, paths
 -- and names. A useful idiom: abstract infinite spaces of resources,
 -- and lazily initialize resources as they are discovered or used.
--- It is easy to partition infinite space into more infinite spaces.
+-- An infinite space can be partitioned into infinite child spaces.
 -- Every RDP component may thus have its own, infinite corner of the
 -- universe. 
 --

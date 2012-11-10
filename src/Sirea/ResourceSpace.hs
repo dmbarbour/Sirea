@@ -1,29 +1,74 @@
 
 -- | RDP has a conservative notion of resources: nothing is created,
 -- nothing is destroyed. That is, there is no equivalent to `new` or
--- `delete`, nor `malloc` and `free`. Those could be modeled using
--- external state and a globally unique identifier, but RDP favors a
--- resource discovery idiom. Resources are located and accessed by 
--- external stable identifiers (e.g. URI or file path). If a virtual
--- resource does not exist, it may be implicitly created when used.
+-- `delete`, not even `newIORef`. Instead, resource discovery idioms
+-- can provide a dynamic set of resources as needed to accommodate
+-- multiple active relationships or clients. 
 --
--- Module `PCX` is for static, global resources, identified by type.
+-- Some resources are abundant and may be "discovered" in whatever
+-- quantity is needed. Much like unused directories or files in the
+-- filesystem, developers use naming conventions and partitioning
+-- schemes to ensure unique resources are "discovered" for each
+-- unique purpose. 
 --
--- This module supports dynamic resources, discovered at runtime via
--- configuration files and such. It assumes a tree-structured model
--- with relative paths, without direct path from child to parent. 
--- I.e. there is no equivalent to `..` path of filesystems. Security
--- can be achieved by controlling distribution of resource spaces.
+-- Sirea.ResourceSpace describes these spaces of abundant, possibly
+-- stateful resources, suitable for dynamic discovery by use of
+-- unique string identifiers. These spaces are tree-structured.
 --
--- Resource Spaces should generally support a `reset` capability, to 
--- set them to an initial state. This is useful to explain initial 
--- states, and to model volatile resources used by applications or
--- dynamic behaviors. Similarly, resource spaces may be unavailable
--- for various reasons, including active reset. 
+-- Abstractly, external resources are eternal resources. Developers
+-- do not need to initialize or finalize stateful resources in RDP,
+-- but some resource spaces might support reset to a default state.
+-- Resources in their logical default states do not consume space on
+-- a disk drive. (Other potential space-level operations include
+-- splicing resource spaces, or versioning spaces.)
+--
+-- ResourceSpace builds on the more statically structured PCX. 
+-- 
+-- Modularity among mutually distrustful subprograms is achieved by
+-- partitioning a resource space among subprograms. There is no `..`
+-- path from child space to parent. Dynamic behavior can encapsulate
+-- authority for secure interactions among partitions.
 --
 module Sirea.ResourceSpace
     (
     ) where
 
 
-
+-- How to model this?
+--  As a typeclass or set of typeclasses: 
+--    very tempting
+--    could support "adding" features such as
+--       resets (for types that can represent disruption)
+--       splicing (hard or soft links)
+--       history or versioning
+--       cloning
+--       merging?
+--  Perhaps as a concrete structure: ResourceSpace a
+--    Could not add new spatial-structures (splicing, etc.)
+--    But could add `a`-dependent features.
+--
+-- I'd like to have ResourceSpace be a lot closer to RDP, i.e. so 
+-- there isn't much work done by partitions.  
+--
+--  If I do typeclass, might want ability to hide the type from
+--  client behind a set of interfaces? But might not be big deal.
+--
+--  Default state of a resource must be a function of the path to
+--  that resource. It may actually be a fairly complex function of
+--  said path. 
+--
+--  How shall I define a path to a resource?
+--
+--  I could use a simple sequence of strings. Or I could use a
+--  sequence of flexible values. As a sequence of strings is very
+--  tempting (fits well with URLs). ["Hello","World"]. But simple
+--  support for integers could be nice, i.e. for cleaner ordering,
+--  and it might be useful to also support set-based paths (similar
+--  to Reiser FS ideas?)
+-- 
+--  Bah! Keep It Simple, Stupid!
+--
+--  For now, maybe limit to sequence of simple, case-insensitive, 
+--  alphanumeric strings. It should be easier to add to this than
+--  to subtract from it.
+--  

@@ -8,7 +8,10 @@
 -- Organization:
 --   Each Partition has a `TC` (thread context).
 --      This includes inbox, outbox, working tasks.
-
+--
+-- TODO: at bcross, consider choking pure-stability updates. This
+-- could easily and significantly improve system efficiency in 
+-- cases where stability updates are propagating through a model.
 --   
 module Sirea.Internal.BCross 
     ( crossB
@@ -22,7 +25,7 @@ module Sirea.Internal.BCross
 import Data.Typeable
 import Data.Function (fix)
 import Data.IORef
--- import Data.Maybe (isNothing)
+import Data.Maybe (isNothing)
 import Control.Applicative
 import Control.Exception (assert)
 import Control.Concurrent.MVar 
@@ -36,6 +39,7 @@ import Sirea.Internal.BImpl (phaseUpdateB)
 import Sirea.Partition
 import Sirea.PCX
 import Sirea.Behavior
+import Sirea.Time
 
 type Event = IO ()
 type Work = IO ()
@@ -49,31 +53,30 @@ crossB :: (Partition p1, Partition p2) => PCX w -> B (S p1 x) (S p2 x)
 crossB cw = fix $ \ b ->
     let (p1,p2) = getPartitions b in
     if (typeOf p1 == typeOf p2) 
-      then jumpB
+      then B_mkLnk tr_fwd (return . fnStay)
       else sendB cw p1 p2 >>> phaseDelayB cw
 
 -- this is a total hack in haskell to access typesystem data
 getPartitions :: B (S p1 x) (S p2 x) -> (p1,p2)
 getPartitions _ = (undefined,undefined)
 
--- jumpB is used if we're moving to the same partition we started in
--- It simply ignores the partitions and forwards the signal. Jump is
--- free after compilation. It would be unsafe to use this if p1 != p2.
-jumpB :: (Partition p1, Partition p2) => B (S p1 x) (S p2 x)
-jumpB = fix $ \ b ->
-    let (p1,p2) = getPartitions b in
-    assert(typeOf p1 == typeOf p2) $
-    B_mkLnk tr_fwd lnkJump
-    where lnkJump = return . fnJump
+fnStay :: Lnk (S p x) -> Lnk (S p' x)
+fnStay LnkDead = LnkDead
+fnStay (LnkSig lu) = (LnkSig lu)
 
-fnJump :: Lnk (S p x) -> Lnk (S p' x)
-fnJump LnkDead = LnkDead
-fnJump (LnkSig lu) = (LnkSig lu)
 
 -- sendB, if active (not dead code), will
 --   * create partitions if they don't already exist
 --   * batch multiple updates to one partition (across signals)
 --   * delay operation to runTCSend phase
+--   * choke insignificant pure-stability updates
+--
+-- sendB is a useful place to choke updates, one of few locations 
+-- that does not need `touch`. The state costs are cheap relative to
+-- the batch management. Currently I choke only stability updates,
+-- but it may be worth choking far future updates (e.g. +5 seconds).
+-- The benefit would be for temporal recursion.
+--
 sendB :: (Partition p1, Partition p2) 
       => PCX w -> p1 -> p2 -> B (S p1 x) (S p2 x)
 sendB cw p1 p2 = B_mkLnk tr_fwd lnkSend
@@ -85,11 +88,32 @@ mkSend _ _ _ LnkDead = return LnkDead
 mkSend cw p1 p2 (LnkSig lu) = 
     initPartition p1 cw >>
     initPartition p2 cw >>
-    let addToBatch = tcSend cw p1 p2 in
+    newIORef Nothing >>= \ rfChoke ->
+    let send = tcSend cw p1 p2 . ln_update lu in
     let touch'  = return () in
-    let update' = addToBatch . (ln_update lu) in
+    let update' su = 
+            let tf = su_stable su in
+            readIORef rfChoke >>= \ t0 ->
+            let bChoked = isNothing (su_state su) && timeChoked t0 tf in
+            unless bChoked $ 
+                tf `seq` writeIORef rfChoke tf >>
+                send su
+    in
     let lu' = LnkUp { ln_touch = touch', ln_update = update' } in
     return (LnkSig lu')
+
+-- TODO: come back later to consider choking of distant future state updates.
+
+-- tuning parameter: to constrain against insignificant stability 
+-- updates between local threads. 
+dtInsigStabilityUp :: DT
+dtInsigStabilityUp = 0.05
+
+-- time choked returns true if a send could be choked based on time.
+timeChoked :: Maybe T -> Maybe T -> Bool
+timeChoked (Just t0) (Just tf) = tf < (t0 `addTime` dtInsigStabilityUp)
+timeChoked _ _ = False
+
 
 -- | phaseDelayB delays updates a phase within runStepper. The idea
 -- is to touch a bunch of updates in one run before executing them 

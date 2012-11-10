@@ -42,8 +42,8 @@ instance Typeable2 B where
 -- they do not appear to have changed. I.e. switch to heartbeat
 -- updates if there is no observed change.
 dtEqf, dtSeq :: DT
-dtEqf   = 3.6 -- seconds ahead of stability to find difference
-dtSeq   = 0.3 -- seconds ahead of stability to force evaluation
+dtEqf   = 3.6  -- seconds ahead of stability to seek difference
+dtSeq   = 0.36 -- seconds ahead of stability to force evaluation
 
 eqfB :: (x -> x -> Bool) -> B (S p x) (S p x)
 eqfB = unsafeEqShiftB dtEqf

@@ -74,10 +74,14 @@ data Stopper = Stopper
 --    tc_recv :: either event or work; atomic
 --    tc_work :: phased tasks, repeats until empty; not atomic
 --    tc_send :: tasks to perform at end of round; not atomic
---    tc_time :: (convenience) time of the step, computed at most once per step. 
+--    tc_time :: (convenience) time of the step. 
 -- These are not heavily optimized; they don't need to be, since
 -- there are a bounded number of tasks in any queue at once, and
 -- received operations are pre-grouped in batches.
+--
+-- TODO: consider adding a `tc_pulse` operation to perform work 
+-- at a low, synchronized rate - e.g. once per second. Would be
+-- useful for choked updates. The `tc_time` would be taken 
 data TC = TC 
     { tc_init :: IORef Bool
     , tc_recv :: IORef (Either Event Work)

@@ -221,7 +221,7 @@ maintainApp cw tc0 gs rfSD lu tStable =
                     schedule dtStep (addTCRecv tc0 nextStep)
                 else -- NORMAL MAINTENANCE 
                     let tStable' = tNow `addTime` dtStability in
-                    assert (tStable' > tStable) $ -- right now, can't handle running clock quickly backwards
+                    assert (tStable' > tStable) $ -- can't handle clock running backwards
                     let su = SigUp { su_state = Nothing, su_stable = Just tStable' } in
                     let nextStep = maintainApp cw tc0 gs rfSD lu tStable' in
                     ln_update lu su >>

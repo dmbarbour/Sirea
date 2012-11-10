@@ -21,14 +21,14 @@ module Sirea.Internal.BImpl
     , unsafeSigZipB
     , unsafeChangeScopeB 
     , unsafeAddStabilityB 
-    , unsafeEqShiftB
+    , unsafeEqShiftB, lnEqShift, wrapEqFilter
+
     , unsafeFullMapB
     , phaseUpdateB
     , undeadB
     , keepAliveB
     , unsafeAutoSubscribeB, OnSubscribe, UnSubscribe
     , buildTshift -- for BDynamic
-    , lnEqShift, wrapEqFilter
     --, tchokeB, wrapTChoke
     ) where
 
@@ -777,9 +777,12 @@ phaseUpdateB mkPQ = mkLnkB id lnPhase
             let lu' = makePhaseLU rfSu pq lu in 
             return (LnkSig lu')
 
+suZero :: SigUp a
+suZero = SigUp { su_state = Nothing, su_stable = Nothing }
+
 type PhaseQ = IO () -> IO () -- receive a phase operation.
 
-makePhaseLU :: IORef (SigUp a,Bool) -> PhaseQ -> LnkUp a -> LnkUp a
+makePhaseLU :: IORef (SigUp a, Bool) -> PhaseQ -> LnkUp a -> LnkUp a
 makePhaseLU rf pq lu = LnkUp { ln_touch = touch, ln_update = update }
     where touch = return ()
           update su =
@@ -795,9 +798,7 @@ makePhaseLU rf pq lu = LnkUp { ln_touch = touch, ln_update = update }
             writeIORef rf (suZero,False) >>
             ln_update lu su
 
-suZero :: SigUp a
-suZero = SigUp { su_state = Nothing, su_stable = Nothing }
-
+-- appendSigUp will support piggybacking of updates.
 appendSigUp :: SigUp a -> SigUp a -> SigUp a
 appendSigUp su0 su = SigUp { su_state = state', su_stable = stable' }
     where stable' = su_stable su  -- assume monotonic stability

@@ -95,13 +95,13 @@ Reactive Demand Programming offers many wonderful, high level features that make
 
 The weaknesses of Sirea RDP belong more to Sirea than to RDP. 
 
-* Developers must use a point-free style for RDP behaviors in Sirea. This a very rewarding style, and the full power of Haskell functions is still available for static information (clean, staged programming). But newcomers seem to find point-free intimidating. While I'd like to answer this concern with a higher layer language that can compile to behaviors, it is low priority for Sirea.
+* Sensitive to OS clock; rapid shifts in the OS estimate of time can cause Sirea to fail. It is best to amortize a time-shift by making the clock run faster or slower for some duration. Never run backwards. A forward jump more than about a second will be modeled as a restart (as if someone had hibernated the app). Sirea uses an simplistic representation of UTC time; it is not sensitive to time-zone shifts, but might fail for leap-seconds if the OS represents them.
+
+* Developers must use a point-free style for RDP behaviors in Sirea. This a very rewarding style, and the full power of Haskell functions is still available for static information (~staged programming). But newcomers seem to find point-free intimidating. While I'd like to answer this concern with a higher layer language that can compile to behaviors, it is low priority for Sirea.
 
 * Sirea lacks static support for reasoning about open feedback loops, lacks any support for optimizing network fixpoints, and uses a very simplistic damping model. Consequently, developers must be disciplined about cyclic feedback for demand monitors, shared state, and similar.
 
 * RDP is designed for [object capability model](http://en.wikipedia.org/wiki/Object-capability_model) systems, using dynamic behaviors as runtime composable capabilities. (This is reflected, for example, in having fine-grained capabilities for many resources.) Sirea, however, is designed to be convenient in context of Haskell's module and type systems, and uses types to obtain ambient resources. I am not entirely comfortable with this tradeoff; it isn't necessary if one reifies the module and linking system (e.g. service registry and matchmaker). 
-
-* Sensitive to OS clock; rapid shifts in the OS estimate of time can cause Sirea to fail. It is best to amortize a time-shift by making the clock run faster or slower for some duration. Never run backwards. A forward jump more than about a second will be modeled as a restart (as if someone had hibernated the app). Sirea uses an simplistic representation of UTC time; it is not sensitive to time-zone shifts, but might fail for leap-seconds if the OS represents them.
 
 
 Reactive Demand Programming (in Sirea)
@@ -202,16 +202,14 @@ The concrete signal type in Sirea is `Sig a`,
 
 ### Updating Signals
 
-Signal updates are not observable to the RDP developer, but are an important part of the Sirea implementation. Sire will push signal updates through the behavior network. Each update includes the full projected future of that signal, but later updates will replace some of that future. In the degenerate case, this might mean updating one value at a time. However, it is not unusual that a rich future (e.g. the next seven values) can be correctly anticipated.
+Signal updates are not observable to the RDP developer, but are an important part of the Sirea implementation. Sirea will push signal updates through the behavior network. Each update includes the full projected future of that signal, but later updates will replace some of that future. In the degenerate case, this might mean updating one value at a time. However, it is not unusual that a rich future (e.g. the next seven values) can be correctly anticipated.
 
         data SigUp a = SigUp 
             { su_state  :: !(Maybe (Sig a , T)) -- signal future after given time
             , su_stable :: !(Maybe T)           -- update stability; also heartbeat
             }
 
-The `su_stable` associated with a signal update is a promise that future update times have a lower bound set by the stability value, where `Nothing` is forever (indicating the signal has received its last update). The main role of update stability is to support garbage collection of cached signals. (Caches are necessary when signals are combined, e.g. with `bzip` or `bmerge`, since the different signals may update at different times.)
-
-at `bzip`, `bmerge`, `beval`, and other behaviors that must internally cache signals. A secondary role of update stability is a rough estimate of real-time for the less time-sensitive operations; it's a lot cheaper and more convenient than looking up a wall-clock time, and sets a bound for the amount of rework a system might need to perform. 
+The `su_stable` associated with a signal update is a promise that future update times have a lower bound set by the stability value, where `Nothing` is forever (indicating the signal has received its last update). The main role of update stability is to support garbage collection of cached signals. (Caches are necessary when signals are combined, e.g. with `bzip` or `bmerge`, since the different signals may update at different times.) A secondary role of update stability is a rough estimate of real-time for the less time-sensitive operations; it's a lot cheaper and more convenient than looking up a wall-clock time, and sets a bound for the amount of rework a system might need to perform. 
 
 The `su_state` indicates the signal has a new value starting at a given time, or `Nothing` if there was no change in the signal state (just a stability update). The task of applying a `SigUp a` to a `Sig a` is rather trivial, just an `s_switch` at the given time. It is very common for state and stability updates to piggyback. 
 
@@ -521,7 +519,7 @@ In this graph, dependencies flow left to right along the lines. For example, `c`
 
 I do not present a worst-case ordering. The worst-case ordering is exponentially worse than the best case. If you know the dependencies, a [toplogical sort](http://en.wikipedia.org/wiki/Topological_sorting) will provide an optimal ordering. However, for RDP, the dynamic behaviors and openly shared resources (state, demand monitors) make it difficult to determine the dependencies. The *"touch"* technique used by Sirea is a simple, dynamic solution to the problem: a "touch" is a promise of a pending update. When `g` is touched by `a` and `f`, `g` knows to wait for an update from both before pushing its own update. By propagating all touches before propagating any updates, the update ordering will be optimal.
 
-The use of "touch" is reflected directly in the data type for constructing concrete behavior networks. Each link (`LnkUp`) has two channels: one for touch, one for the signal update: 
+The use of "touch" is reflected directly in the data type for constructing concrete behavior networks. Each link (`LnkUp`) has two IO methods: one for touch, one for the signal update: 
 
         data LnkUp a = LnkUp
             { ln_touch  :: IO ()
@@ -542,7 +540,7 @@ Developers will use the `LnkUp` type directly if extending Sirea for new resourc
             LnkProd :: Lnk x -> Lnk y -> Lnk (x :&: y)
             LnkSum  :: Lnk x -> Lnk y -> Lnk (x :|: y)
 
-The `Lnk` type can carry `LnkUp` values for each concrete signal, and can also carry multiple concrete signals in case of `(x :&: y)` or `(x :|: y)`. The `LnkDead` indicates dead code on output, which can help optimize by eliminating cases where a resource is query-only. Some `IO` is allowed during construction, though it is intended for resource management and signal caching (no semantic state, no observable effects). 
+The `Lnk` type can carry `LnkUp` values for each concrete signal, including multiple concrete signals in case of `(x :&: y)` or `(x :|: y)`. The `LnkDead` indicates dead code on output, which can help optimize by eliminating cases where a resource is query-only. Some `IO` is allowed during construction, but should not have any observable effects: it's purpose is to prepare caches necessary for maintaining the link. 
 
 Type `B` is the concrete, primitive behavior type implemented by Sirea. Type `B` is inconvenient to use directly because it is unclear where resources would be represented other than the Haskell global space, which would be problematic. Sirea provides a higher level behavior type `BCX` to mitigate this by reifying a toplevel context object `PCX`. Operations such as `bcross` depend on the `PCX` value to track partition threads and mailboxes. The Sirea application behavior is of type `BCX`, with Sirea supplying the initial `PCX`.
 
@@ -615,7 +613,7 @@ Those are explained in detail in the associated modules.
 
 Sirea 1.0 will include packages supporting the most commonly accessible resources - mouse, keyboard, graphics, web, state, filesystem, sound, time. Developers should (hopefully!) need to write adapters only for more domain specific or esoteric resources and services, and even then only for resources that nobody else has adapted effectively. But when those situations occur, the aforementioned features will keep it from being too onerous.
 
-Specific resources will be discussed in thier corresponding packages. However, a few broad resources and idioms will be discussed here.
+Specific resources will be discussed in their corresponding packages. However, a few broad resources and idioms will be discussed here.
 
 ### State
 

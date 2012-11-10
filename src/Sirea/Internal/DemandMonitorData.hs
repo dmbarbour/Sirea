@@ -3,16 +3,23 @@
 --
 -- Currently this is separated into two responsibilities:
 --   * aggregation of demands
---   * distribution of a signals to many observers
+--   * distribution of a signal to many observers
 --
--- Intermediate filtration of equal values or choking of
--- full updates to control cycles is suggested.
+-- Demand Monitors are stabilized based on known demand sources and
+-- the 'real-time' obtained from an external time source. A late 
+-- arriving demand source can be reroactively accommodate for at
+-- least 30ms, though whether late-arriving demands can be handled
+-- downstream depends on the downstream processing. 
 --
--- The composition is performed by the DemandMonitor module.
+-- Weakness of current design:
+--   don't really know when to GC the `MonitorDist`.
+--   I somehow need a more dedicated thread or a clear separation
+--   of observable resources. 
+-- 
 -- 
 module Sirea.Internal.DemandMonitorData
     ( DemandAggr, newDemandAggr, newDemandLnk
-    , MonitorDist, newMonitorDist, extractEmitLnk, newMonitorLnk
+    , MonitorDist, newMonitorDist, mainMonitorLnk, newMonitorLnk
     ) where
 
 import qualified Sirea.Internal.Table as Table
@@ -25,62 +32,74 @@ import Control.Exception (assert)
 import Sirea.Signal
 import Sirea.Time
 import Sirea.Link
+import Sirea.Partition
+import Sirea.PCX
 import Sirea.Internal.LTypes
 
 type Table = Table.Table
 type Key = Table.Key
 
--- TUNING:
 -- 
 -- DemandAggr will automatically keep a certain amount of "extra" 
 -- history to admit late-arriving demands sources. How much? Well,
--- this does have a cost to stability, so it shouldn't be much. 
+-- this does have a cost to stability, so it shouldn't be much.
+-- This will be kept relative to wall-clock time  
 -- Also, the use of anticipation helps mitigate the requirement,
 -- so it doesn't need to be very much. 
 --
 -- MonitorDist also keeps history to accommodate late-arriving 
 -- observers. However, this history has no significant costs other 
--- than storage. It can be a fair bit longer. 
+-- than storage. It can be a fair bit longer, and so it is. 
 --
+-- If there are no demands, the monitor will also use dt_mdist_hist
+-- to estimate stability of the demands relative to itself. (This
+-- is not ideal, but is the best I can do without using dedicated
+-- partition for demand monitors.)
 dt_daggr_hist :: DT
-dt_daggr_hist = 0.03
+dt_daggr_hist = 0.036
 
 dt_mdist_hist :: DT
-dt_mdist_hist = 0.21   
+dt_mdist_hist = 0.144 
+
 
 -- | DemandAggr: aggregates and processes many concurrent demands.
 --
 -- NOTE: DemandAggr will block propagation of cyclic updates from
 -- within the current step. Such updates will eventually deliver, 
 -- due to the periodic global stability updates. This will dampen
--- local cycles; if developers need cycles to operate reliably,
--- they must cross partitions.
--- 
+-- local cycles, often excessively.
+--
+-- Stability of DemandAggr is simply stability of the incoming
+-- demands or an estimated current time as adjusted to support late
+-- arriving demand sources). 
 data DemandAggr e z = DemandAggr 
     { da_active     :: !(IORef Bool)        -- to detect cyclic touch or update
     , da_touchCt    :: !(IORef Int)         -- count of non-cyclic touches
     , da_nextid     :: !(IORef Key)         -- next hashtable ID
     , da_tmup       :: !(IORef (Maybe T))   -- lowest update time (at the moment)
-    , da_stable     :: !(IORef (Maybe T))   -- track last reported stability
+    , da_stable     :: !(IORef (Maybe T))   -- track reported stability
     , da_table      :: !(Table (SigSt e))   -- tracking demand data
     , da_nzip       :: !([Sig e] -> Sig z)  -- compute the result signal
     , da_next       :: !(LnkUp z)           -- process the updated signal
+    , da_time       :: !(IO T)              -- est. wall-clock time
     }
 
 -- | Create a demand aggregator, given the output target.
-newDemandAggr 
+newDemandAggr
     :: ([Sig e] -> Sig z)
     -> (LnkUp z)
+    -> IO T
     -> IO (DemandAggr e z)
-newDemandAggr zpf zlu = DemandAggr 
+newDemandAggr zpf zlu now = DemandAggr 
     <$> newIORef False -- inactive
     <*> newIORef 0     -- untouched
     <*> newIORef 80000 -- initial key
     <*> newIORef Nothing -- not updated
-    <*> newIORef Nothing -- no reported stability
+    <*> newIORef Nothing -- no stability
     <*> Table.new      -- no demands
     <*> pure zpf       -- provided zip function
     <*> pure zlu       -- provided 
+    <*> pure now
 
 getIndex :: IORef Key -> IORef (Maybe Key) -> IO Key
 getIndex rfNxt rfK =
@@ -116,7 +135,7 @@ decTouch rf =
 newDemandLnk :: DemandAggr e z -> IO (LnkUp e)
 newDemandLnk da =
     newIORef Nothing >>= \ rfIdx -> -- to acquire index later.
-    let getIdx = (getIndex . da_nextid) da rfIdx in
+    let getIdx = getIndex (da_nextid da) rfIdx in
     let touch = getIdx >>= touchDaggr da in
     let update su = getIdx >>= \ ix -> updateDaggr da ix su in
     let lu = LnkUp { ln_touch = touch, ln_update = update } in
@@ -125,16 +144,17 @@ newDemandLnk da =
 touchDaggr :: DemandAggr e z -> Key -> IO ()
 touchDaggr da k = 
     readIORef (da_active da) >>= \ bCycle ->
-    unless bCycle $ Table.get (da_table da) k >>= \ mbSt ->
-    let st = fromMaybe st_zero mbSt in
-    unless (st_expect st) $
-        let st' = st_poke st in
-        Table.put (da_table da) k (Just st') >>
-        incTouch (da_touchCt da) >>= \ bFirst ->
-        when bFirst $
-            writeIORef (da_active da) True >>
-            ln_touch (da_next da) >>
-            writeIORef (da_active da) False
+    unless bCycle $ 
+        Table.get (da_table da) k >>= \ mbSt ->
+        let st = fromMaybe st_zero mbSt in
+        unless (st_expect st) $
+            let st' = st_poke st in
+            Table.put (da_table da) k (Just st') >>
+            incTouch (da_touchCt da) >>= \ bFirst ->
+            when bFirst $
+                writeIORef (da_active da) True >>
+                ln_touch (da_next da) >>
+                writeIORef (da_active da) False
 
 updateDaggr :: DemandAggr e z -> Key -> SigUp e -> IO ()
 updateDaggr da k su =
@@ -169,21 +189,21 @@ deliverDaggr da =
     -- obtain the collection of demand signals
     let tbl = da_table da in
     Table.toList tbl >>= \ lst -> 
-    -- compute and validate stability (could change validation fail
-    -- to warning and use recorded stability, but fail means demand
-    -- source may have lost information)
-    readIORef (da_stable da) >>= \ tmRecordedStability -> 
-    let tmDemandStability = foldl' leastTime Nothing $ fmap (st_stable . snd) lst in
-    let tmTargetStability = fmap (`subtractTime` dt_daggr_hist) tmDemandStability in
-    let tmStable = (max <$> tmRecordedStability <*> tmTargetStability) <|> tmTargetStability in
-    assert (monotonicStability tmRecordedStability tmDemandStability) $
-    writeIORef (da_stable da) tmStable >> -- note that recorded stability < stability of inputs
+    -- compute stability based on all demands, current time, and committed stability
+    da_time da >>= \ tmClock -> -- wall-clock time
+    let tmNow = tmClock `subtractTime` dt_daggr_hist in
+    readIORef (da_stable da) >>= \ tmRec ->  -- recorded stability (non-decreasing!)
+    let tmDem = foldl' leastTime Nothing $ fmap (st_stable . snd) lst in
+    let tmTgt = leastTime tmDem (Just tmNow) in
+    let tmStable = (max <$> tmRec <*> tmTgt) <|> tmTgt in
+    writeIORef (da_stable da) tmStable >>
     -- perform garbage collection of elements in the table
     mapM_ (tblGC tbl tmStable) lst >>
-    -- compute the update.
+    -- compute the update time, constrained by committed stability.
     readIORef (da_tmup da) >>= \ tmUpd ->
     writeIORef (da_tmup da) Nothing >>
-    case tmUpd of
+    let tmSigUp = (max <$> tmRec <*> tmUpd) <|> tmUpd in
+    case tmSigUp of
         Nothing ->
             let su = SigUp { su_state = Nothing, su_stable = tmStable } in
             ln_update (da_next da) su
@@ -220,23 +240,31 @@ monotonicStability _ _ = True
 -- a resource. MonitorDist is very simple; most of the logic is at
 -- each observer link. All MonitorDist does is ensure fresh updates
 -- will reach the observer links.
+--
+-- A significant concern is how to deal with MonitorDist when there
+-- are no primary signal updates, when we have observers without
+-- something active to observe.
+--
 data MonitorDist z = MonitorDist 
     { md_signal     :: !(IORef (SigSt z)) -- primary signal
     , md_nextid     :: !(IORef Key)       -- hashtable key
     , md_table      :: !(Table (LnkUp z)) -- collection of observers
+    , md_time       :: !(IO T)            -- est. wall clock time
     }
 
 -- | track a new set of observers
-newMonitorDist :: IO (MonitorDist z)
-newMonitorDist = MonitorDist
-    <$> newIORef (st_poke st_zero) -- poke ensures initial observers wait for initial update
+newMonitorDist :: z -> IO T -> IO (MonitorDist z)
+newMonitorDist z0 now = MonitorDist
+    <$> newIORef stInit 
     <*> newIORef 60000 -- a single observer may use many keys, one on each install
     <*> Table.new      -- table of observers, initially empty
+    <*> pure now       -- est. of current time; used when Demands are inactive
+    where stInit = st_zero { st_signal = s_always z0 }
 
 -- | Support update of the observed signal. Signal should always be
 -- active; it is masked by the signal of each observer.
-extractEmitLnk :: MonitorDist z -> LnkUp z
-extractEmitLnk md = LnkUp { ln_touch = touch, ln_update = update }
+mainMonitorLnk :: MonitorDist z -> LnkUp z
+mainMonitorLnk md = LnkUp { ln_touch = touch, ln_update = update }
     where touch = 
             readIORef (md_signal md) >>= \ st ->
             unless (st_expect st) $
@@ -264,14 +292,32 @@ extractEmitLnk md = LnkUp { ln_touch = touch, ln_update = update }
 -- The link will be installed and uninstalled from the MonitorDist
 -- automatically, whenever there is significant change in state.
 -- Installation is evaluated on update to the () signal. Uninstall
--- happens after LnkUp z is emitted.
+-- happens after emit.
+--
+-- KNOWN BUGS: if there are no Demands, then md_signal will lack a
+-- valid stability value. We cannot allow a later reduction in
+-- stability. How to best handle this?! Could record a reported
+-- stability, and perhaps reduce stability a little to accommodate
+-- a late-arriving demand source?
 newMonitorLnk :: MonitorDist z -> LnkUp z -> IO (LnkUp ())
-newMonitorLnk md lzo =
-    -- state of each observer link consists of a pair,
-    -- tracking installation, index, and input state.
-    newIORef Nothing >>= \ rfIdx -> -- installed? if so, index?
-    newIORef sm_zero >>= \ rfSigM -> -- state of signals?
-    return (lnMonitor md lzo rfIdx rfSigM)
+newMonitorLnk md lzo = lnMonitor <$> newMonLn md lzo
+
+-- MonLn is parameters & cache associated with one newMonitorLnk
+data MonLn z = MonLn
+    { mln_rfSigM :: !(IORef (SigM () z)) -- cached signals
+    , mln_tStable:: !(IORef (Maybe T))   -- guards reported stability
+    , mln_lzout  :: !(LnkUp z)           -- observed data destination
+    , mln_mdist  :: !(MonitorDist z)     -- source of data
+    , mln_rfIdx  :: !(IORef (Maybe Key)) -- identifier in MonitorDist
+    }
+
+newMonLn :: MonitorDist z -> LnkUp z -> IO (MonLn z)
+newMonLn md lzo = MonLn 
+    <$> newIORef sm_zero
+    <*> newIORef Nothing
+    <*> pure lzo 
+    <*> pure md
+    <*> newIORef Nothing
 
 -- test: should this resource be installed?
 --   this is a conservative test; it may answer True in some cases
@@ -287,11 +333,15 @@ shouldBeInstalled sm =
             let done = s_term sig tm in
             not done
 
-uninstallMD, installMD :: MonitorDist z -> LnkUp z -> IORef (Maybe Key) -> IORef (SigM () z) -> IO ()
-installMD md lzi rfIdx rfSigM =
+uninstallMonLn, installMonLn :: MonLn z -> IO ()
+installMonLn mln =
+    let rfIdx = mln_rfIdx mln in
+    let rfSigM = mln_rfSigM mln in
+    let md = mln_mdist mln in
+    let lzi = mln_lzout mln in
     readIORef rfIdx >>= \ mbk ->
     case mbk of
-        Just _ -> return ()
+        Just _ -> return () -- already installed
         Nothing ->
             -- prepare for future z inputs 
             readIORef (md_nextid md) >>= \ k0 ->
@@ -300,28 +350,34 @@ installMD md lzi rfIdx rfSigM =
             writeIORef (md_nextid md) k >>
             writeIORef rfIdx (Just k) >>
             Table.put (md_table md) k (Just lzi) >>
-            -- obtain initial state for z signal
+            -- obtain initial state for z signal (& touch state)
             readIORef (md_signal md) >>= \ sz ->
             readIORef rfSigM >>= \ sm ->
             let sm' = sm { sm_rsig = sz } in
             writeIORef rfSigM sm' 
+          
 
-uninstallMD md _ rfIdx rfSigM =
+uninstallMonLn mln =
+    let rfIdx = mln_rfIdx mln in
+    let rfSigM = mln_rfSigM mln in
+    let md = mln_mdist mln in
     readIORef rfIdx >>= \ mbk ->
     case mbk of
-        Nothing -> return ()
+        Nothing -> return () -- not installed
         Just k  -> -- clear associated states!
             Table.put (md_table md) k Nothing >>
             writeIORef rfSigM sm_zero >>
-            writeIORef rfIdx Nothing 
+            writeIORef rfIdx Nothing
 
 -- this is very similar to ln_withSigM except the second element is
 -- automatically installed to and uninstalled from the associated
 -- MonitorDist.
-lnMonitor :: MonitorDist z -> LnkUp z -> IORef (Maybe Key) -> IORef (SigM () z) -> LnkUp ()
-lnMonitor md lzo rfIdx rfSigM = loi
+lnMonitor :: MonLn z -> LnkUp ()
+lnMonitor mln = loi
     where loi = LnkUp { ln_touch = pokeO, ln_update = updateO }
           lzi = LnkUp { ln_touch = pokeZ, ln_update = updateZ }
+          lzo = mln_lzout mln
+          rfSigM = mln_rfSigM mln
           onPoke fn =   
             readIORef rfSigM >>= \ sm ->
             writeIORef rfSigM (fn st_poke sm) >>
@@ -333,18 +389,23 @@ lnMonitor md lzo rfIdx rfSigM = loi
           maybeInstall =
             readIORef rfSigM >>= \ sm ->
             when (shouldBeInstalled sm) $ 
-                installMD md lzi rfIdx rfSigM
+                installMonLn mln
           maybeUninstall =
             readIORef rfSigM >>= \ sm ->
             unless (shouldBeInstalled sm) $
-                uninstallMD md lzi rfIdx rfSigM
+                uninstallMonLn mln
           emit =
             readIORef rfSigM >>= \ sm ->
             unless (sm_waiting sm) $
                 let sm' = sm_cleanup (sm_stable sm) sm in
                 sm' `seq` writeIORef rfSigM sm' >>
                 maybeUninstall >>
+                let sigZ  = (st_signal . sm_rsig) sm in
+                let sigO  = (st_signal . sm_lsig) sm in
+                let sig   = s_mask sigZ sigO in
+                let tZ    = (st_stable 
+                let sig = s_mask ((st_si
                 let su = sm_emit (flip s_mask) sm in 
                 ln_update lzo su
-                        
+
 

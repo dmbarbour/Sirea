@@ -37,7 +37,7 @@ type Table = Table.Table
 -- how far ahead should we establish behaviors?
 -- should make this dynamic, based on observed stability.
 dt_compile_future :: DT
-dt_compile_future = 3.0 -- seconds into future 
+dt_compile_future = 2.7 -- seconds into future 
 
 -- Evaluate a behavior provided dynamically.
 --
