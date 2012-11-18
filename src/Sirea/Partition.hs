@@ -16,14 +16,10 @@
 -- Sirea makes partitions very convenient - just name them by type,
 -- or infer them at `bcross`. This is very declarative. Partition 
 -- threads are only created if the partition is used. Partitions 
--- can be abstracted by typeclass, possibly by existentials.
---
--- Partitions don't communicate directly. RDP behaviors orchestrate 
--- communication between using bcross. Atomic batches of updates are
--- communicated to support snapshot consistency of other partitions
--- between runStepper calls. Snapshot consistency isn't glitch free,
--- i.e. without proper `bdelay` you might still see glitches across
--- three or more partitions. But it resists most malign glitches.
+-- can be abstracted by typeclass, possibly by existentials. They
+-- communicate via inboxes processed on runStepper operations. For
+-- weakly periodic tasks (GC, persistence, polling) a pulse message
+-- is regularly broadcast across all partitions that need it. 
 --
 -- Use bdelay with bcross to model the communication overheads, and
 -- computation costs within each partition. There is no delay by
@@ -51,6 +47,7 @@ import Sirea.Behavior
 import Sirea.PCX
 import Sirea.Internal.PTypes
 import Sirea.Internal.Thread
+import Sirea.Internal.PulseSensor (addPulseAction)
 import Sirea.Time
 
 import Data.Typeable
@@ -101,16 +98,40 @@ class (Typeable p) => Partition p where
 
 
 -- | onNextStep will delay any IO action until the next runStepper
--- operation by an associated partition. For use within a partition,
--- or by worker threads associated with a partition. onNextStep can 
--- also serve as a notification that work is available, as it will
--- cause any stepper event to trigger.
---
--- Note: Worker threads can be useful to handle synchronous IO, such
--- as with filesystem or sockets. But if you use this technique, use
--- bounded buffers to constrain use of memory.
+-- operation by an associated partition. onNextStep is mt-safe and
+-- will trigger the stepper event (indicating work is available).
+-- This makes it a useful way for worker threads to publish info
+-- back to their controlling partition. onNextStep tasks will run
+-- in the same order they are added.
 onNextStep :: (Partition p) => PCX p -> IO () -> IO ()
 onNextStep = addTCRecv . findInPCX
+
+-- | `eventually` will delay an IO task based on an external event.
+-- Currently, this event coincides with the main signal's heartbeat,
+-- which runs at 10-20Hz. Use of `eventually` will add work to local
+-- queue then (if the queue was empty) register for the event. The
+-- queue will eventually run as one large batch via onNextStep.
+--
+-- Use of `eventually` is unsuitable if you need precise periodic
+-- tasks, but is sufficient for cleanup tasks or mid-rate polling.
+-- `eventually` is mt-safe, and eventually tasks will run in the
+-- same order they are added.
+-- 
+eventually :: (Partition p) => PCX p -> IO () -> IO ()
+eventually = addPulseAction
+
+-- | `phaseDelay` causes the provided action to be delayed within 
+-- the current step. This is used primarily so that touch actions
+-- can complete prior to updates. phaseDelay is used at bcross so
+-- touches are propagated and updates combined to minimize rework.
+--
+-- A partition can execute any number of phases within a runStepper
+-- action, though there are usually only two (touch then update).
+-- 
+-- phaseDelay is not mt-safe; it must be used from target partition,
+-- and should only be used within a step.  
+phaseDelay :: (Partition p) => PCX p -> IO () -> IO ()
+phaseDelay = addTCWork . findInPCX
 
 -- | getStepTime will obtain the real (wall clock) time associated
 -- with the most recent step. The value is actually computed on the
@@ -124,10 +145,9 @@ onNextStep = addTCRecv . findInPCX
 getStepTime :: (Partition p) => PCX p -> IO T
 getStepTime = getTCTime . findInPCX
 
--- | Pt is a type for trivial partitions. These partitions have no
+-- | Pt is a type for trivial partitions. These partitions have few
 -- responsibilities, other than to process available RDP updates as
--- fast as possible. They might gain responsibilities via behaviors
--- that don't need any special treatment from their thread.
+-- fast as possible and perform specified step or pulse actions. 
 --
 -- While partitioning can be a basis for parallelism, it weakens the
 -- consistency properties of Sirea applications. (Within a partition

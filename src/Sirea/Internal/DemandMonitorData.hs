@@ -7,16 +7,17 @@
 --
 -- Demand Monitors are stabilized based on known demand sources and
 -- the 'real-time' obtained from an external time source. A late 
--- arriving demand source can be reroactively accommodate for at
--- least 30ms, though whether late-arriving demands can be handled
--- downstream depends on the downstream processing. 
+-- arriving demand source can be retroactively accommodated for
+-- circa 30ms.
 --
--- Weakness of current design:
---   don't really know when to GC the `MonitorDist`.
---   I somehow need a more dedicated thread or a clear separation
---   of observable resources. 
--- 
--- 
+-- For cleanup, limited cleanup occurs based on stability updates at
+-- demand sources and monitors. Some additional cleanup is enabled 
+-- via the partition pulse when necessary. 
+--
+-- Cleanup is driven by periodic actions. Relying on stability isn't
+-- sufficient in the case where there are no more active demands on
+-- the demand monitor, though
+--
 module Sirea.Internal.DemandMonitorData
     ( DemandAggr, newDemandAggr, newDemandLnk
     , MonitorDist, newMonitorDist, mainMonitorLnk, newMonitorLnk
@@ -56,10 +57,10 @@ type Key = Table.Key
 -- is not ideal, but is the best I can do without using dedicated
 -- partition for demand monitors.)
 dt_daggr_hist :: DT
-dt_daggr_hist = 0.036
+dt_daggr_hist = 0.024
 
 dt_mdist_hist :: DT
-dt_mdist_hist = 0.144 
+dt_mdist_hist = 0.126 
 
 
 -- | DemandAggr: aggregates and processes many concurrent demands.
@@ -191,11 +192,12 @@ deliverDaggr da =
     Table.toList tbl >>= \ lst -> 
     -- compute stability based on all demands, current time, and committed stability
     da_time da >>= \ tmClock -> -- wall-clock time
-    let tmNow = tmClock `subtractTime` dt_daggr_hist in
+    let tmNow = Just $ tmClock `subtractTime` dt_daggr_hist in
     readIORef (da_stable da) >>= \ tmRec ->  -- recorded stability (non-decreasing!)
+    let tmMin = tmRec <|> tmNow in -- using tmNow if tmRec isNothing
     let tmDem = foldl' leastTime Nothing $ fmap (st_stable . snd) lst in
-    let tmTgt = leastTime tmDem (Just tmNow) in
-    let tmStable = (max <$> tmRec <*> tmTgt) <|> tmTgt in
+    let tmTgt = leastTime tmDem tmNow in -- using tmNow if less than earliest demanded time
+    let tmStable = max <$> tmMin <*> tmTgt in
     writeIORef (da_stable da) tmStable >>
     -- perform garbage collection of elements in the table
     mapM_ (tblGC tbl tmStable) lst >>

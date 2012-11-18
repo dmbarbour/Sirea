@@ -5,13 +5,9 @@
 -- It also contains types associated with partitions and
 -- crossB, i.e. used in BCX.
 --
--- Organization:
---   Each Partition has a `TC` (thread context).
---      This includes inbox, outbox, working tasks.
---
--- TODO: at bcross, consider choking pure-stability updates. This
--- could easily and significantly improve system efficiency in 
--- cases where stability updates are propagating through a model.
+-- TODO: set a pulse-based choke on send for updates that
+-- are far in advance of stability. The idea is to make 
+-- them more incremental. 
 --   
 module Sirea.Internal.BCross 
     ( crossB
@@ -36,6 +32,7 @@ import Sirea.Internal.STypes
 import Sirea.Internal.LTypes
 import Sirea.Internal.PTypes
 import Sirea.Internal.BImpl (phaseUpdateB)
+import Sirea.Internal.PulseSensor (initPulseListener)
 import Sirea.Partition
 import Sirea.PCX
 import Sirea.Behavior
@@ -203,7 +200,10 @@ initPartition p cw =
         let stopInStepper = addTCRecv tc (runStopper s0) in
         let stopper = s0 { runStopper = stopInStepper } in 
         let gs = unGob $ findInPCX cw in
+        let cp0 = findInPCX cw :: PCX P0 in
+        initPulseListener cp0 cp >>
         atomicModifyIORef gs (\stoppers->(stopper:stoppers,()))
+        -- TODO: add support to receive pulse.
     
 
 -- tcSend - send work from p1 to p2 in world w.

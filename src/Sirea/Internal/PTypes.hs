@@ -179,7 +179,8 @@ addTCSend tc newWork = modifyIORef (tc_send tc) addWork
     where addWork oldWork = (oldWork >> newWork)
 
 -- TODO: Consider tweaking Sirea to tolerate leap seconds
--- and validate that time is running forward.
+-- and validate that time is running forward. Alternatively,
+-- integrate Sirea with NTP?
 getTCTime :: TC -> IO T
 getTCTime tc =
     let rf = tc_time tc in

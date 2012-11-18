@@ -86,6 +86,7 @@ Library
     Sirea.Internal.Thread
     Sirea.Internal.BDynamic
     Sirea.Internal.Table
+    Sirea.Internal.PulseSensor
     
 
   ghc-options: -threaded -Wall -fno-warn-orphans

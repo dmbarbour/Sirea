@@ -16,16 +16,12 @@
 -- registries or blackboards for modeling agent environments, and as
 -- building blocks for AgentResource based resource adapters. Demand
 -- monitor is basis for one-to-many and many-to-many communications.
+-- Demand monitors are an abundant resource, so an application can
+-- access as many as it needs.
 --
--- The weakness of demand monitors is stability. 
---
--- Simply put, the stability of a demand set tends to aggregate the 
--- instability of every contributing demand. To help mitigate this, 
--- monitor facets may provide a constrained view to filter redundant
--- updates.
---
--- Demand monitors are an abundant resources. They are accessible as
--- both toplevel resources and elements of dynamic resource spaces. 
+-- The weakness of demand monitors is stability. A demand set will
+-- aggregate instability from every contributing demand. To mitigate
+-- this, some demand monitors provide a simplified view of demand.
 --
 module Sirea.DemandMonitor 
     (

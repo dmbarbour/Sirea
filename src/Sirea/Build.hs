@@ -40,7 +40,7 @@ import Control.Concurrent (myThreadId, forkIO, killThread, threadDelay)
 import Sirea.Internal.BTypes
 import Sirea.Internal.LTypes
 import Sirea.Internal.BCompile(compileB)
-import Sirea.Internal.PTypes 
+import Sirea.Internal.PTypes
 import Sirea.Internal.BCross
 import Sirea.Internal.Thread
 import Sirea.Behavior
@@ -90,16 +90,31 @@ unwrapSireaApp app = app
 -- is provided to halt the whole app. Stopper is not instantaneous;
 -- continue to runStepper until Stopper event is called.
 --
--- (*) It is not recommended that the main thread be used for any
--- resources, since it can be difficult to reuse such in another
--- application. If possible, shift resource tasks into external
--- threads. 
--- 
+-- If runStopper before runStepper, the app will activate for the
+-- minimum amount of time that Sirea supports, currently a quarter
+-- of a second. I'll preserve this behavior, as it seems useful for
+-- unit-testing.
+--
+-- (*) It is not recommended to actually use sireaContext, since any
+-- explicit use is difficult to reproduce in another application. P0
+-- can have resources, but it's preferable that they're provided by 
+-- typeclass and BCX types and don't require explicit integration.
 data SireaAppObject = SireaAppObject 
     { sireaStepper :: Stepper
     , sireaStopper :: Stopper
     , sireaContext :: PCX P0
     }
+
+-- AppPeriodic data is used internally on the man clock step.
+data AppPeriodic w = AppPeriodic 
+    { ap_cw     :: !(PCX w)
+    , ap_tc0    :: !(TC)
+    , ap_gs     :: !(GobStopper)
+    , ap_pulse  :: !(IO ())
+    , ap_sd     :: !(IORef StopData)
+    , ap_luMain :: !(LnkUp ())
+    }
+
 
 -- | Build the SireaApp behavior, generating a SireaAppObject. Access
 -- to the Stepper allows the user to embed the SireaApp in another
@@ -115,10 +130,10 @@ buildSireaApp :: SireaApp -> IO SireaAppObject
 buildSireaApp app = 
     -- new generic context; fresh global space for the app
     newPCX >>= \ cw -> 
-    -- indicate the initial thread already exists
+    -- special initialization for P0 thread
     let cp0 = findInPCX cw :: PCX P0 in
     let tc0 = findInPCX cp0 :: TC in
-    writeIORef (tc_init tc0) True >> 
+    writeIORef (tc_init tc0) True >>
     -- compute behavior in the new context
     -- add a phase delay for consistency with bcross updates
     let bcx = (wrapBCX phaseDelayB) >>> (unwrapSireaApp app) in
@@ -167,24 +182,40 @@ buildSireaBLU cw lu =
           
 -- task to initialize application (performed on first runStepper)
 -- a slight delay is introduced before everything really starts.
+--
+-- Once you start, you're active for at least a period of:
+--
+--    dtStability - dtGrace
+--
+-- This period starts at Now+dtGrace, providing a grace period for
+-- startup (to pre-load resources, files, etc.). After halting, the
+-- system runs an additional dtGrace for final shutdown. 
+--
+-- This could be useful for unit testing or one-off apps.
 beginApp :: PCX w -> IORef StopData -> LnkUp () -> IO ()
 beginApp cw rfSD lu = 
     let gs  = findInPCX cw in
     let cp0 = findInPCX cw :: PCX P0 in
     let tc0 = findInPCX cp0 in
-    readIORef rfSD >>= \ sd ->
-    if shouldStop sd -- were we stopped before we started?
-      then shutdownEvent tc0 gs rfSD
-      else getTime >>= \ tNow ->
-           let tStart = tNow `addTime` dtStep in
-           let tStable = tNow `addTime` dtStability in
-           let su = SigUp { su_state = Just (s_always (), tStart)
-                          , su_stable = Just tStable } in
-           let nextStep = maintainApp cw tc0 gs rfSD lu tStable in
-           tStart `seq`
-           setStartTime cp0 tStart >>
-           ln_update lu su >> -- activation!
-           schedule dtStep (addTCRecv tc0 nextStep)
+    let pulse = runPulseActions cp0 in
+    let apw = AppPeriodic 
+                { ap_cw = cw
+                , ap_tc0 = tc0
+                , ap_pulse = pulse
+                , ap_sd = rfSD
+                , ap_luMain = lu }
+    in
+    getTime >>= \ tNow ->
+    let tStart = tNow `addTime` dtGrace in
+    let tStable = tNow `addTime` dtStability in
+    let su = SigUp { su_state = Just (s_always (), tStart)
+                   , su_stable = Just tStable } in
+    let nextStep = maintainApp apw tStable in
+    tStart `seq`
+    setStartTime cp0 tStart >>
+    ln_update lu su >> -- activation!
+    pulse >> -- first heartbeat
+    schedule dtStep (addTCRecv tc0 nextStep)
 
 -- schedule will delay an event then perform it in another thread.
 -- Sirea only does this with one thread at a time.
@@ -197,15 +228,19 @@ schedule dt op = assert (usec > 0) $ void $
 -- active signal on a regular basis; performed within main thread.
 -- At any given time, one maintenance operation is either queued in
 -- the main thread or delayed by a 'schedule' thread.
-maintainApp :: PCX w -> TC -> GobStopper -> IORef StopData -> LnkUp () -> T -> IO ()
-maintainApp cw tc0 gs rfSD lu tStable =
-    readIORef rfSD >>= \ sd ->
+maintainApp :: AppPeriodic w -> T -> IO ()
+maintainApp apw tStable =
+    ap_pulse apw >> -- heartbeat
+    readIORef (ap_sd apw) >>= \ sd ->
+    let tc0 = ap_tc0 apw in
     if shouldStop sd 
       then -- SHUTDOWN APPLICATION
            let su = SigUp { su_state = Just (s_never, tStable)
                           , su_stable = Nothing } in
+           let tFinal = tStable `addTime` dtGrace in
+           let nextStep = haltingApp apw tFinal in
            ln_update lu su >> -- indicate signal inactive in future.
-           schedule dtStability (addTCRecv tc0 (shutdownEvent tc0 gs rfSD))
+           schedule dtStep (addTCRecv tc0 nextStep)
       else getTCTime tc0 >>= \ tNow -> 
            if (tNow > (tStable `addTime` dtRestart))
                 then -- RESTART APPLICATION (halt and restore activity)
@@ -214,24 +249,47 @@ maintainApp cw tc0 gs rfSD lu tStable =
                     let sig = s_switch s_never tRestart (s_always ()) in
                     let su = SigUp { su_state = Just (sig, tStable)
                                    , su_stable = Just tStable' } in
-                    let nextStep = maintainApp cw tc0 gs rfSD lu tStable' in
+                    let nextStep = maintainApp apw tStable' in
                     tRestart `seq` 
                     setStartTime (findInPCX cw) tRestart >>
-                    ln_update lu su >>
+                    ln_update (ap_luMain apw) su >>
                     schedule dtStep (addTCRecv tc0 nextStep)
                 else -- NORMAL MAINTENANCE 
                     let tStable' = tNow `addTime` dtStability in
                     assert (tStable' > tStable) $ -- can't handle clock running backwards
                     let su = SigUp { su_state = Nothing, su_stable = Just tStable' } in
-                    let nextStep = maintainApp cw tc0 gs rfSD lu tStable' in
-                    ln_update lu su >>
+                    let nextStep = maintainApp apw tStable' in
+                    ln_update (ap_luMain apw) su >>
                     schedule dtStep (addTCRecv tc0 nextStep)
 
--- this is the last phase of shutdown - actually stopping threads
--- and eventually calling the Stopper event for the main thread.
-shutdownEvent :: TC -> GobStopper -> IORef StopData -> IO ()
-shutdownEvent tc0 gs rfSD = runGobStopper gs finiStop
-    where finiStop = addTCRecv tc0 (finiStopData rfSD)
+-- After we set the main signal to inactive, we must still wait for
+-- real-time to catch up, and should run a final few heartbeats to
+-- provide any pulse actions.
+haltingApp :: AppPeriodic w -> T -> IO ()
+haltingApp apw tFinal = 
+    ap_pulse apw >> -- heartbeat
+    let tc0 = ap_tc0 apw in
+    getTCTime tc0 >>= \ tNow ->
+    if (tNow > tFinal) -- wait for real time to catch up to stability
+        then let onStop = ap_pulse apw >> finiStopData (ap_sd apw) in
+             let gs = ap_gs apw in
+             runGobStopper gs (addTCRecv tc0 onStop) >>
+             let nextStep = finalizingApp apw in
+             schedule dtStep (addTCRecv tc0 nextStep) 
+        else let nextStep = haltingApp apw tFinal in
+             schedule dtStep (addTCRecv tc0 nextStep)
+
+-- at this point we've run the all-stop for all other threads,
+-- so we're just biding time until threads report completion.
+-- There might not be any more heartbeats at this point.
+finalizingApp :: AppPeriodic w -> IO ()
+finalizingApp apw =
+    ap_pulse apw >> -- heartbeat (potentially last)
+    readIORef (ap_sd apw) >>= \ sd ->
+    unless (isStopped sd) $
+        let nextStep = finalizingApp apw in
+        let tc0 = ap_tc0 apw in
+        schedule dtStep (addTCRecv tc0 nextStep)
     
 
 -- Tuning parameters for the stability maintenance tasks:
@@ -239,15 +297,17 @@ shutdownEvent tc0 gs rfSD = runGobStopper gs finiStop
 --   dtRestart   : how long frozen to cause restart
 --   dtStability : how far ahead to stabilize
 --   dtStep      : period between stability updates
+--   dtGrace     : grace period at startup and shutdown
 --
 -- dtStep can also influence amount of computation per round due to
 -- `btouch` and similar structures that compute based on stability.
 -- These values also can have an impact on idling overheads.
 --
-dtRestart, dtStability, dtStep :: DT
+dtRestart, dtStability, dtStep, dtGrace :: DT
 dtRestart   = 1.20  -- how long a pause to cause a restart
 dtStability = 0.30  -- stability of main signal (how long to halt)
 dtStep      = 0.06  -- periodic event to increase stability
+dtGrace     = dtStep -- time allotted for graceful start and stop
 
 -- | If you don't need to run the stepper yourself (that is, if you
 -- don't need full control of the main thread event loop), consider 
@@ -344,10 +404,12 @@ bStartTime = unsafeLinkBCX $ \ cw ->
     let rfST = rfStartTime $ findInPCX cp0 in
     return . naivelyReportValue rfST
 
--- naivelyReportValue is relying on the fact that the change in
--- value of the reference is always accompanied by a change in the
--- signal due to the toplevel. It isn't useful except for start and
--- restart times. 
+-- naivelyReportValue will simply report the value held by an
+-- IORef whenever a signal update is received. This technique
+-- is unsafe in most cases, but is okay for tStart/tStop due to
+-- the guaranteed update (brief period of inactivity whenever
+-- tStart changes). TODO: make this more precise, perhaps by
+-- keeping a history of restart times. 
 naivelyReportValue :: IORef v ->  Lnk (S p v) -> Lnk (S p ())
 naivelyReportValue _ LnkDead = LnkDead
 naivelyReportValue rf (LnkSig lu) = (LnkSig lu')
@@ -370,6 +432,5 @@ instance Resource StartTime where
 -- sets the start time for one SireaApp.
 setStartTime :: PCX P0 -> T -> IO () 
 setStartTime cp0 t = writeIORef (rfStartTime $ findInPCX cp0) t
-
 
 
