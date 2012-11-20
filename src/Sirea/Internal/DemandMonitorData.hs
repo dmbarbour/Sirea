@@ -21,7 +21,7 @@ module Sirea.Internal.DemandMonitorData
     , MonitorDist, newMonitorDist, mainMonitorLnk, newMonitorLnk
     ) where
 
-import qualified Sirea.Internal.Table as Table
+import Sirea.Internal.RefSpace
 import Data.IORef
 import Data.Maybe (fromMaybe, isNothing)
 import Data.List (foldl')
@@ -35,8 +35,7 @@ import Sirea.Partition
 import Sirea.PCX
 --import Sirea.Internal.LTypes
 
-type Table = Table.Table
-type Key = Table.Key
+
 
 -- 
 -- DemandAggr will automatically keep a certain amount of "extra" 
@@ -93,7 +92,7 @@ data DemandAggr e z = DemandAggr
     , da_touchCt    :: !(IORef Int)         -- count of non-cyclic touches
     , da_tmup       :: !(IORef (Maybe T))   -- lowest update time (at the moment)
     , da_stable     :: !(IORef (Maybe T))   -- track reported stability
-    , da_table      :: !(Table (SigSt e))   -- tracking demand data
+    , da_demands    :: !(RefSpace (SigSt e))   -- tracking demand data
     , da_nzip       :: !([Sig e] -> Sig z)  -- compute the result signal
     , da_next       :: !(LnkUp z)           -- process the updated signal
     , da_partd      :: !PartD
@@ -275,8 +274,7 @@ monotonicStability _ _ = True
 --
 data MonitorDist z = MonitorDist 
     { md_signal     :: !(IORef (SigSt z)) -- primary signal
-    , md_nextid     :: !(IORef Key)       -- hashtable key
-    , md_table      :: !(Table (LnkUp z)) -- collection of observers
+    , md_observers  :: !(RefSpace (LnkUp z)) -- collection of observers
     , md_time       :: !(IO T)            -- est. wall clock time
     }
 

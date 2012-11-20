@@ -10,14 +10,14 @@ module Sirea.Internal.BDynamic
 
 import Prelude hiding(id,(.))
 import Control.Category
-import Control.Monad (unless, when, void)
+import Control.Monad (unless, when)
 import Control.Applicative
 import Control.Exception (assert)
 import Control.Arrow (second)
 import Data.IORef
 import Data.List (foldl')
 import Data.Maybe (isNothing)
-import qualified Sirea.Internal.Table as Table
+import Sirea.Internal.RefSpace
 import Sirea.Internal.BTypes
 import Sirea.Internal.STypes
 import Sirea.Internal.LTypes
@@ -25,10 +25,6 @@ import Sirea.Internal.BImpl
 import Sirea.Internal.BCompile
 import Sirea.Time
 import Sirea.Signal
-
-
-type Key = Table.Key
-type Table = Table.Table
 
 -- import Debug.Trace
 
@@ -156,11 +152,11 @@ buildEval dtx lnyFinal =
     newIORef Nothing >>= \ rfTt -> -- until when has this been compiled?
     mkFullDyn dtx >>= \ dynX -> -- store and process the `x` signals
     let xLnk = fullDynToLnk dynX in -- Lnk x
-    -- use indexed `Lnk y` to merge responses from dynamic behaviors
-    let arbitraryStartingIndex = 10000 in
-    newIORef arbitraryStartingIndex >>= \ rfIdx -> 
+    -- Multiple Lnk y signals must be merged at Lnk y object. 
+    -- Build one factory that will build receiver objects for
+    -- each observed dynamic behavior.
     mkMergeLnkFactory lnyFinal >>= \ mkLny ->
-    let compile b = takeIdx rfIdx >>= compileBC1 b . mkLny in
+    let compile b = mkLny >>= compileBC1 b in
     let compileE (t,mb) =
             maybe (return LnkDead) compile mb >>= \ lx ->
             return (t,lx)
@@ -221,15 +217,6 @@ buildUpdateRange rfTt tu st =
     in 
     range `seq`
     return range
-
--- a trivial function for sequential indexes
-takeIdx :: IORef Key -> IO Key
-takeIdx rf =
-    readIORef rf >>= \ n0 ->
-    let n = succ n0 in
-    n `seq` 
-    writeIORef rf n >>
-    return n
 
 -- filter x membrane for liveness of input source.
 -- (It is possible that some inputs are dead, due to
@@ -504,28 +491,23 @@ loadUpdates tStable tu sk (lo:hi:xs) =
 -- expirations for those links could be achieved by HMAC provided on
 -- establishing the merge-link. (RDP is intended to set up without 
 -- any round-trip handshaking.)
-mkMergeLnkFactory :: Lnk y -> IO (Key -> Lnk y)
+mkMergeLnkFactory :: Lnk y -> IO (IO (Lnk y))
 mkMergeLnkFactory LnkDead = 
-    return (const LnkDead)
+    return (return LnkDead)
 mkMergeLnkFactory (LnkProd f s) = 
     mkMergeLnkFactory f >>= \ mkF ->
     mkMergeLnkFactory s >>= \ mkS ->
-    let mkProd n = 
-            let f' = mkF n in
-            let s' = mkS n in
-            (LnkProd f' s')
-    in return mkProd
+    return (LnkProd <$> mkF <*> mkS)
 mkMergeLnkFactory (LnkSum l r) =
     mkMergeLnkFactory l >>= \ mkL ->
     mkMergeLnkFactory r >>= \ mkR ->
-    let mkSum n = 
-            let l' = mkL n in
-            let r' = mkR n in
-            (LnkSum l' r')
-    in return mkSum
+    return (LnkSum <$> mkL <*> mkR)
 mkMergeLnkFactory (LnkSig lu) =
     mkMergeLnk >>= \ mln -> -- state to perform the merges.
-    let mkLnk = LnkSig . fnMergeEval mln lu in
+    let mkLnk = newRef (mln_table mln) >>= \ rf ->
+                let lu' = fnMergeEval mln lu rf in
+                return (LnkSig lu') 
+    in 
     return mkLnk
 
 -- MergeLnk is the state to perform merges of results from multiple
@@ -533,39 +515,41 @@ mkMergeLnkFactory (LnkSig lu) =
 -- keep algorithmic costs down.
 data MergeLnk a = MergeLnk 
     { mln_touch_ct :: IORef Int -- count of touches
-    , mln_table :: Table (SigSt a)
-    , mln_tmupd :: IORef (Maybe T)
+    , mln_table    :: RefSpace (SigSt a) -- all incoming data
+    , mln_tmupd    :: IORef (Maybe T) -- earliest update on sources
     }
+type MLRef a = Ref (SigSt a)
+
 mkMergeLnk :: IO (MergeLnk a)
 mkMergeLnk = MergeLnk <$> newIORef 0 
-                      <*> Table.new
+                      <*> newRefSpace
                       <*> newIORef Nothing
 
-mln_get :: MergeLnk a -> Key -> IO (SigSt a)
-mln_get mln n = maybe st_zero id `fmap` Table.get (mln_table mln) n
+mln_get :: MLRef a -> IO (SigSt a)
+mln_get rf = maybe st_zero id <$> refGet rf
 
-mln_put :: MergeLnk a -> Key -> SigSt a -> IO ()
-mln_put mln n st = void $ Table.put (mln_table mln) n (Just st)
+mln_put :: MLRef a -> SigSt a -> IO ()
+mln_put rf st = refPut rf (Just st)
 
 -- touch, and return whether this is the first touch
-mln_touch :: MergeLnk a -> Key -> IO Bool
-mln_touch mln n =
-    mln_get mln n >>= \ st ->
+mln_touch :: MergeLnk a -> MLRef a -> IO Bool
+mln_touch mln rf =
+    mln_get rf >>= \ st ->
     if (st_expect st) then return False else
     let st' = st_poke st in
-    mln_put mln n st' >>
+    mln_put rf st' >>
     readIORef (mln_touch_ct mln) >>= \ ct ->
     let ct' = succ ct in
     ct' `seq` writeIORef (mln_touch_ct mln) ct' >>
     return (1 == ct')
 
 -- update, and return whether this is the last expected update
-mln_update :: MergeLnk a -> Key -> SigUp a -> IO Bool
-mln_update mln n su =
+mln_update :: MergeLnk a -> MLRef a -> SigUp a -> IO Bool
+mln_update mln rf su =
     -- update the associated signal
-    mln_get mln n >>= \ st ->
+    mln_get rf >>= \ st ->
     let st' = st_sigup su st in
-    mln_put mln n st' >>
+    mln_put rf st' >>
     -- update the associated time
     readIORef (mln_tmupd mln) >>= \ tm ->
     let tm' = leastTime tm (fmap snd (su_state su)) in
@@ -591,19 +575,19 @@ mln_update mln n su =
 -- signals, which is proportional to update frequency for the dynamic
 -- behavior.
 --
-fnMergeEval :: MergeLnk a -> LnkUp a -> Key -> LnkUp a
-fnMergeEval mln lu idx = LnkUp { ln_touch = touch, ln_update = update }
+fnMergeEval :: MergeLnk a -> LnkUp a -> MLRef a -> LnkUp a
+fnMergeEval mln lu rf = LnkUp { ln_touch = touch, ln_update = update }
     where touch = 
-            mln_touch mln idx >>= \ bFirstTouch ->
+            mln_touch mln rf >>= \ bFirstTouch ->
             when bFirstTouch (ln_touch lu)
           update su = 
-            mln_update mln idx su >>= \ bLastExpectedUpdate ->
+            mln_update mln rf su >>= \ bLastExpectedUpdate ->
             when bLastExpectedUpdate emitMergedSignal
           emitMergedSignal =
             -- operate on elements as collection.
-            Table.toList (mln_table mln) >>= \ lSt -> -- original state of hashtable
+            listActiveRefs (mln_table mln) >>= \ lSt -> -- original state of hashtable
             let tmStable = foldl' leastTime Nothing $ map (st_stable . snd) lSt in
-            mapM_ (mergeEvalGC mln tmStable) lSt >> -- manual garbage collection of history
+            mapM_ (mergeEvalGC tmStable) lSt >> -- manual garbage collection of history
             readIORef (mln_tmupd mln) >>= \ tmUpd -> -- time of update
             writeIORef (mln_tmupd mln) Nothing >>
             case tmUpd of
@@ -620,17 +604,16 @@ fnMergeEval mln lu idx = LnkUp { ln_touch = touch, ln_update = update }
                     ln_update lu su
 
 -- need to GC the hashtable based on lowest stability forall elements.
-mergeEvalGC :: MergeLnk a -> Maybe T -> (Key,SigSt a) -> IO ()
-mergeEvalGC mln Nothing (idx,_) = 
-    Table.put (mln_table mln) idx Nothing
-mergeEvalGC mln (Just tm) (idx,st) = 
+mergeEvalGC :: Maybe T -> (Ref (SigSt a),SigSt a) -> IO ()
+mergeEvalGC Nothing (rf,_) = refPut rf Nothing
+mergeEvalGC (Just tm) (rf,st) = 
     let (x,sf) = s_sample (st_signal st) tm in
     let bDone = isNothing x && s_is_final sf tm in
     if bDone 
-        then Table.put (mln_table mln) idx Nothing
+        then refPut rf Nothing
         else let st' = st { st_signal = sf } in
              st' `seq` 
-             Table.put (mln_table mln) idx (Just st')
+             refPut rf (Just st')
 
 -- leastTime where `Nothing` is forever (upper bound)
 leastTime :: Maybe T -> Maybe T -> Maybe T

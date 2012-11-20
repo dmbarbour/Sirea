@@ -85,7 +85,7 @@ Library
     Sirea.Internal.BCompile
     Sirea.Internal.Thread
     Sirea.Internal.BDynamic
-    Sirea.Internal.Table
+    Sirea.Internal.RefSpace
     Sirea.Internal.PulseSensor
     
 
