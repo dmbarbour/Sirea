@@ -1,0 +1,55 @@
+Name: sirea-plugins
+Version: 0.1
+Cabal-Version: >= 1.2
+Synopsis: Runtime Plugins and Live Programming for Sirea
+Category: Sirea
+Description:
+    Plugins offer a flexible approach to dependencies and extension
+    of applications. Live programming is possible by compiling code
+    into a plugin at runtime, in accordance with changes to code.
+    
+    Sirea plugins may serve as both dependencies and extensions, and
+    may depend on other plugins. Plugins are linked by type, via
+    Data.Typeable. 
+
+    Sirea requires that plugins link at most one value of each type.
+    Developers are guaranteed that identical types result in shared
+    resources. Two plugins conflict if they export matching types. 
+    Alternatives for a type serve as fallbacks to achieve robust and
+    adaptive applications. Extensions must also have a unique type,
+    though theirs is just a thin wrapper to declare a role. 
+
+    Support for "soft" constraints (preferences) is also planned, so
+    that developers can have more control without sacrificing robust
+    degradation and adaptiveness of having fallback plugins. Linking
+    will essentially be a weighted satisfiability computation.
+    
+    Applications can be built entirely of extensions.
+    
+    A related package, sirea-app, uses sirea-plugins to provide just
+    that model for development. Each extension is a main behavior - 
+    concurrent, reactive, operating on shared dependencies. This is
+    effectively a multi-agent model (extension per agent).  
+
+    Plugins may be registered via an RDP behavior at runtime, which
+    supports dynamic resource discovery and adaptation patterns. 
+
+Author: David Barbour
+Maintainer: dmbarbour@gmail.com
+Homepage: http://github.com/dmbarbour/Sirea
+Package-Url: 
+Copyright: (c) 2012 by David Barbour
+License: BSD3
+Stability: experimental
+build-type: Simple
+
+Library
+  hs-Source-Dirs: src
+  Build-Depends: base>4.5
+
+  Exposed-Modules:
+    Sirea.Plugins
+
+  ghc-options: -threaded -Wall -fno-warn-orphans
+
+
