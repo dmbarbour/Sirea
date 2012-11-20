@@ -20,10 +20,10 @@ module Sirea.Internal.PulseSensor
     ) where
 
 import Control.Applicative
-import Control.Monad (sequence_, join)
+import Control.Monad (join)
 import Data.IORef
 import Data.Typeable
-import Sirea.Partition
+--import Sirea.Partition
 import Sirea.PCX
 import Sirea.Internal.PTypes
 
@@ -32,7 +32,7 @@ import Sirea.Internal.PTypes
 -- heavy use, and so pays the expense for atomic updates.
 type Work = IO () 
 type OnWork = IO ()
-data PulseReq = PulseReq { pulseReq :: IORef (OnWork, [Work]) }
+newtype PulseReq = PulseReq (IORef (OnWork, [Work]))
 
 instance Typeable PulseReq where
     typeOf _ = mkTyCon3 "sirea-core" "Sirea.PulseSensor" "PulseReq" `mkTyConApp` []
@@ -62,18 +62,18 @@ setWorkAvailableSignal (PulseReq rf) onW = join (atomicModifyIORef rf setSig)
 -- the main partition. The main partition heartbeat runs with
 -- the maintenance task, though doesn't use the outbox/inbox
 -- mechanism.
-initPulseListener :: (Partition p) => PCX P0 -> PCX p -> IO ()
+initPulseListener :: PCX p0 -> PCX p -> IO ()
 initPulseListener cp0 cp = 
     let pr0 = findInPCX cp0 in
     let prp = findInPCX cp in
-    let runW = onNextStep cp (runPulse prp) in -- callback via onNextStep
+    let runW = addTCRecv (findInPCX cp) (runPulse prp) in -- callback via onNextStep
     let onW = addWorkToPulse pr0 runW in       -- add one-time callback to P0's pulse 
     setWorkAvailableSignal prp onW
     
-addPulseAction :: (Partition p) => PCX p -> IO () -> IO ()
+addPulseAction :: PCX p -> IO () -> IO ()
 addPulseAction = addWorkToPulse . findInPCX
 
-runPulseActions :: (Partition p) => PCX p -> IO ()
+runPulseActions :: PCX p -> IO ()
 runPulseActions = runPulse . findInPCX
 
 

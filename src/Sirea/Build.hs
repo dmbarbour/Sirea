@@ -43,6 +43,7 @@ import Sirea.Internal.BCompile(compileB)
 import Sirea.Internal.PTypes
 import Sirea.Internal.BCross
 import Sirea.Internal.Thread
+import Sirea.Internal.PulseSensor (runPulseActions)
 import Sirea.Behavior
 import Sirea.Partition
 import Sirea.Link
@@ -201,6 +202,7 @@ beginApp cw rfSD lu =
     let apw = AppPeriodic 
                 { ap_cw = cw
                 , ap_tc0 = tc0
+                , ap_gs = gs
                 , ap_pulse = pulse
                 , ap_sd = rfSD
                 , ap_luMain = lu }
@@ -239,7 +241,7 @@ maintainApp apw tStable =
                           , su_stable = Nothing } in
            let tFinal = tStable `addTime` dtGrace in
            let nextStep = haltingApp apw tFinal in
-           ln_update lu su >> -- indicate signal inactive in future.
+           ln_update (ap_luMain apw) su >> -- indicate signal inactive in future.
            schedule dtStep (addTCRecv tc0 nextStep)
       else getTCTime tc0 >>= \ tNow -> 
            if (tNow > (tStable `addTime` dtRestart))
@@ -251,7 +253,7 @@ maintainApp apw tStable =
                                    , su_stable = Just tStable' } in
                     let nextStep = maintainApp apw tStable' in
                     tRestart `seq` 
-                    setStartTime (findInPCX cw) tRestart >>
+                    setStartTime (findInPCX (ap_cw apw)) tRestart >>
                     ln_update (ap_luMain apw) su >>
                     schedule dtStep (addTCRecv tc0 nextStep)
                 else -- NORMAL MAINTENANCE 

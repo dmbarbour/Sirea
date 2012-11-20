@@ -1,29 +1,32 @@
 
 -- Seems GHC Base is deprecating Data.HashTable at 7.6.
 --
--- This module is to help prepare for the transition, avoiding
--- direct dependency on Data.HashTable until I'm bored enough
--- with other tasks to write a replacement.
+-- This module provides a simple wrapper for a table-like 
+-- structure where one can:
 --
--- With how cabal is, I'd rather avoid a package dependency.
--- So, here is my own simplified definition of a Table.
+--   * allocate a `new` reference
+--   * manipulate that reference to put or remove a value.
+--   * observe the collection of references that have value.
 --
--- Table provides O(1) insert and delete. It is essentially
--- an IntMap in IO. 
+-- This fulfills all need for tables in Sirea, and has an
+-- additional effect of avoiding  
 --
-module Sirea.Internal.Table 
+module Sirea.Internal.RSpace 
     ( Table, Key
     , new
+    , newKey
     , put
     , get
     , toList
+    , isEmpty
     ) where
 
 import Data.Int (Int64)
 import qualified Data.HashTable as HT
 import Control.Monad (void, liftM)
 
-type Key = Int64
+-- Might a more convenient operation be to ge
+newtype Key = Key Int64
 newtype Table v = TB { inTB :: HT.HashTable Key v }
 
 new :: IO (Table v)
@@ -39,5 +42,9 @@ get = HT.lookup . inTB
 
 toList :: Table v -> IO [(Key,v)]
 toList = HT.toList . inTB 
+
+-- might be able to later replace this with something efficient?
+isEmpty :: Table v -> IO Bool
+isEmpty = liftM null . toList
 
 

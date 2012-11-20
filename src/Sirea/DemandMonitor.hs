@@ -57,10 +57,9 @@ newDemandMonitorBase :: (Partition p)
                      -> PCX p -- partition resources (for time
                      -> IO (B (S p e) (S p ()), B (S p ()) (S p z)) 
 newDemandMonitorBase zfn eqfn cp = 
-    let tStep = getStepTime cp in
-    newMonitorDist (zfn []) tStep >>= \ md ->
-    wrapEqFilter dt_eqf eqfn (mainMonitorLnk md) >>= \ monEqf -> 
-    newDemandAggr monEqf zfn tStep >>= \ da ->
+    newMonitorDist cp (zfn []) >>= \ md ->
+    let lnMon = mainMonitorLnk md in
+    newDemandAggr cp lnMon zfn eqfn >>= \ da ->
     return (demandFacetB da, monitorFacetB md)
 
 demandFacetB :: DemandAggr e z -> B (S p e) (S p ())

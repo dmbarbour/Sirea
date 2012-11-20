@@ -200,7 +200,7 @@ initPartition p cw =
         let stopInStepper = addTCRecv tc (runStopper s0) in
         let stopper = s0 { runStopper = stopInStepper } in 
         let gs = unGob $ findInPCX cw in
-        let cp0 = findInPCX cw :: PCX P0 in
+        let cp0 = findInPCX cw :: PCX P0 in -- pulses are initiated by P0
         initPulseListener cp0 cp >>
         atomicModifyIORef gs (\stoppers->(stopper:stoppers,()))
         -- TODO: add support to receive pulse.

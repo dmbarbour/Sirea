@@ -39,7 +39,7 @@ module Sirea.Partition
     , Pt, P0
     , Stepper(..)
     , Stopper(..)
-    , onNextStep
+    , onNextStep, eventually, phaseDelay
     , getStepTime 
     ) where
 
@@ -110,12 +110,12 @@ onNextStep = addTCRecv . findInPCX
 -- Currently, this event coincides with the main signal's heartbeat,
 -- which runs at 10-20Hz. Use of `eventually` will add work to local
 -- queue then (if the queue was empty) register for the event. The
--- queue will eventually run as one large batch via onNextStep.
+-- queue will eventually run as one lump sum batch via onNextStep.
 --
 -- Use of `eventually` is unsuitable if you need precise periodic
 -- tasks, but is sufficient for cleanup tasks or mid-rate polling.
 -- `eventually` is mt-safe, and eventually tasks will run in the
--- same order they are added.
+-- same order they are added. 
 -- 
 eventually :: (Partition p) => PCX p -> IO () -> IO ()
 eventually = addPulseAction

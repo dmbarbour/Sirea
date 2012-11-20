@@ -8,15 +8,13 @@
 -- Demand Monitors are stabilized based on known demand sources and
 -- the 'real-time' obtained from an external time source. A late 
 -- arriving demand source can be retroactively accommodated for
--- circa 30ms.
+-- a few milliseconds. 
 --
--- For cleanup, limited cleanup occurs based on stability updates at
--- demand sources and monitors. Some additional cleanup is enabled 
--- via the partition pulse when necessary. 
---
--- Cleanup is driven by periodic actions. Relying on stability isn't
--- sufficient in the case where there are no more active demands on
--- the demand monitor, though
+-- Old demands must be cleaned up over time. Mostly, the system can
+-- depend on the stability updates to help GC the demands. But due
+-- to keeping a few extra milliseconds of data (for new demands),
+-- finalization cleanup must occur by the pulse (heartbeat) in order
+-- to flush the last bits from memory. 
 --
 module Sirea.Internal.DemandMonitorData
     ( DemandAggr, newDemandAggr, newDemandLnk
@@ -35,7 +33,7 @@ import Sirea.Time
 import Sirea.Link
 import Sirea.Partition
 import Sirea.PCX
-import Sirea.Internal.LTypes
+--import Sirea.Internal.LTypes
 
 type Table = Table.Table
 type Key = Table.Key
@@ -56,11 +54,25 @@ type Key = Table.Key
 -- to estimate stability of the demands relative to itself. (This
 -- is not ideal, but is the best I can do without using dedicated
 -- partition for demand monitors.)
+--
 dt_daggr_hist :: DT
 dt_daggr_hist = 0.024
 
 dt_mdist_hist :: DT
 dt_mdist_hist = 0.126 
+
+-- convenient partition data (to avoid replicate lookups)
+data PartD = PartD 
+    { pd_time       :: (IO T)
+    , pd_eventually :: (IO () -> IO ())
+    , pd_phaseDelay :: (IO () -> IO ())
+    }
+mkPartD :: (Partition p) => PCX p -> PartD
+mkPartD cp = PartD  
+    { pd_time       = getStepTime cp
+    , pd_eventually = eventually cp
+    , pd_phaseDelay = phaseDelay cp
+    }     
 
 
 -- | DemandAggr: aggregates and processes many concurrent demands.
@@ -73,34 +85,44 @@ dt_mdist_hist = 0.126
 -- Stability of DemandAggr is simply stability of the incoming
 -- demands or an estimated current time as adjusted to support late
 -- arriving demand sources). 
+--
+-- Periodic cleanup is modeled by a stability update of an inactive 
+-- signal. This ensures it can mix freely with regular updates.
 data DemandAggr e z = DemandAggr 
     { da_active     :: !(IORef Bool)        -- to detect cyclic touch or update
     , da_touchCt    :: !(IORef Int)         -- count of non-cyclic touches
-    , da_nextid     :: !(IORef Key)         -- next hashtable ID
     , da_tmup       :: !(IORef (Maybe T))   -- lowest update time (at the moment)
     , da_stable     :: !(IORef (Maybe T))   -- track reported stability
     , da_table      :: !(Table (SigSt e))   -- tracking demand data
     , da_nzip       :: !([Sig e] -> Sig z)  -- compute the result signal
     , da_next       :: !(LnkUp z)           -- process the updated signal
-    , da_time       :: !(IO T)              -- est. wall-clock time
+    , da_partd      :: !PartD
     }
 
 -- | Create a demand aggregator, given the output target.
 newDemandAggr
-    :: ([Sig e] -> Sig z)
+    :: (Partition p)
+    => PCX p 
     -> (LnkUp z)
-    -> IO T
+    -> ([Sig e] -> Sig z)
+    -> (z -> z -> Bool)
     -> IO (DemandAggr e z)
-newDemandAggr zpf zlu now = DemandAggr 
+newDemandAggr cp zlu zpf zeq = DemandAggr 
     <$> newIORef False -- inactive
     <*> newIORef 0     -- untouched
-    <*> newIORef 80000 -- initial key
     <*> newIORef Nothing -- not updated
     <*> newIORef Nothing -- no stability
+    <*> newIORef 80000 -- initial key
     <*> Table.new      -- no demands
     <*> pure zpf       -- provided zip function
     <*> pure zlu       -- provided 
+    <*> pure (mkPartD cp)
     <*> pure now
+    <*> pure later
+
+--    wrapEqFilter dt_eqf eqfn (mainMonitorLnk md) >>= \ monEqf -> 
+
+
 
 getIndex :: IORef Key -> IORef (Maybe Key) -> IO Key
 getIndex rfNxt rfK =
@@ -130,7 +152,6 @@ decTouch rf =
     let n' = pred n in
     n' `seq` writeIORef rf n' >>
     (return $! 0 == n')
-
 
 -- | Create a new link to an existing demand aggregator.
 newDemandLnk :: DemandAggr e z -> IO (LnkUp e)
@@ -172,6 +193,11 @@ updateDaggr da k su =
     when (st_expect st) (void $ decTouch (da_touchCt da)) >>
     -- deliver the updates (if possible)
     maybeDeliverDaggr da
+
+-- send a zero-update to clear the DemandAggr
+clearDaggr :: DemandAggr e z -> IO ()
+cle
+
 
 -- deliver aggregated demands if nothing is holding us back
 maybeDeliverDaggr :: DemandAggr e z -> IO ()
@@ -405,8 +431,6 @@ lnMonitor mln = loi
                 let sigZ  = (st_signal . sm_rsig) sm in
                 let sigO  = (st_signal . sm_lsig) sm in
                 let sig   = s_mask sigZ sigO in
-                let tZ    = (st_stable 
-                let sig = s_mask ((st_si
                 let su = sm_emit (flip s_mask) sm in 
                 ln_update lzo su
 
