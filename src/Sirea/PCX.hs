@@ -1,40 +1,46 @@
 {-# LANGUAGE FlexibleInstances #-}
 
--- | Declarative resource linking mechanism for Haskell.
+-- | A declarative resource linking mechanism for Sirea and Haskell.
 --
--- RDP has a conservative notion of resources: services, resources,
--- shared state, etc. are external to behaviors; nothing is created,
--- nothing is destroyed. Developers will use discovery idioms, paths
--- and names. A useful idiom: abstract infinite spaces of resources,
--- and lazily initialize resources as they are discovered or used.
--- An infinite space can be partitioned into infinite child spaces.
--- Every RDP component may thus have its own, infinite corner of the
--- universe. 
+-- RDP has a conservative notion of resources: nothing is created,
+-- nothing is destroyed. That is, there is no equivalent notion to
+-- `new` or `delete`, nor even `newIORef`. Instead, resources are
+-- external and eternal. Developers use discovery and reset idioms.
 --
--- Sirea also uses this conservative notion of resources to achieve
--- a more declarative programming experience. This is modeled with
--- PCX. In Sirea, resource acquisition is mostly type driven: the
--- developers may "locate" any resource of typeclass Resource.
+-- Many resources are "abundant" and can be discovered in quantity
+-- as needed by specifying unique names or paths. For example, files
+-- and directories in a filesystem are abundant resources. By clever
+-- naming and partitioning, developers can achieve a flexible set of
+-- resources to support a dynamic set of forms, accounts, contracts,
+-- clients, and relationships. 
 --
--- The idea with PCX is to present resources as though they already
--- exist: as though PCX is an infinite namespace, and resources are
--- accessible if only we can name them. The naming in PCX is based
--- on Data.Typeable, though it is feasible to extend PCX with more
--- resource models of different names and paths.
+-- Resources represent services, state, sensors, actuators, or FFI.
+-- An application may use fine-grained resources for specific forms,
+-- widgets, registries, and similar. In general, stateful resources
+-- should be persistent unless a natural reason exists for the state 
+-- to be volatile. Stateful resources cannot be destroyed, but might
+-- be `reset` to a default state (thus recovering storage costs).
 --
--- PCX is most useful for volatile resources, which will not survive
--- destruction of the Haskell process and must thus be reconstructed 
--- every time we start. But persistent resources also benefit, using
--- volatile proxies (connections, queues, caches, cursors, etc.). In
--- Sirea, PCX supports threads, UI, networking, and FFI adapters.
+-- Sirea supports this conservative notion of resources with PCX, a
+-- "Partitioned resource ConteXt". PCX is a generic context object,
+-- capable of representing ad-hoc resources in abundance. Resources
+-- in a PCX are identified by type and path strings. PCX enables a
+-- very declarative programming experience. Developers do not need
+-- to explicitly create or hook resources together. 
 --
--- PCX is unsuitable for configuration or dependency injection. The
--- model is difficult to parameterize or override. The configuration
--- problem should be solved at another layer (preferably in RDP for
--- reactive reconfiguration) - Sirea will eventually have a plugins
--- model that tackles configurations, dependencies, preferences, and
--- live programming or adaptation.
--- 
+-- PCX directly supports volatile resources. However, non-volatile
+-- resources are represented by volatile proxy. A proxy is useful
+-- for caches, network connections, FFI adapters, and so on. 
+--
+-- To support resets and similar, PCX comes with a standard events
+-- model. Developers can register resources for ad-hoc events. This
+-- should be used with caution, lest it violate the illusion that a
+-- resource was always present.
+--
+-- PCX does not support configuration, override, or injection. Not
+-- directly, anyway. For Sirea, configuration should be achieved at
+-- the RDP layer anyway (modeling reactive configurations). 
+--
 module Sirea.PCX
     ( PCX       -- abstract
     , newPCX    -- a new toplevel
@@ -50,6 +56,8 @@ import Data.Monoid
 import Control.Applicative
 import Control.Monad.Fix (mfix)
 import System.IO.Unsafe (unsafePerformIO, unsafeInterleaveIO)
+
+-- TODO: a generic eventing system for resources.
 
 -- | PCX p - Partition Resource Context. Abstract.
 --
@@ -190,5 +198,49 @@ newPCX =
 -- Might be worth doing to support rich resources with dynamic behaviors.
 
 -- TODO: maybe add support for ordinal-indexed spaces for state and demand monitors.
+
+
+-- DECISION: combine responsibility into PCX?
+--  a) simple string-based access to PCX.
+--  b) add some extra mechanisms for onReset and onStop
+
+-- How to model this?
+--  As a typeclass or set of typeclasses: 
+--    very tempting
+--    could support "adding" features such as
+--       resets (for types that can represent disruption)
+--       splicing (hard or soft links)
+--       history or versioning
+--       cloning
+--       merging?
+--  Perhaps as a concrete structure: ResourceSpace a
+--    Could not add new spatial-structures (splicing, etc.)
+--    But could add `a`-dependent features.
+--
+-- I'd like to have ResourceSpace be a lot closer to RDP, i.e. so 
+-- there isn't much work done by partitions.  
+--
+--  If I do typeclass, might want ability to hide the type from
+--  client behind a set of interfaces? But might not be big deal.
+--
+--  Default state of a resource must be a function of the path to
+--  that resource. It may actually be a fairly complex function of
+--  said path. 
+--
+--  How shall I define a path to a resource?
+--
+--  I could use a simple sequence of strings. Or I could use a
+--  sequence of flexible values. As a sequence of strings is very
+--  tempting (fits well with URLs). ["Hello","World"]. But simple
+--  support for integers could be nice, i.e. for cleaner ordering,
+--  and it might be useful to also support set-based paths (similar
+--  to Reiser FS ideas?)
+-- 
+--  Bah! Keep It Simple, Stupid!
+--
+--  For now, maybe limit to sequence of simple, case-insensitive, 
+--  alphanumeric strings. It should be easier to add to this than
+--  to subtract from it.
+--  
 
 

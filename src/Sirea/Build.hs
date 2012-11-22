@@ -192,7 +192,6 @@ buildSireaBLU cw lu =
 -- startup (to pre-load resources, files, etc.). After halting, the
 -- system runs an additional dtGrace for final shutdown. 
 --
--- This could be useful for unit testing or one-off apps.
 beginApp :: PCX w -> IORef StopData -> LnkUp () -> IO ()
 beginApp cw rfSD lu = 
     let gs  = findInPCX cw in

@@ -2,18 +2,19 @@
 -- | RDP has a conservative notion of resources: nothing is created,
 -- nothing is destroyed. That is, there is no equivalent to `new` or
 -- `delete`, not even `newIORef`. Instead, resource discovery idioms
--- can provide a dynamic set of resources as needed to accommodate
--- multiple active relationships or clients. 
+-- provide a flexible set of external resources to accommodate many
+-- active clients, agents, or relationships.  
 --
 -- Some resources are abundant and may be "discovered" in whatever
 -- quantity is needed. Much like unused directories or files in the
 -- filesystem, developers use naming conventions and partitioning
--- schemes to ensure unique resources are "discovered" for each
--- unique purpose. 
---
--- Sirea.ResourceSpace describes these spaces of abundant, possibly
--- stateful resources, suitable for dynamic discovery by use of
--- unique string identifiers. These spaces are tree-structured.
+-- schemes to ensure a unique resources is "discovered" for each
+-- unique purpose. For example, in a GUI application, a particular
+-- form may be given a subdirectory based on the name of that form.
+-- If multiple instances of a form are needed, forms may be named
+-- based on participating elements.  - e.g. different resource for filenames for different file
+-- names. 
+-- combined with the name of the files to which the form applies.
 --
 -- Abstractly, external resources are eternal resources. Developers
 -- do not need to initialize or finalize stateful resources in RDP,
@@ -33,42 +34,3 @@ module Sirea.ResourceSpace
     (
     ) where
 
-
--- How to model this?
---  As a typeclass or set of typeclasses: 
---    very tempting
---    could support "adding" features such as
---       resets (for types that can represent disruption)
---       splicing (hard or soft links)
---       history or versioning
---       cloning
---       merging?
---  Perhaps as a concrete structure: ResourceSpace a
---    Could not add new spatial-structures (splicing, etc.)
---    But could add `a`-dependent features.
---
--- I'd like to have ResourceSpace be a lot closer to RDP, i.e. so 
--- there isn't much work done by partitions.  
---
---  If I do typeclass, might want ability to hide the type from
---  client behind a set of interfaces? But might not be big deal.
---
---  Default state of a resource must be a function of the path to
---  that resource. It may actually be a fairly complex function of
---  said path. 
---
---  How shall I define a path to a resource?
---
---  I could use a simple sequence of strings. Or I could use a
---  sequence of flexible values. As a sequence of strings is very
---  tempting (fits well with URLs). ["Hello","World"]. But simple
---  support for integers could be nice, i.e. for cleaner ordering,
---  and it might be useful to also support set-based paths (similar
---  to Reiser FS ideas?)
--- 
---  Bah! Keep It Simple, Stupid!
---
---  For now, maybe limit to sequence of simple, case-insensitive, 
---  alphanumeric strings. It should be easier to add to this than
---  to subtract from it.
---  
