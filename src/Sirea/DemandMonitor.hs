@@ -49,17 +49,17 @@ import Sirea.Internal.BImpl (wrapEqFilter)
 dt_eqf :: DT
 dt_eqf = 3.6
 
--- newDemandMonitorBase is the basis for other demand monitors.
+-- newDemandMonitor is the basis for other demand monitors.
 -- developers to control the zip function and an adjacency filter.
-newDemandMonitorBase :: (Partition p) 
+newDemandMonitor :: (Partition p) 
                      => ([Sig e] -> Sig z) -- n-zip function
                      -> (z -> z -> Bool)   -- partial equality (false if unknown)
                      -> PCX p -- partition resources (for time
                      -> IO (B (S p e) (S p ()), B (S p ()) (S p z)) 
-newDemandMonitorBase zfn eqfn cp = 
+newDemandMonitor zfn eqfn cp = 
     newMonitorDist cp (zfn []) >>= \ md ->
-    let lnMon = mainMonitorLnk md in
-    newDemandAggr cp lnMon zfn eqfn >>= \ da ->
+    wrapEqFilter dt_eqf eqfn (mainMonitorLnk md) >>= \ lnMon ->
+    newDemandAggr cp lnMon zfn >>= \ da ->
     return (demandFacetB da, monitorFacetB md)
 
 demandFacetB :: DemandAggr e z -> B (S p e) (S p ())
@@ -70,6 +70,8 @@ monitorFacetB :: MonitorDist z -> B (S p ()) (S p z)
 monitorFacetB md = unsafeLinkB lnMon
     where lnMon LnkDead = return LnkDead -- dead code elim.
           lnMon (LnkSig lu) = LnkSig <$> newMonitorLnk md lu
+
+
 
 
 -- sigListZip will essentially zip a collection of signals into a

@@ -103,6 +103,8 @@ class (Typeable p) => Partition p where
 -- This makes it a useful way for worker threads to publish info
 -- back to their controlling partition. onNextStep tasks will run
 -- in the same order they are added.
+--
+-- Use of `onNextStep` is not guaranteed very near shutdown. 
 onNextStep :: (Partition p) => PCX p -> IO () -> IO ()
 onNextStep = addTCRecv . findInPCX
 

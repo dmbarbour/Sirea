@@ -1,58 +1,42 @@
-{-# LANGUAGE FlexibleInstances #-}
-
 -- | A declarative resource linking mechanism for Sirea and Haskell.
 --
 -- RDP has a conservative notion of resources: nothing is created,
 -- nothing is destroyed. That is, there is no equivalent notion to
 -- `new` or `delete`, nor even `newIORef`. Instead, resources are
--- external and eternal. Developers use discovery and reset idioms.
+-- external, and developers use discovery and reset idioms.
 --
--- Many resources are "abundant" and can be discovered in quantity
--- as needed by specifying unique names or paths. For example, files
+-- Many resources are "abundant" and may be discovered in quantities
+-- as needed by providing unique names or paths. For example, files
 -- and directories in a filesystem are abundant resources. By clever
--- naming and partitioning, developers can achieve a flexible set of
--- resources to support a dynamic set of forms, accounts, contracts,
--- clients, and relationships. 
+-- partitioning and generation of names, a dynamic set of abundant 
+-- resources can be represented. Partitions can generally be modular
+-- and secure by forbidding filesystem-like `..` reverse paths. 
 --
 -- Resources represent services, state, sensors, actuators, or FFI.
--- An application may use fine-grained resources for specific forms,
--- widgets, registries, and similar. In general, stateful resources
--- should be persistent unless a natural reason exists for the state 
--- to be volatile. Stateful resources cannot be destroyed, but might
--- be `reset` to a default state (thus recovering storage costs).
---
--- Sirea supports this conservative notion of resources with PCX, a
--- "Partitioned resource ConteXt". PCX is a generic context object,
--- capable of representing ad-hoc resources in abundance. Resources
--- in a PCX are identified by type and path strings. PCX enables a
--- very declarative programming experience. Developers do not need
--- to explicitly create or hook resources together. 
---
--- PCX directly supports volatile resources. However, non-volatile
--- resources are represented by volatile proxy. A proxy is useful
--- for caches, network connections, FFI adapters, and so on. 
---
--- To support resets and similar, PCX comes with a standard events
--- model. Developers can register resources for ad-hoc events. This
--- should be used with caution, lest it violate the illusion that a
--- resource was always present.
---
--- PCX does not support configuration, override, or injection. Not
--- directly, anyway. For Sirea, configuration should be achieved at
--- the RDP layer anyway (modeling reactive configurations). 
+-- Abundant resources, such as state, should be deterministically
+-- named - e.g. using a client name for dynamic resources. Stateful
+-- resources are generally persistent in RDP unless they have some
+-- natural explanation for their volatility. External resources are
+-- eternal resources, no initialization or finalization. State may
+-- be fine-grained, e.g. for specific forms, widgets, registries.
+-- 
+-- Sirea supports RDP's conservative notion of resources with PCX, a
+-- generic context object capable of representing ad-hoc resources.
+-- PCX supports volatile resources. Persistent resources are modeled
+-- with a volatile proxy, which may provide cache or adapters. PCX
+-- resources are uniquely identified by paths of types and strings.
 --
 module Sirea.PCX
     ( PCX       -- abstract
+    , PCXPath
     , newPCX    -- a new toplevel
-    , findInPCX -- the lookup function
-    , pcxPath   -- identifier for the PCX.
+    , findInPCX, findByNameInPCX -- the lookup functions
     , Resource(..)
     ) where
 
 import Data.Typeable
 import Data.Dynamic
 import Data.IORef
-import Data.Monoid
 import Control.Applicative
 import Control.Monad.Fix (mfix)
 import System.IO.Unsafe (unsafePerformIO, unsafeInterleaveIO)
@@ -62,42 +46,33 @@ import System.IO.Unsafe (unsafePerformIO, unsafeInterleaveIO)
 -- | PCX p - Partition Resource Context. Abstract.
 --
 -- A partition context is an infinite, uniform space of resources.
--- It holds one resource of each type. Conceptually, it is already
--- holding those resources, and we just need to look for them. So
--- access to any particular resource is idempotent and offers a
--- pretense of purity. The actual implementation uses IO to create
--- resources lazily (and unsafely) when we need them.
---
--- Multiple instances of one type are easily achieved by modeling
--- another resource space as a resource. E.g. if you want a space
--- with integers mapped to state, you can do that - just write the
--- type and add a Resource instance for it. Child PCX contexts are
--- accessible (as resources).
+-- Each partition holds any number of resources of each type, each
+-- with a unique string identifier. Conceptually, it already holds
+-- these resources, and we just need to locate them on demand. The
+-- implementation is essentially lazy IO to initialize resources
+-- when they are needed. (For safety, resources must not have any
+-- observable effects caused by mere initialization.)
 --
 -- NOTE: `PCX w` has connotations that `w` is the full world, i.e.
 -- the root partition created by `newPCX`. It is also used in type
 -- matching to provide a little extra protection against accidental
 -- connections between SireaApp applications. `PCX p` refers to a
--- child PCX for a specific thread or partition. Partitions do not
--- directly share resources, but behaviors orchestrate communication
--- between partitions to allow indirect sharing.
+-- child PCX for a specific thread or partition. Partition resources
+-- should be manipulated only by that partition thread.
 --
 data PCX p = PCX 
-    { pcx_ident :: [TypeRep]
-    , pcx_store :: IORef [Dynamic]
+    { pcx_ident :: PCXPath
+    , pcx_store :: IORef [(Dynamic, String)]
     }
+
+-- | The PCX Path is a path of types and strings, ordered from leaf
+-- to root. Every resource has a unique path (from newPCX) that is
+-- accessible via locateResource.
+type PCXPath = [(TypeRep,String)]
 
 instance Typeable1 PCX where
     typeOf1 _ = mkTyConApp tycPCX []
         where tycPCX = mkTyCon3 "sirea-core" "Sirea.PCX" "PCX"
-
--- | pcxPath identifies a PCX relative to its initial construction,
--- across child PCX resources. This offers resources unique, stable,
--- path-based identity within an application, which can be leveraged
--- for orthogonal persistence (e.g. keys in a database). 
-pcxPath :: PCX p -> [TypeRep]
-pcxPath = pcx_ident
-
 
 -- | Resource - found inside a PCX. 
 --
@@ -112,45 +87,33 @@ pcxPath = pcx_ident
 -- That is, we shouldn't see anything unless we agitate resources by
 -- further IO operations. If we create a resource but don't ever use
 -- it, there should be no significant effects.
+--
+-- Every resource has a unique path in an instance of a SireaApp.
+-- This path is provided to the constructor because it may be useful
+-- for persistence or generation of a pseudo-random default state.
+--
 class (Typeable r) => Resource r where
-    locateResource :: PCX p -> IO r
+    locateResource :: PCXPath -> PCX p -> IO r
 
 instance (Typeable p) => Resource (PCX p) where
-    locateResource pcx =
-        mfix $ \ pcx' ->
+    locateResource p _ =
         newIORef [] >>= \ store' ->
-        let p      = typeOfPCX pcx' in
-        let ident' = (typeOf p):(pcx_ident pcx) in
-        return (PCX { pcx_ident = ident', pcx_store = store' })
-        where typeOfPCX :: PCX p -> p
-              typeOfPCX _ = undefined
+        return (PCX { pcx_ident = p, pcx_store = store' })
 
--- Some utility instances.
-instance (Typeable a, Monoid a) => Resource (IORef a) where
-    locateResource _ = newIORef mempty
-instance (Resource x, Resource y) => Resource (x,y) where
-    locateResource pcx = return (findInPCX pcx, findInPCX pcx)
-instance (Resource x, Resource y, Resource z) => Resource (x,y,z) where
-    locateResource pcx = return (findInPCX pcx, findInPCX pcx, findInPCX pcx)
-instance (Resource w, Resource x, Resource y, Resource z) 
-    => Resource (w,x,y,z) where
-    locateResource pcx = return (findInPCX pcx, findInPCX pcx
-                                ,findInPCX pcx, findInPCX pcx)
-instance (Resource v, Resource w, Resource x, Resource y, Resource z) 
-    => Resource (v,w,x,y,z) where
-    locateResource pcx = return (findInPCX pcx, findInPCX pcx, findInPCX pcx
-                                ,findInPCX pcx, findInPCX pcx)
-instance (Resource u, Resource v, Resource w, Resource x
-         ,Resource y, Resource z) => Resource (u,v,w,x,y,z) where
-    locateResource pcx = return (findInPCX pcx, findInPCX pcx, findInPCX pcx
-                                ,findInPCX pcx, findInPCX pcx, findInPCX pcx)
-instance (Resource t, Resource u, Resource v, Resource w, Resource x
-         ,Resource y, Resource z) => Resource (t,u,v,w,x,y,z) where
-    locateResource pcx = return (findInPCX pcx, findInPCX pcx, findInPCX pcx
-                , findInPCX pcx, findInPCX pcx, findInPCX pcx, findInPCX pcx)
-   
 
 -- | Find a resource in the partition context based on its type.
+--
+--     findInPCX = findByNameInPCX ""
+--
+findInPCX :: (Resource r) => PCX p -> r
+findInPCX = findByNameInPCX ""
+
+-- | Find a resource in a partition based on both name and type.
+--
+-- Notionally, the resource already exists, we aren't creating it.
+-- In practice, the resource is lazily initialized, which may prove
+-- unsafe if the resource doesn't obey the rules (e.g. no observable
+-- effects at initialization). 
 --
 -- This provides a pure interface to represent that the resource
 -- already exists (according to the abstraction) and we're just
@@ -160,38 +123,52 @@ instance (Resource t, Resource u, Resource v, Resource w, Resource x
 --
 -- Assume finding resources in PCX is moderately expensive. Rather
 -- than looking for the resources you need each time you need them,
--- try to apply PCX and obtain resources up front for partial 
--- evaluation.
+-- try to apply PCX and obtain resources up front for partial so the
+-- lookup costs are paid only once.
 --
-findInPCX :: (Resource r) => PCX p -> r
-findInPCX = unsafePerformIO . findInPCX_IO
+-- Use of names can support dynamic behaviors and metaprogramming,
+-- but should be used with caution. There is no way to GC old names.
+--
+findByNameInPCX :: (Resource r) => String -> PCX p -> r
+findByNameInPCX nm pcx = unsafePerformIO (findByNameInPCX_IO nm pcx)
 
-findInPCX_IO :: (Resource r) => PCX p -> IO r 
-findInPCX_IO pcx =  
-    unsafeInterleaveIO (locateResource pcx) >>= \ newR ->
-    atomicModifyIORef (pcx_store pcx) (loadOrAdd newR)
+findByNameInPCX_IO :: (Resource r) => String -> PCX p -> IO r 
+findByNameInPCX_IO nm pcx = mfix $ \ r -> 
+    let pElt = (typeOf r, nm) in
+    let path = pElt : pcx_ident pcx in
+    unsafeInterleaveIO (locateResource path pcx) >>= \ newR ->
+    atomicModifyIORef (pcx_store pcx) (loadOrAdd nm newR)
 
-loadOrAdd :: (Typeable r) => r -> [Dynamic] -> ([Dynamic],r)
-loadOrAdd newR dynL =
-    case fromDynList dynL of
+
+loadOrAdd :: (Typeable r) => String -> r -> [(Dynamic,String)] -> ([(Dynamic,String)],r)
+loadOrAdd nm newR dynL =
+    case fromDynList nm dynL of
         Just oldR -> (dynL, oldR)
         Nothing ->
             let dynR = toDyn newR in
             dynTypeRep dynR `seq` -- for consistency
-            (dynR:dynL, newR)
+            nm `seq`
+            ((dynR,nm):dynL, newR)
 
-fromDynList :: (Typeable r) => [Dynamic] -> Maybe r
-fromDynList [] = Nothing
-fromDynList (x:xs) = fromDynamic x <|> fromDynList xs
+fromDynList :: (Typeable r) => String -> [(Dynamic,String)] -> Maybe r
+fromDynList _ [] = Nothing
+fromDynList nm ((x,s):xs) = 
+    if nm == s then fromDynamic x <|> fromDynList nm xs
+               else fromDynList nm xs
 
 -- | newPCX - a `new` PCX space, unique and fresh.
 --
 -- You can find child PCX spaces if more than one resource of a
 -- given type is necessary. 
-newPCX :: IO (PCX w)
-newPCX = 
+newPCX :: String -> IO (PCX w)
+newPCX nm = 
+    let pElt = (typeOf pcxRoot, nm) in
+    let path = [pElt] in
     newIORef [] >>= \ rf ->
-    return $ PCX { pcx_ident = [], pcx_store = rf  }
+    let pcx = PCX { pcx_ident = path, pcx_store = rf } in
+    return pcx
+    where pcxRoot :: PCX ()
+          pcxRoot = undefined
 
 -- NOTE: it would be trivial to extend PCX with resources accessed by Ordinal.
 -- (Even via a Resource, this could be done.)

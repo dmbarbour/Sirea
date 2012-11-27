@@ -38,7 +38,7 @@ instance Typeable PulseReq where
     typeOf _ = mkTyCon3 "sirea-core" "Sirea.PulseSensor" "PulseReq" `mkTyConApp` []
 
 instance Resource PulseReq where 
-    locateResource _ = PulseReq <$> newIORef (return (), [])
+    locateResource _ _ = PulseReq <$> newIORef (return (), [])
 
 runPulse :: PulseReq -> IO ()
 runPulse (PulseReq rf) = atomicModifyIORef rf takeWork >>= sequence_ . reverse

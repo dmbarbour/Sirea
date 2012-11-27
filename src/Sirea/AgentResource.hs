@@ -47,10 +47,12 @@ import Sirea.BCX
 -- Suggestion: Encapsulate a duty newtype and associated invokeAgent
 -- behavior within a module, such that clients cannot accidentally
 -- duplicate the agentBehaviorSpec within a SireaApp. Protect the
--- uniqueness guarantee.
-class (Typeable p, Typeable duty) => AgentBehavior p duty where
+-- uniqueness guarantee. That is, instead of exporting `duty` and
+-- having client use `invokeAgent`, export a behavior that wraps
+-- `invokeAgent`.
+class (Partition p, Typeable duty) => AgentBehavior p duty where
     -- | This should be instantiated as: agentBehaviorSpec _ = ...
-    -- The `duty` parameter is undefined, used for its type.
+    -- The `duty` parameter is undefined, used only for type.
     agentBehaviorSpec :: duty -> BCX w (S p ()) (S p ())
 
 
@@ -63,11 +65,9 @@ class (Typeable p, Typeable duty) => AgentBehavior p duty where
 --
 -- Using `agentBehavior` directly would instead cause one copy of
 -- the behavior to be installed for each use. Due to idempotence,
--- the resulting system would have the same effects. However, it
+-- the resulting system should have the same effect. However, it
 -- will be more expensive if there is more than one instance of the
 -- agent behavior installed and active.
---
--- The uniqueness of  
 invokeAgent :: (AgentBehavior p duty) => duty -> BCX w (S p ()) (S p ())
 invokeAgent = error "TODO! invokeAgent"
 

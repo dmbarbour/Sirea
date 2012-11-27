@@ -103,7 +103,7 @@ instance Typeable TC where
     typeOf _ = mkTyConApp tycTC []
         where tycTC = mkTyCon3 "sirea-core" "Sirea.Partition.Internal" "TC"
 instance Resource TC where
-    locateResource _ = newTC
+    locateResource _ _ = newTC
 
 
 -- | In each runStepper round:

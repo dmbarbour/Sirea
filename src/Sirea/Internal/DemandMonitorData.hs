@@ -35,8 +35,6 @@ import Sirea.Partition
 import Sirea.PCX
 --import Sirea.Internal.LTypes
 
-
-
 -- 
 -- DemandAggr will automatically keep a certain amount of "extra" 
 -- history to admit late-arriving demands sources. How much? Well,
@@ -62,9 +60,9 @@ dt_mdist_hist = 0.126
 
 -- convenient partition data (to avoid replicate lookups)
 data PartD = PartD 
-    { pd_time       :: (IO T)
-    , pd_eventually :: (IO () -> IO ())
-    , pd_phaseDelay :: (IO () -> IO ())
+    { pd_time       :: !(IO T)
+    , pd_eventually :: !(IO () -> IO ())
+    , pd_phaseDelay :: !(IO () -> IO ())
     }
 mkPartD :: (Partition p) => PCX p -> PartD
 mkPartD cp = PartD  
@@ -92,10 +90,10 @@ data DemandAggr e z = DemandAggr
     , da_touchCt    :: !(IORef Int)         -- count of non-cyclic touches
     , da_tmup       :: !(IORef (Maybe T))   -- lowest update time (at the moment)
     , da_stable     :: !(IORef (Maybe T))   -- track reported stability
-    , da_demands    :: !(RefSpace (SigSt e))   -- tracking demand data
+    , da_demands    :: !(RefSpace (SigSt e)) -- tracking demand data
     , da_nzip       :: !([Sig e] -> Sig z)  -- compute the result signal
     , da_next       :: !(LnkUp z)           -- process the updated signal
-    , da_partd      :: !PartD
+    , da_partd      :: !PartD               -- partition data to support GC
     }
 
 -- | Create a demand aggregator, given the output target.
@@ -104,37 +102,28 @@ newDemandAggr
     => PCX p 
     -> (LnkUp z)
     -> ([Sig e] -> Sig z)
-    -> (z -> z -> Bool)
     -> IO (DemandAggr e z)
 newDemandAggr cp zlu zpf zeq = DemandAggr 
     <$> newIORef False -- inactive
     <*> newIORef 0     -- untouched
     <*> newIORef Nothing -- not updated
     <*> newIORef Nothing -- no stability
-    <*> newIORef 80000 -- initial key
-    <*> Table.new      -- no demands
+    <*> newRefSpace    -- track demands
     <*> pure zpf       -- provided zip function
-    <*> pure zlu       -- provided 
-    <*> pure (mkPartD cp)
-    <*> pure now
-    <*> pure later
+    <*> pure zlu       -- destination for changing demands
+    <*> pure (mkPartD cp) -- scheduling to support GC
 
---    wrapEqFilter dt_eqf eqfn (mainMonitorLnk md) >>= \ monEqf -> 
-
-
-
-getIndex :: IORef Key -> IORef (Maybe Key) -> IO Key
-getIndex rfNxt rfK =
-    readIORef rfK >>= \ mk ->
-    case mk of
-        Just k -> return k
+-- obtaining ref is performed indirectly with Maybe Ref to ensure
+-- mt-safe usage (without relying on lazy IO or mutexes).
+loadRef :: RefSpace a -> IORef (Maybe (Ref a)) -> IO (Ref a)
+loadRef rs rfRf =
+    readIORef rfRf >>= \ mrf ->
+    case mrf of
+        Just rf -> return rf
         Nothing ->
-            readIORef rfNxt >>= \ k0 ->
-            let k = succ k0 in
-            k `seq`
-            writeIORef rfNxt k >>
-            writeIORef rfK (Just k) >>
-            return k
+            newRef rs >>= \ rf ->
+            writeIORef rfRf (Just rf) >>
+            return rf
 
 -- increment touch and return whether it is the first touch.
 incTouch :: IORef Int -> IO Bool
@@ -155,10 +144,10 @@ decTouch rf =
 -- | Create a new link to an existing demand aggregator.
 newDemandLnk :: DemandAggr e z -> IO (LnkUp e)
 newDemandLnk da =
-    newIORef Nothing >>= \ rfIdx -> -- to acquire index later.
-    let getIdx = getIndex (da_nextid da) rfIdx in
-    let touch = getIdx >>= touchDaggr da in
-    let update su = getIdx >>= \ ix -> updateDaggr da ix su in
+    newIORef Nothing >>= \ rfRef -> -- acquire Ref later
+    let getRef = loadRef (da_demands da) rfRef in
+    let touch = getRef >>= touchDaggr da in
+    let update su = getRef >>= \ rf -> updateDaggr da rf su in
     let lu = LnkUp { ln_touch = touch, ln_update = update } in
     return lu
 

@@ -27,6 +27,7 @@ newtype PureB b x y = PB (b x y)
 liftPure :: b x y -> PureB b x y
 liftPure = PB
 
+-- | Pure behaviors can be unwrapped and treated as impure behaviors
 unwrapPure :: PureB b x y -> b x y
 unwrapPure (PB f) = f
 

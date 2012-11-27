@@ -9,7 +9,8 @@
 --   * observe the collection of references that have value.
 --
 -- There is no need to explicitly manage keys or addresses. The use
--- of references is more capability-secure, simple, and safe.
+-- of references is more capability-secure, simple, and safe. Direct
+-- use of keys would still be useful in the distributed case though.
 --
 -- This fulfills need for tables in Sirea. It has a minor weakness, 
 -- that each Ref will keep the full RefSpace in memory. But this is

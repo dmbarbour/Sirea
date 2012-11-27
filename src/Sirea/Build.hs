@@ -21,7 +21,7 @@
 -- to halt a SireaApp in that manner. 
 --
 module Sirea.Build
-    ( buildSireaApp
+    ( buildSireaApp, buildSireaAppN
     , runSireaApp
     , beginSireaApp
     , SireaApp
@@ -128,9 +128,21 @@ data AppPeriodic w = AppPeriodic
 -- programming experience, and is not readily extensible.)
 --
 buildSireaApp :: SireaApp -> IO SireaAppObject
-buildSireaApp app = 
+buildSireaApp = buildSireaAppN defaultN
+
+-- Default name for a Sirea application.
+-- This has no real meaning. 
+defaultN :: String
+defaultN = "sirea"
+
+-- | As buildSireaApp, except with a distinguishing name. Necessary
+-- if a single Haskell process uses multiple Sirea applications, to
+-- distinguish those applications, e.g. to avoid interference for 
+-- persistent state resources.
+buildSireaAppN :: String -> SireaApp -> IO SireaAppObject
+buildSireaAppN name app = 
     -- new generic context; fresh global space for the app
-    newPCX >>= \ cw -> 
+    newPCX name >>= \ cw -> 
     -- special initialization for P0 thread
     let cp0 = findInPCX cw :: PCX P0 in
     let tc0 = findInPCX cp0 :: TC in

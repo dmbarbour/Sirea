@@ -166,7 +166,7 @@ instance Typeable GobStopper where
     typeOf _ = mkTyConApp tycGS []
         where tycGS = mkTyCon3 "Sirea" "Sirea.Partition.Internal" "GobStopper"
 instance Resource GobStopper where
-    locateResource _ = Gob <$> newIORef []
+    locateResource _ _ = Gob <$> newIORef []
 
 -- | runGobStopper will:
 --     halt all active threads (at instant of runGobStopper)
@@ -265,8 +265,8 @@ instance Typeable1 OutBox where
     typeOf1 _ = mkTyConApp tycOB []
         where tycOB = mkTyCon3 "Sirea" "Sirea.Partition.Internal" "OutBox"
 instance (Partition p) => Resource (OutBox p) where
-    locateResource _ = OutBox <$> newSemaphore ob_max_in_flight
-                              <*> newIORef Nothing
+    locateResource _ _ = OutBox <$> newSemaphore ob_max_in_flight
+                                <*> newIORef Nothing
 
 -- | obtain the outbox resource p1->p2 starting from the world context
 getOB :: (Partition p1, Partition p2) => PCX w -> p1 -> p2 -> OutBox p2
