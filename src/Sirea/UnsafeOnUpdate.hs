@@ -44,17 +44,10 @@ import Sirea.B
 import Sirea.BCX
 import Sirea.PCX
 import Sirea.Internal.BImpl (undeadB, keepAliveB)
+import Sirea.Internal.Tuning (dtFinalize)
 
 import Control.Exception (assert)
 
--- dtFinal provides the upper bound for how far to execute when 
--- stability increases to infinity, measured against the last 
--- update or the prior stability. This only happens on shutdown,
--- so there should be a time at which we hit `Nothing` and there
--- are no further updates. But we'll only look for that time up 
--- to a few seconds into the signal. How far?
-dtFinal :: DT
-dtFinal = 6.0 -- seconds
 
 -- | unsafeOnUpdateB - perform an IO action for every unique value
 -- in a signal as it becomes stable, then forward the update. There
@@ -96,7 +89,7 @@ runToStability rfSig rfA op su =
     -- range of (t0 <= t < tf) may be executed, 
     let tUpd   = snd <$> su_state su in
     let tLower = t0 <|> tUpd in
-    let tUpper = tf <|> ((`addTime` dtFinal) <$> (tUpd <|> t0)) in
+    let tUpper = tf <|> ((`addTime` dtFinalize) <$> (tUpd <|> t0)) in
     case (,) <$> tLower <*> tUpper of
         Just (tL,tU) ->
             unless (tL == tU) $ assert (tL < tU) $

@@ -16,9 +16,9 @@ import Control.Exception (assert)
 import Control.Concurrent.MVar
 
 data StopData = SD
-    { shouldStop   :: Bool
-    , isStopped    :: Bool
-    , onStopped    :: IO ()
+    { shouldStop   :: {-# UNPACK #-} !Bool
+    , isStopped    :: {-# UNPACK #-} !Bool
+    , onStopped    :: !(IO ())
     }
 
 makeStopper :: IORef StopData -> Stopper

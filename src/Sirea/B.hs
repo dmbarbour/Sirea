@@ -21,29 +21,13 @@ import Sirea.Behavior
 import Sirea.Internal.BTypes
 import Sirea.Internal.BImpl
 import Sirea.Internal.BDynamic
+import Sirea.Internal.Tuning (dtEqf, dtSeq)
 import Data.Typeable
 
 instance Typeable2 B where
     typeOf2 _ = mkTyConApp tcB []
         where tcB = mkTyCon3 "sirea-core" "Sirea.Behavior" "B"
 
----------------------------
--- Concrete Instances: B --
----------------------------
--- TUNING
---   dtEqf: default lookahead for constB, adjeqfB.
---   dtSeq: compute ahead of stability for bseq.
---
--- Eventually I'd like to make these values adaptive, i.e. depending
--- on actual lookahead stability at runtime. The TCP-like algorithms
--- for congestion control seem applicable. 
---
--- For badjeqf/bconst, it may also be valuable to choke updates if
--- they do not appear to have changed. I.e. switch to heartbeat
--- updates if there is no observed change.
-dtEqf, dtSeq :: DT
-dtEqf   = 3.6  -- seconds ahead of stability to seek difference
-dtSeq   = 0.36 -- seconds ahead of stability to force evaluation
 
 eqfB :: (x -> x -> Bool) -> B (S p x) (S p x)
 eqfB = unsafeEqShiftB dtEqf

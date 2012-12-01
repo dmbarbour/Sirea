@@ -16,7 +16,7 @@ import Data.Typeable
 import Data.IORef
 import Control.Applicative
 import Control.Exception (mask_)
-import Control.Monad (join)
+import Control.Monad (join, unless)
 
 -- | Stepper - incremental processing of RDP updates in Sirea.
 --
@@ -66,7 +66,6 @@ data Stopper = Stopper
     , addStopperEvent :: IO () -> IO () -- ^ notify when stopped
     }
 
-
 -- | TC is the thread context - basically a small set of queues in
 -- IORefs, and some initialization status (for partitions other than
 -- P0, keep track to shutdown later).
@@ -74,37 +73,36 @@ data Stopper = Stopper
 --    tc_recv :: either event or work; atomic
 --    tc_work :: phased tasks, repeats until empty; not atomic
 --    tc_send :: tasks to perform at end of round; not atomic
---    tc_time :: (convenience) time of the step. 
+--    tc_time :: time of step; monotonic, not atomic 
 -- These are not heavily optimized; they don't need to be, since
 -- there are a bounded number of tasks in any queue at once, and
 -- received operations are pre-grouped in batches.
---
--- TODO: consider adding a `tc_pulse` operation to perform work 
--- at a low, synchronized rate - e.g. once per second. Would be
--- useful for choked updates. The `tc_time` would be taken 
 data TC = TC 
-    { tc_init :: IORef Bool
-    , tc_recv :: IORef (Either Event Work)
-    , tc_work :: IORef (Maybe Work)
-    , tc_send :: IORef Work
-    , tc_time :: IORef (Maybe T)
+    { tc_init :: !(IORef Bool)
+    , tc_recv :: !(IORef (Either [Event] [Work]))
+    , tc_work :: !(IORef [Work])
+    , tc_send :: !(IORef [Work])  
+    , tc_time :: !(IORef (T,T)) -- (tEff,tAct)
     }
 type Event = IO ()
 type Work = IO ()
+
+runReverse :: [IO ()] -> IO ()
+runReverse = sequence_ . reverse
 
 newTC :: IO TC
 newTC = TC <$> newIORef False
            <*> newIORef (Left (return ()))
            <*> newIORef Nothing
            <*> newIORef (return ())
-           <*> newIORef Nothing
+           <*> newIORef (tZero,tZero)
+    where tZero = mkTime 0 0
 
 instance Typeable TC where
     typeOf _ = mkTyConApp tycTC []
         where tycTC = mkTyCon3 "sirea-core" "Sirea.Partition.Internal" "TC"
 instance Resource TC where
     locateResource _ _ = newTC
-
 
 -- | In each runStepper round:
 --    recv tasks are emptied (atomically) then processed
@@ -120,29 +118,32 @@ tcToStepper tc = Stepper
  
 runTCStep :: TC -> IO ()
 runTCStep tc = mask_ $
-    writeIORef (tc_time tc) Nothing >> -- reset time
+    updateTime tc >>
     runTCRecv (tc_recv tc) >>
     runTCWork (tc_work tc) >>
     runTCSend (tc_send tc)
 
--- TCRecv has either event or work.
-runTCRecv :: IORef (Either Event Work) -> IO ()
+-- TCRecv has either event or work. If an event is scheduled, it is
+-- dropped when running a step (and must be explicitly rescheduled).
+runTCRecv :: IORef (Either [Event] [Work]) -> IO ()
 runTCRecv rfRecv =
     atomicModifyIORef rfRecv swapZero >>=
-    either ignoreEvent performWork
-    where swapZero x = (Left (return ()),x)
-          ignoreEvent _ = return ()
-          performWork work = work
+    either dropEvent runWork
+    where swapZero x = (Left [],x)
+          dropEvent _ = return ()
+          runWork = runReverse
 
--- TCWork will execute multiple phases.
--- Usually, there is only one phase.
-runTCWork :: IORef (Maybe Work) -> IO ()
+-- TCWork may execute multiple phases.
+--
+-- If Sirea resources are designed properly, there should be a small
+-- bounded number of phases per step. Current design only needs one.
+runTCWork :: IORef [Work] -> IO ()
 runTCWork rfw = 
-    readIORef rfw >>= \ mbWork ->
-    writeIORef rfw Nothing >>
-    maybe done doWork mbWork
-    where doWork work = work >>= \ _ -> runTCWork rfw
-          done = return ()
+    readIORef rfw >>= \ lw ->
+    writeIORef rfw [] >>
+    runWork lw
+    where runWork [] = return ()
+          runWork lw = runReverse lw >> runTCWork rfw
 
 -- TCSend will empty non-empty outboxes for the round. Usually a 
 -- small task, since fan-out between partitions is limited by type.
@@ -153,44 +154,53 @@ runTCWork rfw =
 -- consumer, the producer may end up waiting.
 runTCSend :: IORef Work -> IO ()
 runTCSend rfEmit = 
-    readIORef rfEmit >>= \ doEmit ->
-    writeIORef rfEmit (return ()) >>
-    doEmit
+    readIORef rfEmit >>= \ lw ->
+    writeIORef rfEmit [] >>
+    runReverse lw
 
 -- add work to a partition; will execute at start of next round
 addTCRecv :: TC -> Work -> IO ()
 addTCRecv tc op = join $ atomicModifyIORef (tc_recv tc) putOpTakeEvent
-    where putOpTakeEvent (Left event) = (Right op, event)
-          putOpTakeEvent (Right work) = (Right (work >> op), return ())
+    where putOpTakeEvent (Left lEvents) = (Right [op], runReverse lEvents)
+          putOpTakeEvent (Right lWork) = (Right op:lWork, return ())
 
 addTCEvent :: TC -> Event -> IO ()
 addTCEvent tc ev = join $ atomicModifyIORef (tc_recv tc) addOrExecEvent
-    where addOrExecEvent (Left event) = (Left (event >> ev), return ())
-          addOrExecEvent (Right work) = (Right work, ev)
+    where addOrExecEvent (Left lEvents) = (Left ev:lEvents, return ())
+          addOrExecEvent (Right lWork) = (Right lWork, ev)
 
 -- work is not modified atomically.
 addTCWork :: TC -> Work -> IO ()
-addTCWork tc newWork = modifyIORef (tc_work tc) addWork
-    where addWork Nothing = Just newWork
-          addWork (Just oldWork) = Just (oldWork >> newWork)
+addTCWork tc op = 
+    let rf = tc_work tc in
+    readIORef rf >>= \ lw ->
+    writeIORef rf (op:lw)
 
 addTCSend :: TC -> Work -> IO ()
-addTCSend tc newWork = modifyIORef (tc_send tc) addWork
-    where addWork oldWork = (oldWork >> newWork)
+addTCSend tc op =
+    let rf = tc_send tc in
+    readIORef rf >>= \ lw ->
+    writeIORef rf (op:lw) 
 
--- TODO: Consider tweaking Sirea to tolerate leap seconds
--- and validate that time is running forward. Alternatively,
--- integrate Sirea with NTP?
-getTCTime :: TC -> IO T
-getTCTime tc =
+-- updateTime time, with heuristics to ensure monotonic update.
+updateTime :: TC -> IO ()
+updateTime tc =
     let rf = tc_time tc in
-    readIORef rf >>= \ mbT ->
-    case mbT of
-        Just tm -> return tm
-        Nothing ->
-            getTime >>= \ tm ->
-            writeIORef rf (Just tm) >>
-            return tm
+    readIORef rf >>= \ ts0 ->
+    getTime >>= \ tNow ->
+    let tEff = adjTime ts0 tNow in
+    tEff `seq`  
+    writeIORef rf (tEff,tNow) 
+
+-- the monotonic update heuristics
+adjTime :: (T,T) -> T -> T
+adjTime (tEff0, tAct0) tNow =
+    let dtAct = tNow `diffTime` tAct0 in -- difference in times.
+    let dtEst = 0.96 * dtAct in -- heuristic to mitigate sudden shifts in OS clock
+    let tEst = if (dtEff > 0) then tEff0 `addTime` dtEst 
+                              else tEff0 `addTime` 0.001
+    in 
+    max tEst tNow 
 
 
 -- TO CONSIDER:

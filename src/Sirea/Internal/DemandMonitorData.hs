@@ -5,23 +5,52 @@
 --   * aggregation of demands
 --   * distribution of a signal to many observers
 --
--- Demand Monitors are stabilized based on known demand sources and
--- the 'real-time' obtained from an external time source. A late 
--- arriving demand source can be retroactively accommodated for
--- a few milliseconds. 
+-- The main challenges for implementing a DemandMonitor seem to be:
 --
--- Old demands must be cleaned up over time. Mostly, the system can
--- depend on the stability updates to help GC the demands. But due
--- to keeping a few extra milliseconds of data (for new demands),
--- finalization cleanup must occur by the pulse (heartbeat) in order
--- to flush the last bits from memory. 
+--   * robust handling of cyclic update relationships 
+--   * final garbage collection of demands
+--
+-- A Demand Monitor admits potential cyclic dependencies, and Sirea
+-- offers no effective means to detect them. Even if it did, the
+-- `ln_touch` mechanism does not handle cycles robustly - to wait on
+-- on a cyclic update would result in logical deadlock. 
+-- 
+-- The current design is to update demand monitors at the start of
+-- each round, as though the updates come from another partition. 
+-- This protects snapshot consistency up to loops, but does have a
+-- cost: unnecessary intermediate updates are observed; efficiency
+-- of the full system can suffer. 
+--
+-- 
+-- The `ln_touch` mechanism does not handle cycles robustly. It can
+-- lead to cyclic waits and a form of deadlock. To ensure snapshot
+-- consistency, all updates from a round must be processed together.
+-- Without `ln_touch`, this requires updates of a round be processed
+-- in a later round. onNextStep is used; updates in each round apply
+-- to the next. 
+--
+-- With updates to the collective demand delayed across a step, the
+-- demand monitor acts much like a resource in another partition.
+-- But the resulting behavior is robust to cyclic relationships,
+-- consistent, and easy enough to understand or explain.
+--
+-- This leaves GC. When demands are active, it's easy enough to rely
+-- on demand updates to gradually GC the older demand signals. But a
+-- small history of demands is kept in case of late-arriving demands
+-- sources. This history will still be in memory at the end, so must
+-- be collected by other means. To this end, I'll schedule a `flush`
+-- if it seems there are no more updates coming. 
+--
+-- Special Notes: A DemandAggr's output link may return to `Nothing` 
+-- for stability many times. When this happens, stability can be
+-- accessed as a simple function of the current time (based on the
+-- provided history value). 
 --
 module Sirea.Internal.DemandMonitorData
     ( DemandAggr, newDemandAggr, newDemandLnk
     , MonitorDist, newMonitorDist, mainMonitorLnk, newMonitorLnk
     ) where
 
-import Sirea.Internal.RefSpace
 import Data.IORef
 import Data.Maybe (fromMaybe, isNothing)
 import Data.List (foldl')
@@ -33,67 +62,43 @@ import Sirea.Time
 import Sirea.Link
 import Sirea.Partition
 import Sirea.PCX
---import Sirea.Internal.LTypes
+import qualified Sirea.Internal.Table as Table
+import Sirea.Internal.Tuning (dtInsigStabilityUp, dtFutureChoke, dtDaggrHist, dtMdistHist)
 
--- 
--- DemandAggr will automatically keep a certain amount of "extra" 
--- history to admit late-arriving demands sources. How much? Well,
--- this does have a cost to stability, so it shouldn't be much.
--- This will be kept relative to wall-clock time  
--- Also, the use of anticipation helps mitigate the requirement,
--- so it doesn't need to be very much. 
---
--- MonitorDist also keeps history to accommodate late-arriving 
--- observers. However, this history has no significant costs other 
--- than storage. It can be a fair bit longer, and so it is. 
---
--- If there are no demands, the monitor will also use dt_mdist_hist
--- to estimate stability of the demands relative to itself. (This
--- is not ideal, but is the best I can do without using dedicated
--- partition for demand monitors.)
---
-dt_daggr_hist :: DT
-dt_daggr_hist = 0.024
 
-dt_mdist_hist :: DT
-dt_mdist_hist = 0.126 
+type Table = Table.Table
+type Key = Table.Key
+
 
 -- convenient partition data (to avoid replicate lookups)
 data PartD = PartD 
     { pd_time       :: !(IO T)
-    , pd_eventually :: !(IO () -> IO ())
     , pd_phaseDelay :: !(IO () -> IO ())
+    , pd_stepDelay  :: !(IO () -> IO ())
+    , pd_eventually :: !(IO () -> IO ())
     }
 mkPartD :: (Partition p) => PCX p -> PartD
 mkPartD cp = PartD  
     { pd_time       = getStepTime cp
-    , pd_eventually = eventually cp
     , pd_phaseDelay = phaseDelay cp
+    , pd_stepDelay  = onNextStep cp
+    , pd_eventually = eventually cp
     }     
 
-
 -- | DemandAggr: aggregates and processes many concurrent demands.
---
--- NOTE: DemandAggr will block propagation of cyclic updates from
--- within the current step. Such updates will eventually deliver, 
--- due to the periodic global stability updates. This will dampen
--- local cycles, often excessively.
---
--- Stability of DemandAggr is simply stability of the incoming
--- demands or an estimated current time as adjusted to support late
--- arriving demand sources). 
---
--- Periodic cleanup is modeled by a stability update of an inactive 
--- signal. This ensures it can mix freely with regular updates.
 data DemandAggr e z = DemandAggr 
-    { da_active     :: !(IORef Bool)        -- to detect cyclic touch or update
-    , da_touchCt    :: !(IORef Int)         -- count of non-cyclic touches
-    , da_tmup       :: !(IORef (Maybe T))   -- lowest update time (at the moment)
-    , da_stable     :: !(IORef (Maybe T))   -- track reported stability
-    , da_demands    :: !(RefSpace (SigSt e)) -- tracking demand data
+    { da_data       :: !(IORef DemandData)  -- mutable state (other than table)
+    , da_demands    :: !(Table (SigSt e))   -- track active demand data
     , da_nzip       :: !([Sig e] -> Sig z)  -- compute the result signal
-    , da_next       :: !(LnkUp z)           -- process the updated signal
+    , da_link       :: !(LnkUp z)           -- process the updated signal
     , da_partd      :: !PartD               -- partition data to support GC
+    }
+
+data DemandData = DemandData 
+    { dd_active     :: {-# UNPACK #-} !Bool      -- is update scheduled?
+    , dd_nextKey    :: {-# UNPACK #-} !Key       -- next key for the table
+    , dd_tmup       :: {-# UNPACK #-} !(Maybe T) -- time of earliest demand update
+    , dd_stable     :: {-# UNPACK #-} !(Maybe T) -- time of reported stability
     }
 
 -- | Create a demand aggregator, given the output target.
@@ -102,147 +107,164 @@ newDemandAggr
     => PCX p 
     -> (LnkUp z)
     -> ([Sig e] -> Sig z)
+    -> DT
     -> IO (DemandAggr e z)
-newDemandAggr cp zlu zpf zeq = DemandAggr 
-    <$> newIORef False -- inactive
-    <*> newIORef 0     -- untouched
-    <*> newIORef Nothing -- not updated
-    <*> newIORef Nothing -- no stability
-    <*> newRefSpace    -- track demands
-    <*> pure zpf       -- provided zip function
-    <*> pure zlu       -- destination for changing demands
-    <*> pure (mkPartD cp) -- scheduling to support GC
+newDemandAggr cp zlu zpf zeq dtHist = 
+    newIORef ddZero >>= \ rfDD ->
+    Table.new >>= \ tbl ->
+    let r = DemandAggr 
+                { da_data = rfDD
+                , da_demands = tbl
+                , da_nzip = zpf
+                , da_link = zlu
+                , da_partd = mkPartD cp
+                , da_hist = dtHist
+                }
+    in
+    (return $! r)
 
--- obtaining ref is performed indirectly with Maybe Ref to ensure
--- mt-safe usage (without relying on lazy IO or mutexes).
-loadRef :: RefSpace a -> IORef (Maybe (Ref a)) -> IO (Ref a)
-loadRef rs rfRf =
-    readIORef rfRf >>= \ mrf ->
-    case mrf of
-        Just rf -> return rf
-        Nothing ->
-            newRef rs >>= \ rf ->
-            writeIORef rfRf (Just rf) >>
-            return rf
-
--- increment touch and return whether it is the first touch.
-incTouch :: IORef Int -> IO Bool
-incTouch rf =
-    readIORef rf >>= \ n ->
-    let n' = succ n in
-    n' `seq` writeIORef rf n' >>
-    (return $! 1 == n')
-
--- decrement touch and return whether it is the last touch.
-decTouch :: IORef Int -> IO Bool
-decTouch rf =
-    readIORef rf >>= \ n ->
-    let n' = pred n in
-    n' `seq` writeIORef rf n' >>
-    (return $! 0 == n')
+ddZero :: DemandData
+ddZero = DemandData
+    { dd_active = False 
+    , dd_nextKey = 80000
+    , dd_tmup = Nothing
+    , dd_stable = Nothing
+    }
 
 -- | Create a new link to an existing demand aggregator.
 newDemandLnk :: DemandAggr e z -> IO (LnkUp e)
 newDemandLnk da =
-    newIORef Nothing >>= \ rfRef -> -- acquire Ref later
-    let getRef = loadRef (da_demands da) rfRef in
-    let touch = getRef >>= touchDaggr da in
-    let update su = getRef >>= \ rf -> updateDaggr da rf su in
+    newIORef Nothing >>= \ rfK -> -- acquire Key later, in Demand Monitor's partition
+    let getKey = loadKey da rfK in
+    let touch = return () in -- ignore touches (updates wait to next round anyway)
+    let update su = getKey >>= \ k -> updateDaggr da k su in
     let lu = LnkUp { ln_touch = touch, ln_update = update } in
     return lu
 
-touchDaggr :: DemandAggr e z -> Key -> IO ()
-touchDaggr da k = 
-    readIORef (da_active da) >>= \ bCycle ->
-    unless bCycle $ 
-        Table.get (da_table da) k >>= \ mbSt ->
-        let st = fromMaybe st_zero mbSt in
-        unless (st_expect st) $
-            let st' = st_poke st in
-            Table.put (da_table da) k (Just st') >>
-            incTouch (da_touchCt da) >>= \ bFirst ->
-            when bFirst $
-                writeIORef (da_active da) True >>
-                ln_touch (da_next da) >>
-                writeIORef (da_active da) False
+loadKey :: DemandAggr e z -> IORef (Maybe Key) -> IO Key
+loadKey da rfK =
+    readIORef rfK >>= \ mk ->
+    case mk of
+        Just k -> return k
+        Nothing ->
+            readIORef (da_data da) >>= \ dd ->
+            let k = succ (dd_nextKey dd) in
+            let dd' = dd { dd_nextKey = k } in
+            k `seq` dd' `seq` 
+            writeIORef (da_data da) dd' >>
+            writeIORef rfK (Just k) >>
+            return k
 
+-- Update the DemandAggr and activate it (if not active)
 updateDaggr :: DemandAggr e z -> Key -> SigUp e -> IO ()
-updateDaggr da k su =
-    -- track earliest time-of-update. 
-    readIORef (da_tmup da) >>= \ tmup ->
-    let tmsu = fmap snd $ su_state su in
-    let tmup' = leastTime tmup tmsu in
-    writeIORef (da_tmup da) tmup' >>
-    -- update the element and the touch-count
-    Table.get (da_table da) k >>= \ mbSt ->
-    let st  = fromMaybe st_zero mbSt in
+updateDaggr da k su = 
+    readIORef (da_data da) >>= \ dd ->
+    let bActive = dd_active dd in
+    let tmup' = leastTime (dd_tmup dd) (snd `fmap` su_state su) in
+    let dd' = dd { dd_active = True, dd_tmup = tmup' } in
+    dd' `seq` writeIORef (da_data da) dd' >>
+    Table.get (da_demands da) k >>= \ mbSt ->
+    let st = fromMaybe st_zero mbSt in
     let st' = st_sigup su st in
-    Table.put (da_table da) k (Just st') >>
-    when (st_expect st) (void $ decTouch (da_touchCt da)) >>
-    -- deliver the updates (if possible)
-    maybeDeliverDaggr da
+    Table.put (da_demands da) k (Just st') >>
+    unless bActive (activateDaggr da)
+    
+-- Schedule the DemandAggr to run in the next step.
+-- (assumes dd_active already set)
+activateDaggr :: DemandAggr e z -> IO () 
+activateDaggr da = (pd_stepDelay . da_partd) da (deliverDaggr da)
 
--- send a zero-update to clear the DemandAggr
-clearDaggr :: DemandAggr e z -> IO ()
-cle
+-- Schedule a GC flush for DemandAggr. This acts the same as an
+-- empty update to the DemandAggr, delivered on a heartbeat.
+-- (This means the flush update runs on the step AFTER the 
+-- heartbeat, as a normal activation.)
+scheduleFlushDaggr :: DemandAggr e z -> IO ()
+scheduleFlushDaggr da = (pd_eventually . da_partd) da $
+    readIORef (da_data da) >>= \ dd ->
+    unless (dd_active dd) $
+        let dd' = dd { dd_active = True } in
+        writeIORef (da_data da) dd' >>
+        activateDaggr da
 
-
--- deliver aggregated demands if nothing is holding us back
-maybeDeliverDaggr :: DemandAggr e z -> IO ()
-maybeDeliverDaggr da =
-    readIORef (da_active da) >>= \ bActive ->
-    readIORef (da_touchCt da) >>= \ nTouchCt ->
-    let bWait = bActive || (0 /= nTouchCt) in
-    unless bWait $ 
-        writeIORef (da_active da) True >> -- block cycles
-        deliverDaggr da >>
-        writeIORef (da_active da) False
-
--- deliver aggregated demands, perform GC, etc.
+-- deliverDaggr is activated ONLY at the beginning of a new step.
+-- It will evaluate whether an update should occur. If so, it
+-- may send a touch and prepare its state. The state is computed
+-- at this point in order to ignore updates from the new round.
 deliverDaggr :: DemandAggr e z -> IO ()
 deliverDaggr da =
-    -- obtain the collection of demand signals
-    let tbl = da_table da in
-    Table.toList tbl >>= \ lst -> 
-    -- compute stability based on all demands, current time, and committed stability
-    da_time da >>= \ tmClock -> -- wall-clock time
-    let tmNow = Just $ tmClock `subtractTime` dt_daggr_hist in
-    readIORef (da_stable da) >>= \ tmRec ->  -- recorded stability (non-decreasing!)
-    let tmMin = tmRec <|> tmNow in -- using tmNow if tmRec isNothing
+    -- Need a bunch of resources for this action!
+    Table.toList (da_demands da) >>= \ lst ->
+    if null lst then resetDaggr da 
+                else normalDaggr da lst
+
+-- resetDaggr will reset the stability to Nothing. This should be
+-- the eventual result when demands are released on a DemandAggr.
+-- This basically signals that the demand monitor is waiting on new 
+-- demand sources. This happen due to `scheduleFlushDaggr` (since an
+-- update always results in a non-empty list).
+resetDaggr :: DemandAggr e z -> IO ()
+resetDaggr da =
+    readIORef (da_data da) >>= \ dd ->
+    assert (dd_active dd && isNothing (dd_tmup dd)) $ 
+    let dd' = dd { dd_active = False, dd_tmup = Nothing, dd_stable = Nothing } in
+    dd' `seq` writeIORef (da_data da) dd' >>
+    ln_touch (da_link da) >>
+    let su = SigUp { su_state = Nothing, su_stable = Nothing } in
+    let updateAction = ln_update (da_link da) su in 
+    (pd_phaseDelay . da_partd) da updateAction
+
+-- most DemandAggr activations have some set of active demands, kept
+-- in a table and provided here as a list. This becomes the source of
+-- the current signal. Note that stability never isNothing after the
+-- normalDaggr updates. If it isNothing before the first update, it 
+-- is treated as a function of current time.
+normalDaggr :: DemandAggr e z -> [(Key,SigSt e)] -> IO ()
+normalDaggr da lst =
+    (pd_time . da_partd) da >>= \ tmNow ->
+    readIORef (da_data da) >>= \ dd ->
+    assert (dd_active dd) $
+    -- a lot of logic goes into computing the new stability value!
     let tmDem = foldl' leastTime Nothing $ fmap (st_stable . snd) lst in
-    let tmTgt = leastTime tmDem tmNow in -- using tmNow if less than earliest demanded time
-    let tmStable = max <$> tmMin <*> tmTgt in
-    writeIORef (da_stable da) tmStable >>
-    -- perform garbage collection of elements in the table
-    mapM_ (tblGC tbl tmStable) lst >>
-    -- compute the update time, constrained by committed stability.
-    readIORef (da_tmup da) >>= \ tmUpd ->
-    writeIORef (da_tmup da) Nothing >>
-    let tmSigUp = (max <$> tmRec <*> tmUpd) <|> tmUpd in
-    case tmSigUp of
-        Nothing ->
-            let su = SigUp { su_state = Nothing, su_stable = tmStable } in
-            ln_update (da_next da) su
-        Just tm ->
-            let lsigs = fmap (st_signal . snd) lst in
-            let sigz = da_nzip da lsigs in
-            let sigzTrim = s_trim sigz tm in
-            let su = SigUp { su_state = Just (sigzTrim,tm), su_stable = tmStable } in
-            ln_update (da_next da) su
+    let tmMax = Just $ tmNow `subtractTime` dtDaggrHist in -- buffers for late-arriving demands
+    let tmRec = dd_stable dd <|> tmMax in -- recorded stability (or now, if no record)
+    let tmTgt = leastTime tmDem tmMax in -- upper bound at tmMax
+    let tmStable = max <$> tmRec <*> tmTgt in -- lower bound at tmRec
+    -- may need to truncate late-arriving updates based on recorded stability
+    let tmUpdate = max <$> tmRec <*> dd_tmup dd in
+    let bNeedFlush = isNothing tmDem in -- can't expect more stability updates?
+    let dd' = dd { dd_active = False, dd_tmup = Nothing, dd_stable = tmStable } in
+    -- Note: I could presumably choose to delay this update, e.g. if the udpate
+    -- is several seconds beyond stability. It may be worth doing so.
+    writeIORef (da_data da) dd' >> -- commit to activation
+    mapM_ (gcDaggrTable (da_table da) tmStable) lst >> -- GC data in table (hold onto lst)
+    when bNeedFlush (scheduleFlushDaggr da) >>
+    ln_touch (da_link da) >> -- touch observers of demand source
+    -- The update happens next phase, to match bcross
+    let su = case tmUpdate of
+                Nothing  -> SigUp { su_state = Nothing, su_stable = tmStable }
+                Just tm  -> let lsigs = fmap (st_signal . snd) lst in
+                            let sigz  = da_nzip da lsigs in
+                            let sigzTrim = sigz `s_trim` tm in
+                            SigUp { su_state = (sigzTrim, tm), su_stable = tmStable }
+    in
+    let updateAction = ln_update (da_link da) su in
+    (pd_phaseDelay . da_partd) da updateAction
 
-
-
--- need to GC the hashtable based on lowest stability forall elements.
-tblGC :: Table (SigSt a) -> Maybe T -> (Key,SigSt a) -> IO ()
-tblGC tbl Nothing (idx,_) = Table.put tbl idx Nothing
-tblGC tbl (Just tm) (idx,st) = 
+-- Garbage Collection of DemandAggr elements. An demand source can
+-- be eliminated if it is fully stable and all its active values are
+-- in the past. (We'll hold onto unstable, inactive demand sources
+-- to regulate stability of the demand monitor.)
+gcDaggrTable :: Table (SigSt e) -> Maybe T -> (Key, SigSt e) -> IO ()
+gcDaggrTable tbl Nothing (k,_) = Table.put tbl k Nothing
+gcDaggrTable tbl (Just tm) (k,st) =
     let (x,sf) = s_sample (st_signal st) tm in
-    let bDone = isNothing x && s_is_final sf tm in 
-    if bDone -- no need for demand before next update?
-        then Table.put tbl idx Nothing
-        else let st' = st { st_signal = sf } in
-             st' `seq` Table.put tbl idx (Just st')
-
+    let bDone = isNothing (st_stable st) && 
+                isNothing x &&  
+                s_is_final sf tm 
+    in
+    if bDone then Table.put tbl k Nothing
+             else let st' = st { st_signal = sf } in
+                  st' `seq` Table.put tbl k (Just st')
 
 leastTime :: Maybe T -> Maybe T -> Maybe T
 leastTime l r = (min <$> l <*> r) <|> l <|> r

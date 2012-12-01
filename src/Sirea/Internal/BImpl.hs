@@ -693,10 +693,7 @@ unsafeEqShiftB dt eq = mkLnkB id (buildEqShift dt eq)
 
 buildEqShift :: DT -> (a -> a -> Bool) -> Lnk (S p a) -> IO (Lnk (S p a))
 buildEqShift _ _ LnkDead = return LnkDead
-buildEqShift dt eq (LnkSig lu) = 
-    newIORef st_zero >>= \ rfSt ->
-    let lu' = lnEqShift dt eq rfSt lu in
-    return (LnkSig lu')
+buildEqShift dt eq (LnkSig lu) = LnkSig <$> wrapEqFilter dt eq lu
 
 lnEqShift :: DT -> (a -> a -> Bool) -> IORef (SigSt a) -> LnkUp a -> LnkUp a
 lnEqShift dt eq rf lu = LnkUp { ln_touch = onTouch, ln_update = onUpdate }
@@ -734,13 +731,11 @@ eqShift eq as bs tLower tUpper =
           activeWhileEq _ _ = Nothing
           sampleActive = (/= Nothing) . snd
 
-
 -- | Wrap a LnkUp in an equality filter. This involves keeping an 
 -- intermediate cache. (Implementation is same used by badjeqf.)
 wrapEqFilter :: DT -> (z -> z -> Bool) -> LnkUp z -> IO (LnkUp z)
 wrapEqFilter dteqf zeq zlu =
     newIORef st_zero >>= \ rfz ->
-    --lnEqShift :: DT -> (a -> a -> Bool) -> IORef (SigSt a) -> LnkUp a -> LnkUp a    
     return $ lnEqShift dteqf zeq rfz zlu
 
 

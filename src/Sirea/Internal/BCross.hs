@@ -2,13 +2,21 @@
 
 -- | BCross is the implementation of cross for B and BCX.
 --
--- It also contains types associated with partitions and
--- crossB, i.e. used in BCX.
+-- It also contains types associated with partitions and crossB, 
+-- i.e. used in BCX.
 --
--- TODO: set a pulse-based choke on send for updates that
--- are far in advance of stability. The idea is to make 
--- them more incremental. 
---   
+-- BCross is also a potential point of choke for updates. In Sirea,
+-- every update has an arrive-by date. If that date is far in the
+-- future (several seconds) then we can safely delay the updates to
+-- a later round. To protect snapshot consistency, however, it is
+-- necessary that the full batch be choked or none (all or nothing).
+-- 
+-- Choking updates that apply only to the distant future is useful
+-- to control cyclic feedback relationships. When a cycle involves
+-- a `bdelay`, each cycle will step through time. However, if the
+-- cycles run too far ahead they become unstable, so there is no
+-- point to processing them immediately. 
+-- 
 module Sirea.Internal.BCross 
     ( crossB
     , stepDelayB
@@ -33,6 +41,7 @@ import Sirea.Internal.LTypes
 import Sirea.Internal.PTypes
 import Sirea.Internal.BImpl (phaseUpdateB)
 import Sirea.Internal.PulseSensor (initPulseListener)
+import Sirea.Internal.Tuning (dtInsigStabilityUp, dtFutureChoke)
 import Sirea.Partition
 import Sirea.PCX
 import Sirea.Behavior
@@ -60,7 +69,6 @@ getPartitions _ = (undefined,undefined)
 fnStay :: Lnk (S p x) -> Lnk (S p' x)
 fnStay LnkDead = LnkDead
 fnStay (LnkSig lu) = (LnkSig lu)
-
 
 -- sendB, if active (not dead code), will
 --   * create partitions if they don't already exist
@@ -99,18 +107,10 @@ mkSend cw p1 p2 (LnkSig lu) =
     let lu' = LnkUp { ln_touch = touch', ln_update = update' } in
     return (LnkSig lu')
 
--- TODO: come back later to consider choking of distant future state updates.
-
--- tuning parameter: to constrain against insignificant stability 
--- updates between local threads. 
-dtInsigStabilityUp :: DT
-dtInsigStabilityUp = 0.05
-
 -- time choked returns true if a send could be choked based on time.
 timeChoked :: Maybe T -> Maybe T -> Bool
 timeChoked (Just t0) (Just tf) = tf < (t0 `addTime` dtInsigStabilityUp)
 timeChoked _ _ = False
-
 
 -- | phaseDelayB delays updates a phase within runStepper. The idea
 -- is to touch a bunch of updates in one run before executing them 
@@ -211,7 +211,7 @@ initPartition p cw =
 -- actual receive happens at beginning of p2's round.
 -- outbox (modeled as a resource) controls communication with semaphore.
 tcSend :: (Partition p1, Partition p2) 
-       => PCX w -> p1 -> p2 -> Work -> IO ()
+       => PCX w -> p1 -> p2 -> Maybe T -> Work -> IO ()
 tcSend cw p1 p2 work = 
     assert (typeOf p1 /= typeOf p2) $
     let tc1 = getTC (getPCX p1 cw) in
@@ -242,8 +242,10 @@ tcSend cw p1 p2 work =
 -- 
 data OutBox p = OutBox 
     { ob_sem   :: Semaphore -- bounds number of in-flight batches.
-    , ob_state :: IORef (Maybe Work)
+    , ob_state :: IORef OBW
     }
+data OBWork = OBW !Bool [Work]
+
 
 -- | how many batches in flight?
 -- 

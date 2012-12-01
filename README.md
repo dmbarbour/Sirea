@@ -95,13 +95,11 @@ Reactive Demand Programming offers many wonderful, high level features that make
 
 The weaknesses of Sirea RDP belong more to Sirea than to RDP. 
 
-* Sensitive to OS clock; rapid shifts in the OS estimate of time can cause Sirea to fail. It is best to amortize a time-shift by making the clock run faster or slower for some duration. Never run backwards. A forward jump more than about a second will be modeled as a restart (as if someone had hibernated the app). Sirea uses an simplistic representation of UTC time; it is not sensitive to time-zone shifts, but might fail for leap-seconds if the OS represents them.
-
 * Developers must use a point-free style for RDP behaviors in Sirea. This a very rewarding style, and the full power of Haskell functions is still available for static information (~staged programming). But newcomers seem to find point-free intimidating. While I'd like to answer this concern with a higher layer language that can compile to behaviors, it is low priority for Sirea.
 
-* Sirea lacks static support for reasoning about open feedback loops, lacks any support for optimizing network fixpoints, and uses a very simplistic damping model. Consequently, developers must be disciplined about cyclic feedback for demand monitors, shared state, and similar.
-
 * RDP is designed for [object capability model](http://en.wikipedia.org/wiki/Object-capability_model) systems, using dynamic behaviors as runtime composable capabilities. (This is reflected, for example, in having fine-grained capabilities for many resources.) Sirea, however, is designed to be convenient in context of Haskell's module and type systems, and uses types to obtain ambient resources. I am not entirely comfortable with this tradeoff; it isn't necessary if one reifies the module and linking system (e.g. service registry and matchmaker). 
+
+* Sirea is sensitive to the OS clock. RDP requires robust, synchronized, monotonic clocks to work effectively, but is designed to tolerate a few milliseconds drift. Sirea is robust to small shifts in OS clock, but large sudden shift may cause problematic behavior. It is best to use Sirea in conjunction with robust time services for the OS.
 
 
 Reactive Demand Programming (in Sirea)

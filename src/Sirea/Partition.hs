@@ -135,15 +135,13 @@ eventually = addPulseAction
 phaseDelay :: (Partition p) => PCX p -> IO () -> IO ()
 phaseDelay = addTCWork . findInPCX
 
--- | getStepTime will obtain the real (wall clock) time associated
--- with the most recent step. The value is actually computed on the
--- first request in each step, then cleared at the start of the next
--- step. All requests within a given step will observe a consistent
--- value, which simplifies reasoning. And getting time is expensive,
--- so this can be much cheaper.
+-- | getStepTime will obtain an effective wall-clock time associated
+-- with the most recent step. This value is computed at the start of
+-- each step (i.e. right at `runStepper`), and guaranteed monotonic.
 --
 -- Note: getStepTime is not mt-safe. It must only be used from the
 -- associated partition thread that runs stepper events.
+--
 getStepTime :: (Partition p) => PCX p -> IO T
 getStepTime = getTCTime . findInPCX
 

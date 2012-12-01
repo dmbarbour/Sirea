@@ -10,7 +10,7 @@
 -- The state of a demand monitor resource is simply equal to the set
 -- of demands on it at a given instant. Demands are imposed through
 -- a behavior called the demand facet. The state of the resource is
--- monitored through behaviors called monitor facets.
+-- observed through behaviors called monitor facets. 
 --
 -- Demand monitors have a number of useful applications: as volatile
 -- registries or blackboards for modeling agent environments, and as
@@ -39,15 +39,6 @@ import Sirea.Partition
 import Sirea.PCX
 import Sirea.Internal.DemandMonitorData
 import Sirea.Internal.BImpl (wrapEqFilter)
-
--- Tuning: should probably make this more accessible, but...
---
--- To increase stability of demand monitors, push some updates into
--- the future (relative stability) if equal up to that point.
--- How far to seek the first diff?
---
-dt_eqf :: DT
-dt_eqf = 3.6
 
 -- newDemandMonitor is the basis for other demand monitors.
 -- developers to control the zip function and an adjacency filter.

@@ -44,6 +44,7 @@ import Sirea.Internal.PTypes
 import Sirea.Internal.BCross
 import Sirea.Internal.Thread
 import Sirea.Internal.PulseSensor (runPulseActions)
+import Sirea.Internal.Tuning (dtRestart, dtStability, dtHeartbeat, dtGrace)
 import Sirea.Behavior
 import Sirea.Partition
 import Sirea.Link
@@ -228,7 +229,7 @@ beginApp cw rfSD lu =
     setStartTime cp0 tStart >>
     ln_update lu su >> -- activation!
     pulse >> -- first heartbeat
-    schedule dtStep (addTCRecv tc0 nextStep)
+    schedule dtHeartbeat (addTCRecv tc0 nextStep)
 
 -- schedule will delay an event then perform it in another thread.
 -- Sirea only does this with one thread at a time.
@@ -253,11 +254,11 @@ maintainApp apw tStable =
            let tFinal = tStable `addTime` dtGrace in
            let nextStep = haltingApp apw tFinal in
            ln_update (ap_luMain apw) su >> -- indicate signal inactive in future.
-           schedule dtStep (addTCRecv tc0 nextStep)
+           schedule dtHeartbeat (addTCRecv tc0 nextStep)
       else getTCTime tc0 >>= \ tNow -> 
            if (tNow > (tStable `addTime` dtRestart))
-                then -- RESTART APPLICATION (halt and restore activity)
-                    let tRestart = tNow `addTime` dtStep in
+                then -- RESTART APPLICATION (halt then restore activity)
+                    let tRestart = tNow `addTime` dtHeartbeat in
                     let tStable' = tNow `addTime` dtStability in
                     let sig = s_switch s_never tRestart (s_always ()) in
                     let su = SigUp { su_state = Just (sig, tStable)
@@ -266,14 +267,14 @@ maintainApp apw tStable =
                     tRestart `seq` 
                     setStartTime (findInPCX (ap_cw apw)) tRestart >>
                     ln_update (ap_luMain apw) su >>
-                    schedule dtStep (addTCRecv tc0 nextStep)
+                    schedule dtHeartbeat (addTCRecv tc0 nextStep)
                 else -- NORMAL MAINTENANCE 
                     let tStable' = tNow `addTime` dtStability in
                     assert (tStable' > tStable) $ -- can't handle clock running backwards
                     let su = SigUp { su_state = Nothing, su_stable = Just tStable' } in
                     let nextStep = maintainApp apw tStable' in
                     ln_update (ap_luMain apw) su >>
-                    schedule dtStep (addTCRecv tc0 nextStep)
+                    schedule dtHeartbeat (addTCRecv tc0 nextStep)
 
 -- After we set the main signal to inactive, we must still wait for
 -- real-time to catch up, and should run a final few heartbeats to
@@ -288,9 +289,9 @@ haltingApp apw tFinal =
              let gs = ap_gs apw in
              runGobStopper gs (addTCRecv tc0 onStop) >>
              let nextStep = finalizingApp apw in
-             schedule dtStep (addTCRecv tc0 nextStep) 
+             schedule dtHeartbeat (addTCRecv tc0 nextStep) 
         else let nextStep = haltingApp apw tFinal in
-             schedule dtStep (addTCRecv tc0 nextStep)
+             schedule dtHeartbeat (addTCRecv tc0 nextStep)
 
 -- at this point we've run the all-stop for all other threads,
 -- so we're just biding time until threads report completion.
@@ -302,25 +303,7 @@ finalizingApp apw =
     unless (isStopped sd) $
         let nextStep = finalizingApp apw in
         let tc0 = ap_tc0 apw in
-        schedule dtStep (addTCRecv tc0 nextStep)
-    
-
--- Tuning parameters for the stability maintenance tasks:
---
---   dtRestart   : how long frozen to cause restart
---   dtStability : how far ahead to stabilize
---   dtStep      : period between stability updates
---   dtGrace     : grace period at startup and shutdown
---
--- dtStep can also influence amount of computation per round due to
--- `btouch` and similar structures that compute based on stability.
--- These values also can have an impact on idling overheads.
---
-dtRestart, dtStability, dtStep, dtGrace :: DT
-dtRestart   = 1.20  -- how long a pause to cause a restart
-dtStability = 0.30  -- stability of main signal (how long to halt)
-dtStep      = 0.06  -- periodic event to increase stability
-dtGrace     = dtStep -- time allotted for graceful start and stop
+        schedule dtHeartbeat (addTCRecv tc0 nextStep)
 
 -- | If you don't need to run the stepper yourself (that is, if you
 -- don't need full control of the main thread event loop), consider 

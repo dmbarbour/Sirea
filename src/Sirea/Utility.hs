@@ -1,7 +1,6 @@
 {-# LANGUAGE MultiParamTypeClasses, TypeOperators, GADTs #-}
 
--- | Utility behaviors that lack a better home. Anything here could
--- have been written by a Sirea client.
+-- | Utility behaviors that lack a better home. 
 module Sirea.Utility
     ( HasPrinter(..), bprint
     , BUndefined(..), bundefined
@@ -17,6 +16,7 @@ import Sirea.PCX
 import Sirea.Time
 import Sirea.Link
 import Sirea.Signal
+import Sirea.Internal.Tuning (dtPrintExpire)
 import Data.Typeable
 import Data.IORef
 import Control.Monad (when, liftM)
@@ -67,18 +67,13 @@ addToPrinter pbl t msg =
     writeIORef pbl lRC' >>
     when bPrint (putStrLn msg)
 
--- reprint messages if they are repeated after a while.
--- this allows GC of old messages, and provides simple 
--- idempotence.
-dt_print_expire :: DT
-dt_print_expire = 6.0 
 
 updatelRC :: T -> String -> [(T,String)] -> ([(T,String)],Bool)
 updatelRC t msg lRC = 
     let (lRC',bPrint) = foldr fn ([],True) lRC in
     if bPrint then ((t,msg):lRC',True)
               else (lRC',False)
-    where tExpire = t `subtractTime` dt_print_expire
+    where tExpire = t `subtractTime` dtPrintExpire
           fn r@(tx,mx) (l,b) =
             if (tx < tExpire) then (l,b) else
             let b' = b && (msg /= mx) in
