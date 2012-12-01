@@ -113,22 +113,21 @@ newDemandAggr cp zlu zpf zeq dtHist =
     newIORef ddZero >>= \ rfDD ->
     Table.new >>= \ tbl ->
     let r = DemandAggr 
-                { da_data = rfDD
+                { da_data    = rfDD
                 , da_demands = tbl
-                , da_nzip = zpf
-                , da_link = zlu
-                , da_partd = mkPartD cp
-                , da_hist = dtHist
+                , da_nzip    = zpf
+                , da_link    = zlu
+                , da_partd   = mkPartD cp
                 }
     in
     (return $! r)
 
 ddZero :: DemandData
 ddZero = DemandData
-    { dd_active = False 
+    { dd_active  = False 
     , dd_nextKey = 80000
-    , dd_tmup = Nothing
-    , dd_stable = Nothing
+    , dd_tmup    = Nothing
+    , dd_stable  = Nothing
     }
 
 -- | Create a new link to an existing demand aggregator.
@@ -159,7 +158,7 @@ loadKey da rfK =
 updateDaggr :: DemandAggr e z -> Key -> SigUp e -> IO ()
 updateDaggr da k su = 
     readIORef (da_data da) >>= \ dd ->
-    let bActive = dd_active dd in
+    let bWasActive = dd_active dd in
     let tmup' = leastTime (dd_tmup dd) (snd `fmap` su_state su) in
     let dd' = dd { dd_active = True, dd_tmup = tmup' } in
     dd' `seq` writeIORef (da_data da) dd' >>
@@ -167,19 +166,21 @@ updateDaggr da k su =
     let st = fromMaybe st_zero mbSt in
     let st' = st_sigup su st in
     Table.put (da_demands da) k (Just st') >>
-    unless bActive (activateDaggr da)
+    unless bWasActive (activateDaggr da)
     
--- Schedule the DemandAggr to run in the next step.
--- (assumes dd_active already set)
+-- Schedule the DemandAggr to run in the next step. This will
+-- assume dd_active is already set.
 activateDaggr :: DemandAggr e z -> IO () 
 activateDaggr da = (pd_stepDelay . da_partd) da (deliverDaggr da)
 
--- Schedule a GC flush for DemandAggr. This acts the same as an
+-- Schedule the DemandAggr to update on the next heartbeat. This may
+-- be for a GC flush, or due to a choking mechanism. 
+Schedule a GC flush for DemandAggr. This acts the same as an
 -- empty update to the DemandAggr, delivered on a heartbeat.
 -- (This means the flush update runs on the step AFTER the 
 -- heartbeat, as a normal activation.)
-scheduleFlushDaggr :: DemandAggr e z -> IO ()
-scheduleFlushDaggr da = (pd_eventually . da_partd) da $
+scheduleDaggr :: DemandAggr e z -> IO ()
+scheduleDaggr da = (pd_eventually . da_partd) da $
     readIORef (da_data da) >>= \ dd ->
     unless (dd_active dd) $
         let dd' = dd { dd_active = True } in
@@ -194,32 +195,37 @@ deliverDaggr :: DemandAggr e z -> IO ()
 deliverDaggr da =
     -- Need a bunch of resources for this action!
     Table.toList (da_demands da) >>= \ lst ->
-    if null lst then resetDaggr da 
-                else normalDaggr da lst
+    if null lst then sheatheDaggr da   --
+                else weighDaggr da lst
 
--- resetDaggr will reset the stability to Nothing. This should be
--- the eventual result when demands are released on a DemandAggr.
--- This basically signals that the demand monitor is waiting on new 
--- demand sources. This happen due to `scheduleFlushDaggr` (since an
--- update always results in a non-empty list).
-resetDaggr :: DemandAggr e z -> IO ()
-resetDaggr da =
+-- sheatheDaggr will reset stability of DemandAggr to Nothing. This
+-- should occur a heartbeat or two after the demand signals fade.
+sheatheDaggr :: DemandAggr e z -> IO ()
+sheatheDaggr da =
     readIORef (da_data da) >>= \ dd ->
     assert (dd_active dd && isNothing (dd_tmup dd)) $ 
+    let bWasSheathed = isNothing (dd_stable dd) in
     let dd' = dd { dd_active = False, dd_tmup = Nothing, dd_stable = Nothing } in
-    dd' `seq` writeIORef (da_data da) dd' >>
-    ln_touch (da_link da) >>
-    let su = SigUp { su_state = Nothing, su_stable = Nothing } in
-    let updateAction = ln_update (da_link da) su in 
-    (pd_phaseDelay . da_partd) da updateAction
+    dd' `seq` writeIORef (da_data da) dd' >>= \ _ ->
+    unless bWasSheathed $
+        ln_touch (da_link da) >>
+        let su = SigUp { su_state = Nothing, su_stable = Nothing } in
+        let updateAction = ln_update (da_link da) su in 
+        (pd_phaseDelay . da_partd) da updateAction
 
--- most DemandAggr activations have some set of active demands, kept
--- in a table and provided here as a list. This becomes the source of
--- the current signal. Note that stability never isNothing after the
--- normalDaggr updates. If it isNothing before the first update, it 
--- is treated as a function of current time.
+-- A demand aggregator won't necessarily update after activating. A
+-- decision must be made whether an immediate update is worth the
+-- effort. (If not, we'll 
+
+normalDaggr update, we have a non-empty set of demands. But
+-- we may still decide 
+
+-- most DemandAggr activations have some set of active demands, which
+-- may need to be reprocessed after changes in any demand signal. But
+-- at this point, we should 
 normalDaggr :: DemandAggr e z -> [(Key,SigSt e)] -> IO ()
 normalDaggr da lst =
+    
     (pd_time . da_partd) da >>= \ tmNow ->
     readIORef (da_data da) >>= \ dd ->
     assert (dd_active dd) $

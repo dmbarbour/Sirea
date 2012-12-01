@@ -5,6 +5,7 @@ module Sirea.Internal.Tuning
     , dtInsigStabilityUp, dtFutureChoke
     , dtEqf, dtSeq
     , dtCompileFuture
+    , batchesInFlight
     , dtDaggrHist, dtMdistHist
     , dtFinalize
     ) where
@@ -18,13 +19,12 @@ dtStability = 0.30   -- stability of main signal (affects halting time)
 dtHeartbeat = 0.06   -- heartbeat and periodic increase of stability
 dtGrace     = dtHeartbeat -- time allotted for graceful start and stop
 
-
 -- At certain locations, where updates are delivered via partition
 -- stepper, we have opportunity to block or delay some updates. This
 -- can help regulate behavior in case of cyclic feedback systems. 
 dtInsigStabilityUp, dtFutureChoke :: DT
-dtInsigStabilityUp = 0.05 -- smallest significant pure-stability update
-dtFutureChoke = dtEqf - 0.001 -- try to choke updates if far beyond stability
+dtInsigStabilityUp = dtHeartbeat - 0.001 -- largest insignificant pure-stability update
+dtFutureChoke      = dtEqf - 0.001       -- try to choke updates if far beyond stability
 
 -- There are several cases where we'll want to evaluate signals into
 -- their near future. For `bseq` we simply want to flatten signals 
@@ -41,6 +41,29 @@ dtSeq   = 0.36 -- when simply evaluating a signal ahead
 -- potentially more rework when signals change.
 dtCompileFuture :: DT
 dtCompileFuture = 2.7 -- how far to anticipate dynamic behaviors
+
+-- Communication between partitions in Sirea occurs via bcross, and
+-- uses coarse-grained batches to support snapshot consistency and
+-- improved efficiency. The number of "batches in flight" is limited
+-- to ensure fairness and simplify performance reasoning. (Note that
+-- this value is per directed edge between partitions, not global.)
+--
+-- Tuning here is a tradeoff. A large number of batches may improve
+-- parallelism and CPU efficiency, but costs memory, latency, and
+-- increases potential drift and inconsistency. Memory can cost CPU
+-- due to increased GC and paging overheads. Small batch count may
+-- cause more waits between partitions but tighter properties for
+-- system consistency. 
+--
+-- Critical values:
+--    must be 1 or more or we'll just wait forever on send
+--    must be 2 or to piggyback batches for efficiency
+--
+-- If partitions keep up with their workload, Sirea is wait-free at
+-- the threads layer. Bounded buffers are the only waits in Sirea. 
+--
+batchesInFlight :: Int
+batchesInFlight = 6
 
 -- For demand monitors, and other resources based on DemandAggr, we
 -- want to keep a small amount of history available to support late

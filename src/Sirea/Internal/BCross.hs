@@ -5,17 +5,35 @@
 -- It also contains types associated with partitions and crossB, 
 -- i.e. used in BCX.
 --
+-- Sirea makes a promise called "snapshot consistency", which means
+-- that partitions operate on a frozen picture of other partitions.
+-- This isn't global consistency, since it is only pairwise between
+-- partitions. But it does eliminate most malign glitches common to
+-- naive implementations of concurrent reactive models. 
+--
+-- To achieve this promise, a batching mechanism is used between
+-- partitions. Updates for a remote partition from a given step are
+-- delivered only when the step is complete. This is modeled via an
+-- outbox between any two partitions, managed by `bcross` behaviors.
+--
 -- BCross is also a potential point of choke for updates. In Sirea,
 -- every update has an arrive-by date. If that date is far in the
--- future (several seconds) then we can safely delay the updates to
--- a later round. To protect snapshot consistency, however, it is
--- necessary that the full batch be choked or none (all or nothing).
--- 
--- Choking updates that apply only to the distant future is useful
--- to control cyclic feedback relationships. When a cycle involves
--- a `bdelay`, each cycle will step through time. However, if the
--- cycles run too far ahead they become unstable, so there is no
--- point to processing them immediately. 
+-- future (several seconds) then that update is not very urgent and
+-- may be delayed a little. These occasional delays, even if only a
+-- heartbeat, are useful to amortize computation for cyclic feedback
+-- relationships. To achieve snapshot consistency, choking must be
+-- performed at the granularity of a full batch.
+--
+-- BCross uses a bounded buffer - a limited number of batches may be
+-- "in flight" between any two partitions. This limit helps ensure 
+-- Sirea's soft-realtime and soft-bounded memory properties. The
+-- receiving partition will drain the full buffer at runStepper, so
+-- there is no risk of cyclic waits.
+--
+-- On receipt, it is possible for multiple batches to piggyback by
+-- eliminating defunct signal updates and combining touches. This
+-- helps regulate performance: a partition that falls behind becomes
+-- more efficient, enabling it to catch back up.
 -- 
 module Sirea.Internal.BCross 
     ( crossB
@@ -41,7 +59,7 @@ import Sirea.Internal.LTypes
 import Sirea.Internal.PTypes
 import Sirea.Internal.BImpl (phaseUpdateB)
 import Sirea.Internal.PulseSensor (initPulseListener)
-import Sirea.Internal.Tuning (dtInsigStabilityUp, dtFutureChoke)
+import Sirea.Internal.Tuning (dtInsigStabilityUp, dtFutureChoke, batchesInFlight)
 import Sirea.Partition
 import Sirea.PCX
 import Sirea.Behavior
@@ -71,16 +89,13 @@ fnStay LnkDead = LnkDead
 fnStay (LnkSig lu) = (LnkSig lu)
 
 -- sendB, if active (not dead code), will
+--
 --   * create partitions if they don't already exist
 --   * batch multiple updates to one partition (across signals)
 --   * delay operation to runTCSend phase
---   * choke insignificant pure-stability updates
 --
--- sendB is a useful place to choke updates, one of few locations 
--- that does not need `touch`. The state costs are cheap relative to
--- the batch management. Currently I choke only stability updates,
--- but it may be worth choking far future updates (e.g. +5 seconds).
--- The benefit would be for temporal recursion.
+-- sendB will also flag work as urgent or non-urgent, which allows
+-- simple choking when a batch consists fully of non-urgent updates.
 --
 sendB :: (Partition p1, Partition p2) 
       => PCX w -> p1 -> p2 -> B (S p1 x) (S p2 x)
@@ -91,26 +106,43 @@ mkSend :: (Partition p1, Partition p2)
        => PCX w -> p1 -> p2 -> Lnk (S p2 x) -> IO (Lnk (S p1 x))
 mkSend _ _ _ LnkDead = return LnkDead
 mkSend cw p1 p2 (LnkSig lu) = 
-    initPartition p1 cw >>
-    initPartition p2 cw >>
-    newIORef Nothing >>= \ rfChoke ->
-    let send = tcSend cw p1 p2 . ln_update lu in
-    let touch'  = return () in
+    initPartition p1 cw >> -- create partition p1 (idempotent)
+    initPartition p2 cw >> -- create partition p2 (idempotent)
+    newIORef Nothing >>= \ rfChoke -> -- track stability to compute urgency
+    let send = obSend cw p1 p2 in
+    let touch' = return () in
     let update' su = 
-            let tf = su_stable su in
             readIORef rfChoke >>= \ t0 ->
-            let bChoked = isNothing (su_state su) && timeChoked t0 tf in
-            unless bChoked $ 
+            let bUrgent = isUrgentUpdate t0 su in
+            let bDropUpdate = isNothing (su_state su) && not bUrgent in
+            unless bDropUpdate $
+                let tf = su_stable su in
                 tf `seq` writeIORef rfChoke tf >>
-                send su
+                send bUrgent (ln_update lu su)
     in
     let lu' = LnkUp { ln_touch = touch', ln_update = update' } in
-    return (LnkSig lu')
+    return (LnkSig lu')    
 
--- time choked returns true if a send could be choked based on time.
-timeChoked :: Maybe T -> Maybe T -> Bool
-timeChoked (Just t0) (Just tf) = tf < (t0 `addTime` dtInsigStabilityUp)
-timeChoked _ _ = False
+-- isUrgentUpdate is a heuristics computation to decide whether
+-- an update is urgent. (Note: If a pure stability update isn't
+-- urgent, it may be dropped entirely.)
+isUrgentUpdate :: Maybe T -> SigUp e -> Bool
+isUrgentUpdate Nothing _ = True -- initial updates always urgent!
+isUrgentUpdate (Just t0) su =
+    let bUrgentDueToStability = 
+            -- we care most about LARGE stability updates
+            case su_stable su of
+                Nothing -> True -- final updates always urgent!
+                Just tf -> (tf > (t0 `addTime` dtInsigStabilityUp))
+    in
+    let bUrgentDueToState =
+            -- we care most about NEAR-TERM state updates
+            case su_state su of
+                Nothing -> False -- pure stability update
+                Just (_,tu) -> (tu < (t0 `addTime` dtFutureChoke))
+    in
+    bUrgentDueToStability || bUrgentDueToState
+           
 
 -- | phaseDelayB delays updates a phase within runStepper. The idea
 -- is to touch a bunch of updates in one run before executing them 
@@ -206,21 +238,6 @@ initPartition p cw =
         -- TODO: add support to receive pulse.
     
 
--- tcSend - send work from p1 to p2 in world w.
--- actual send happens at end of p1's round.
--- actual receive happens at beginning of p2's round.
--- outbox (modeled as a resource) controls communication with semaphore.
-tcSend :: (Partition p1, Partition p2) 
-       => PCX w -> p1 -> p2 -> Maybe T -> Work -> IO ()
-tcSend cw p1 p2 work = 
-    assert (typeOf p1 /= typeOf p2) $
-    let tc1 = getTC (getPCX p1 cw) in
-    let ob  = getOB cw p1 p2 in
-    let tc2 = getTC (getPCX p2 cw) in
-    ob_addWork ob work >>= \ bFirstWorkInBox ->
-    when bFirstWorkInBox $
-        let deliverOb = ob_deliver ob tc2 in
-        addTCSend tc1 deliverOb
 
 -- | OutBox - output from Sirea thread.
 --
@@ -241,65 +258,71 @@ tcSend cw p1 p2 work =
 -- model the bounded buffer.
 -- 
 data OutBox p = OutBox 
-    { ob_sem   :: Semaphore -- bounds number of in-flight batches.
-    , ob_state :: IORef OBW
+    { ob_sem   :: !Semaphore -- bounds number of in-flight batches.
+    , ob_state :: !(IORef OBW)
     }
-data OBWork = OBW !Bool [Work]
+data OBWork = OBW 
+    { obw_urgent :: {-# UNPACK #-} !Bool -- are there any urgent updates in this batch? 
+    , obw_sched  :: {-# UNPACK #-} !Bool -- scheduled? (due to choke, can't rely on empty `work`)
+    , obw_work   :: [Work]               -- work to perform (reverse-ordered)
+    }
 
-
--- | how many batches in flight?
--- 
---     at least 1 to communicate
---     at least 2 to combine batches
---
--- Higher values can improve parallelism, but can cost memory and 
--- increase latency between an update becoming available and being
--- processed. I'm choosing a value that should be decent for most
--- programs. 
---
--- I don't want configuration to be a major aspect of Sirea. But I
--- might make this configurable via command line at some point (as a
--- resource). 
-ob_max_in_flight :: Int
-ob_max_in_flight = 6
+obwZero :: OBW
+obwZero = OBW False False []
 
 instance Typeable1 OutBox where
     typeOf1 _ = mkTyConApp tycOB []
         where tycOB = mkTyCon3 "Sirea" "Sirea.Partition.Internal" "OutBox"
 instance (Partition p) => Resource (OutBox p) where
-    locateResource _ _ = OutBox <$> newSemaphore ob_max_in_flight
-                                <*> newIORef Nothing
+    locateResource _ _ = OutBox <$> newSemaphore batchesInFlight
+                                <*> newIORef obwZero
+
+-- obSend - send work FROM p1 TO p2 (given the world PCX).
+--   (not mt-safe, should be called only from p1's thread.)
+--
+-- obSend includes simplistic support for choke based on urgency at
+-- granularity of the full batch. The `choke` mechanism is very 
+-- simple: if not delivered in the current round, we'll deliver
+-- on the next heartbeat. Choke is thus never longer than one
+-- heartbeat. 
+--
+obSend :: (Partition p1, Partition p2) 
+       => PCX w -> p1 -> p2 -> Bool -> Work -> IO ()
+obSend cw p1 p2 = assert (typeOf p1 /= typeOf p2) $ obwAddWork
+    where cp1 = getPCX p1 cw
+          tc1 = getTC cp1
+          cp2 = getPCX p2 cw
+          tc2 = getTC cp2
+          ob  = getOB cw p1 p2
+          later = eventually cp1 
+          obwAddWork bUrgent work =
+            readIORef (ob_state ob) >>= \ obw ->
+            let bWasSched = obw_sched obw in
+            let urgent' = obw_urgent obw || bUrgent in
+            let work' = work:(obw_work obw) in
+            let obw' = OBW { obw_urgent = urgent', obw_sched = True, obw_work = work' } in
+            writeIORef (ob_state ob) >>
+            unless bWasSched obwSchedule
+          obwSchedule = addTCSend tc1 deliverNowOrLater 
+          deliverNowOrLater =
+            readIORef (ob_state ob) >>= \ obw ->
+            if (obw_urgent obw) 
+                then let work = (sequence_ . reverse) (obw_work obw) in
+                     writeIORef (ob_state ob) obwZero >>
+                     deliverNow work
+                else let obw' = obw { obw_sched = False } in
+                     writeIORef (ob_state ob) obw' >>
+                     deliverLater
+          deliverNow work =
+            let sem = ob_sem ob in
+            sem_wait sem >> -- semaphore models a bounded buffer
+            addTCRecv tc2 (sem_signal sem >> work)
+          deliverLater = later $ obwAddWork True (return ())
 
 -- | obtain the outbox resource p1->p2 starting from the world context
+--   (Each partition has a set of outboxes for each other partition)
 getOB :: (Partition p1, Partition p2) => PCX w -> p1 -> p2 -> OutBox p2
 getOB cw p1 _ = findInPCX (getPCX p1 cw)
-
--- | add some work to the OutBox. Returns true if work was added to
--- an empty outbox, so you can setup the delivery.
-ob_addWork :: OutBox p -> Work -> IO Bool
-ob_addWork ob op =
-    let st = ob_state ob in
-    readIORef st >>= \ mbW ->
-    case mbW of
-        Nothing ->
-            writeIORef st (Just op) >>
-            return True
-        Just ops ->
-            writeIORef st (Just (ops >> op)) >>
-            return False
-
--- | deliver work from the outbox; results in an empty outbox.
--- Uses the counting semaphore for bounded buffers.
-ob_deliver :: OutBox p -> TC -> IO ()
-ob_deliver ob dst =
-    let st = ob_state ob in
-    readIORef st >>= \ mbW ->
-    writeIORef st Nothing >>
-    maybe (return ()) doDeliver mbW
-    where doDeliver work =
-            let sem = ob_sem ob in
-            sem_wait sem >>
-            addTCRecv dst (sem_signal sem >> work)
 
 -- | a simple semaphore to model bounded-buffers between partitions. 
 -- 
