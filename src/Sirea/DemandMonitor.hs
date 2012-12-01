@@ -49,7 +49,7 @@ newDemandMonitor :: (Partition p)
                      -> IO (B (S p e) (S p ()), B (S p ()) (S p z)) 
 newDemandMonitor zfn eqfn cp = 
     newMonitorDist cp (zfn []) >>= \ md ->
-    wrapEqFilter dt_eqf eqfn (mainMonitorLnk md) >>= \ lnMon ->
+    wrapEqFilter dt_eqf eqfn (primaryMonitorLnk md) >>= \ lnMon ->
     newDemandAggr cp lnMon zfn >>= \ da ->
     return (demandFacetB da, monitorFacetB md)
 

@@ -182,6 +182,9 @@ addTCSend tc op =
     readIORef rf >>= \ lw ->
     writeIORef rf (op:lw) 
 
+getTCTime :: TC -> IO T
+getTCTime tc = fst `fmap` readIORef (tc_time tc)
+
 -- updateTime time, with heuristics to ensure monotonic update.
 updateTime :: TC -> IO ()
 updateTime tc =

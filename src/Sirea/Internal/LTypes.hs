@@ -221,7 +221,7 @@ su_delay dt = if (0 == dt) then id else \ su ->
 -- SigSt represents the state of one signal.
 -- This is intended for use with SigM, primarily. 
 data SigSt a = SigSt
-    { st_signal :: !(Sig a)    -- signal value
+    { st_signal ::                !(Sig a)    -- signal value
     , st_stable :: {-# UNPACK #-} !(Maybe T)  -- signal stability
     , st_expect :: {-# UNPACK #-} !Bool       -- expecting an update?
     }

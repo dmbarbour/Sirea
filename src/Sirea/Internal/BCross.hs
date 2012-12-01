@@ -11,7 +11,7 @@
 -- partitions. But it does eliminate most malign glitches common to
 -- naive implementations of concurrent reactive models. 
 --
--- To achieve this promise, a batching mechanism is used between
+-- To achieve this consistency, a batching mechanism is used between
 -- partitions. Updates for a remote partition from a given step are
 -- delivered only when the step is complete. This is modeled via an
 -- outbox between any two partitions, managed by `bcross` behaviors.
@@ -42,6 +42,10 @@ module Sirea.Internal.BCross
     , GobStopper(..)
     , runGobStopper
     , OutBox
+
+    -- isUrgentUpdate repeats in DemandMonitorData if not exported
+    , isUrgentUpdate 
+
     ) where
 
 import Data.Typeable
@@ -284,17 +288,16 @@ instance (Partition p) => Resource (OutBox p) where
 -- granularity of the full batch. The `choke` mechanism is very 
 -- simple: if not delivered in the current round, we'll deliver
 -- on the next heartbeat. Choke is thus never longer than one
--- heartbeat. 
+-- heartbeat. Even so, it can still be useful.
 --
 obSend :: (Partition p1, Partition p2) 
        => PCX w -> p1 -> p2 -> Bool -> Work -> IO ()
-obSend cw p1 p2 = assert (typeOf p1 /= typeOf p2) $ obwAddWork
+obSend cw p1 p2 = obwAddWork
     where cp1 = getPCX p1 cw
           tc1 = getTC cp1
           cp2 = getPCX p2 cw
           tc2 = getTC cp2
           ob  = getOB cw p1 p2
-          later = eventually cp1 
           obwAddWork bUrgent work =
             readIORef (ob_state ob) >>= \ obw ->
             let bWasSched = obw_sched obw in
@@ -317,7 +320,9 @@ obSend cw p1 p2 = assert (typeOf p1 /= typeOf p2) $ obwAddWork
             let sem = ob_sem ob in
             sem_wait sem >> -- semaphore models a bounded buffer
             addTCRecv tc2 (sem_signal sem >> work)
-          deliverLater = later $ obwAddWork True (return ())
+          deliverLater = eventually doNothingUrgently
+          eventually = onHeartbeat cp1
+          doNothingUrgently = obwAddWork True (return ())
 
 -- | obtain the outbox resource p1->p2 starting from the world context
 --   (Each partition has a set of outboxes for each other partition)

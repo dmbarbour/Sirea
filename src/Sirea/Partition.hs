@@ -33,13 +33,14 @@
 --
 module Sirea.Partition 
     ( Partition(..)
+    , Scheduler(..)
     , BCross(..)
 {-  , BScope(..)
     , Scope      -}
     , Pt, P0
     , Stepper(..)
     , Stopper(..)
-    , onNextStep, eventually, phaseDelay
+    , onNextStep, onHeartbeat, phaseDelay, atEndOfStep
     , getStepTime 
     ) where
 
@@ -96,8 +97,7 @@ class (Typeable p) => Partition p where
     -- resources via PCX. (Recommend use of GHC.Conc.labelThread.)
     newPartitionThread :: PCX p -> Stepper -> IO Stopper
 
-
--- | onNextStep will delay any IO action until the next runStepper
+-- | `onNextStep` will delay any IO action until the next runStepper
 -- operation by an associated partition. onNextStep is mt-safe and
 -- will trigger the stepper event (indicating work is available).
 -- This makes it a useful way for worker threads to publish info
@@ -108,19 +108,14 @@ class (Typeable p) => Partition p where
 onNextStep :: (Partition p) => PCX p -> IO () -> IO ()
 onNextStep = addTCRecv . findInPCX
 
--- | `eventually` will delay an IO task based on an external event.
--- Currently, this event coincides with the main signal's heartbeat,
--- which runs at 10-20Hz. Use of `eventually` will add work to local
--- queue then (if the queue was empty) register for the event. The
--- queue will eventually run as one lump sum batch via onNextStep.
+-- | `onHeartbeat` will delay an IO task based on an external signal
+-- scheduled by the main partition. This runs at a moderate rate of
+-- 10-20Hz, though a partition won't hear a heartbeat unless it has
+-- scheduled an action for it. Heartbeats don't have precise timing,
+-- but are useful for vague eventually tasks - e.g. cleanup, choke. 
 --
--- Use of `eventually` is unsuitable if you need precise periodic
--- tasks, but is sufficient for cleanup tasks or mid-rate polling.
--- `eventually` is mt-safe, and eventually tasks will run in the
--- same order they are added. 
--- 
-eventually :: (Partition p) => PCX p -> IO () -> IO ()
-eventually = addPulseAction
+onHeartbeat :: (Partition p) => PCX p -> IO () -> IO ()
+onHeartbeat = addPulseAction
 
 -- | `phaseDelay` causes the provided action to be delayed within 
 -- the current step. This is used primarily so that touch actions
@@ -130,18 +125,25 @@ eventually = addPulseAction
 -- A partition can execute any number of phases within a runStepper
 -- action, though there are usually only two (touch then update).
 -- 
--- phaseDelay is not mt-safe; it must be used from target partition,
--- and should only be used within a step.  
+-- This is not mt-safe; it must be used from the partition thread.
 phaseDelay :: (Partition p) => PCX p -> IO () -> IO ()
 phaseDelay = addTCWork . findInPCX
+
+-- | `atEndOfStep` will schedule an action for after the last phase,
+-- the same stage Sirea schedules its bcross send actions. This must
+-- not be used to compute or propagate updates (that would violate 
+-- snapshot consistency), but may be a good location to decide when
+-- to perform more actions or emit effects.  
+--
+-- This is not mt-safe; it must be used from the partition thread.
+atEndOfStep :: (Partition p) => PCX p -> IO () -> IO ()
+atEndOfStep = addTCSend . findInPCX
 
 -- | getStepTime will obtain an effective wall-clock time associated
 -- with the most recent step. This value is computed at the start of
 -- each step (i.e. right at `runStepper`), and guaranteed monotonic.
 --
--- Note: getStepTime is not mt-safe. It must only be used from the
--- associated partition thread that runs stepper events.
---
+-- This is not mt-safe; it must be used from the partition thread.
 getStepTime :: (Partition p) => PCX p -> IO T
 getStepTime = getTCTime . findInPCX
 
