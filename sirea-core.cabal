@@ -45,6 +45,7 @@ Library
   Build-Depends: base (>= 4.5)
     ,parallel (>= 3.0)
     ,time (>= 1.4)
+    ,containers (>= 0.5)
 
   Exposed-Modules:
     Sirea.Prelude
@@ -85,7 +86,6 @@ Library
     Sirea.Internal.BCompile
     Sirea.Internal.Thread
     Sirea.Internal.BDynamic
-    Sirea.Internal.Table
     Sirea.Internal.PulseSensor
 
     Sirea.Internal.Tuning

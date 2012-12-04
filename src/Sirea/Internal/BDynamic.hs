@@ -16,8 +16,8 @@ import Control.Exception (assert)
 import Control.Arrow (second)
 import Data.IORef
 import Data.List (foldl')
-import Data.Maybe (isNothing)
-import qualified Sirea.Internal.Table as Table
+import Data.Maybe (isNothing, fromMaybe, mapMaybe)
+import qualified Data.Map.Strict as M
 import Sirea.Internal.BTypes
 import Sirea.Internal.STypes
 import Sirea.Internal.LTypes
@@ -27,8 +27,7 @@ import Sirea.Internal.Tuning (dtCompileFuture)
 import Sirea.Time
 import Sirea.Signal
 
-type Table = Table.Table
-type Key = Table.Key
+type Key = Int
 
 -- import Debug.Trace
 
@@ -265,12 +264,12 @@ dynToLnkUp dyn = LnkUp { ln_touch = dynSigTouch dyn
 -- the operations on it. 
 newtype Dyn a = Dyn (IORef (DynSt a))
 data DynSt a = DynSt 
-    { dyn_sigst  :: {-# UNPACK #-} !(SigSt a)     -- concrete input signal
-    , dyn_tmupd  :: {-# UNPACK #-} !(Maybe T)     -- earliest update time between signal and behaviors
-    , dyn_blink  ::                ![(T,LnkUp a)] -- links prepared to receive signals.
-    , dyn_bstable:: {-# UNPACK #-} !(Maybe T)     -- current stability of dynamic behaviors
-    , dyn_btouch :: {-# UNPACK #-} !Bool          -- still expecting update to active links?
-    , dyn_touched:: {-# UNPACK #-} !Bool          -- touched in this round? (cleared on final update)
+    { dyn_sigst  :: {-# UNPACK #-} !(SigSt a)   -- concrete input signal
+    , dyn_tmupd  :: {-# UNPACK #-} !(Maybe T)   -- earliest update time between signal and behaviors
+    , dyn_blink  :: ![(T,LnkUp a)]              -- links prepared to receive signals.
+    , dyn_bstable:: {-# UNPACK #-} !(Maybe T)   -- current stability of dynamic behaviors
+    , dyn_btouch :: {-# UNPACK #-} !Bool        -- still expecting update to active links?
+    , dyn_touched:: {-# UNPACK #-} !Bool        -- touched in this round? (cleared on final update)
     }
 
 dyn_zero :: DynSt a
@@ -520,54 +519,63 @@ mkMergeLnkFactory (LnkSig lu) =
 -- MergeLnk is the state to perform merges of results from multiple
 -- behaviors. It uses a hashtable internally, and counts touches, to
 -- keep algorithmic costs down.
-data MergeLnk a = MergeLnk 
-    { mln_touch_ct :: !(IORef Int) -- count of touches
-    , mln_table    :: !(Table (SigSt a)) -- all incoming data
-    , mln_tmupd    :: !(IORef (Maybe T)) -- earliest update on sources
+newtype MergeLnk a = MergeLnk { mln_data :: IORef (MLD a) }
+data MLD a = MLD
+    { mld_touchCt  :: {-# UNPACK #-} !Int
+    , mld_table    :: !(M.Map Key (SigSt a))
+    , mld_tmup     :: {-# UNPACK #-} !(Maybe T)
     }
 
 mkMergeLnk :: IO (MergeLnk a)
-mkMergeLnk = MergeLnk <$> newIORef 0 
-                      <*> Table.new
-                      <*> newIORef Nothing
+mkMergeLnk = MergeLnk <$> newIORef mldZero
 
-mln_get :: MergeLnk a -> Key -> IO (SigSt a)
-mln_get mln k = maybe st_zero id `fmap` Table.get (mln_table mln) k
+mldZero :: MLD a
+mldZero = MLD 
+    { mld_touchCt = 0
+    , mld_table   = M.empty
+    , mld_tmup    = Nothing
+    }
 
-mln_put :: MergeLnk a -> Key -> SigSt a -> IO ()
-mln_put mln k st = Table.put (mln_table mln) k (Just st)
+mld_getSt :: MLD a -> Key -> SigSt a
+mld_getSt mld k = fromMaybe st_zero $ M.lookup k (mld_table mld)
 
-mln_clr :: MergeLnk a -> Key -> IO ()
-mln_clr mln k = Table.put (mln_table mln) k Nothing
+-- touch key (if not already touched)
+mld_touch :: MLD a -> Key -> MLD a
+mld_touch mld k =
+    let st = mld_get mld k in
+    if st_expect st then mld else
+    let st' = st_poke st in
+    let tbl' = M.insert k st' (mld_table mld) in
+    let tc' = succ (mld_touchCt mld) in
+    mld { mld_touchCt = tc', mld_table = tbl' }
 
 -- touch, and return whether this is the first touch
 mln_touch :: MergeLnk a -> Key -> IO Bool
 mln_touch mln k =
-    mln_get mln k >>= \ st ->
-    if (st_expect st) then return False else
-    let st' = st_poke st in
-    mln_put mln k st' >>
-    readIORef (mln_touch_ct mln) >>= \ ct ->
-    let ct' = succ ct in
-    ct' `seq` writeIORef (mln_touch_ct mln) ct' >>
-    return (1 == ct')
+    readIORef (mln_data mln) >>= \ mld ->
+    let bFirstTouch = (0 == mld_touchCt mld) in 
+    let mld' = mld_touch mld k in
+    mld' `seq`
+    writeIORef (mln_data mln) mld' >>
+    (return $! bFirstTouch) 
+    
+mld_update :: MLD a -> Key -> SigUp a -> MLD a
+mld_update mld k su =
+    let st  = mld_getSt mld k in
+    let st' = st_sigup su st in
+    let tbl' = M.insert k st' (mld_table mld) in
+    let tc = mld_touchCt mld in
+    let tc' = if (st_expect st) then pred tc else tc in
+    mld { mld_touchCt = tc', mld_table = tbl' }
 
--- update, and return whether this is the last expected update
+-- update, and return whether this is a last expected update
 mln_update :: MergeLnk a -> Key -> SigUp a -> IO Bool
 mln_update mln k su =
-    -- update the associated signal
-    mln_get mln k >>= \ st ->
-    let st' = st_sigup su st in
-    mln_put mln k st' >>
-    -- update the collective update time
-    readIORef (mln_tmupd mln) >>= \ tm ->
-    let tm' = leastTime tm (fmap snd (su_state su)) in
-    tm' `seq` writeIORef (mln_tmupd mln) tm' >>
-    -- test touch count, potentially update if was touched.
-    readIORef (mln_touch_ct mln) >>= \ ct ->
-    let ct' = if (st_expect st) then (pred ct) else ct in
-    ct' `seq` writeIORef (mln_touch_ct mln) ct' >>
-    return (0 == ct')
+    readIORef (mln_data mln) >>= \ mld ->
+    let mld' = mld_update mld k su in
+    let bLastExpected = (0 == mld_touchCt mld') in
+    mld' `seq` writeIORef (mln_data mln) mld' >>
+    (return $! bLastExpected)
 
 -- merge signals from present and future dynamic behaviors
 -- 
@@ -591,41 +599,41 @@ fnMergeEval mln lu k = LnkUp { ln_touch = touch, ln_update = update }
             when bFirstTouch (ln_touch lu)
           update su = 
             mln_update mln k su >>= \ bLastExpectedUpdate ->
-            when bLastExpectedUpdate emitMergedSignal
-          emitMergedSignal =
-            -- operate on elements as collection.
-            Table.toList (mln_table mln) >>= \ lSt -> -- original state of hashtable
-            let tmStable = foldl' leastTime Nothing $ map (st_stable . snd) lSt in
-            mapM_ (mergeEvalGC mln tmStable) lSt >> -- manual garbage collection of history
-            readIORef (mln_tmupd mln) >>= \ tmUpd -> -- time of update
-            writeIORef (mln_tmupd mln) Nothing >>
-            case tmUpd of
-                Nothing -> -- stability update only
-                    let su = SigUp { su_state = Nothing
-                                   , su_stable = tmStable } in
-                    ln_update lu su
-                Just tu -> -- full signal update
-                    --trace ("merge items=" ++ show (length lSt) ++ " stability=" ++ show tmStable) $ 
-                    let sigMerged = foldr s_merge s_never $ map (st_signal . snd) lSt in
-                    let sigTrimmed = s_trim sigMerged tu in
-                    let su = SigUp { su_state = Just (sigTrimmed, tu)
-                                   , su_stable = tmStable } in
-                    ln_update lu su
+            when bLastExpectedUpdate (emitMergedSignal mln lu)
 
--- need to GC the hashtable based on lowest stability for all elements.
--- A merge link can be removed from the table if it has fully stabilized
--- and all its active values are in the past.
-mergeEvalGC :: MergLnk a -> Maybe T -> (Key,SigSt a) -> IO ()
-mergeEvalGC mln Nothing (k,_) = mln_clr mln k
-mergeEvalGC (Just tm) (rf,st) = 
+-- Compute and emit the collective signal merged from consecutive
+-- dynamic behaviors. The merge here favors the highest index to
+-- heuristically favor the newest dynamic sources, but it wouldn't 
+-- be an error to merge in a random order.
+emitMergedSignal :: MergeLnk a -> LnkUp a -> IO ()
+emitMergedSignal mln lu =
+    readIORef (mln_data mln) >>= \ mld ->
+    assert (0 == mld_touchCt mld) $
+    let lst  = M.toAscList (mld_table mld) in
+    let tStable = foldl' leastTime Nothing $ map (st_stable . snd) lst in
+    let lst' = mapMaybe (mergeEvalGC tStable) lst in
+    let tbl' = M.fromAscList lst' in -- GC the table!
+    let su   = case (mld_tmup mld) of 
+                Nothing -> SigUp { su_state = Nothing, su_stable = tStable } 
+                Just tu ->
+                    let lSigsTrimmed = map ((`s_trim` tu) . st_signal . snd) lst in
+                    let sigMerged    = foldr (flip s_merge) s_never lSigsTrimmed in
+                    SigUp { su_state = Just (sigMerged, tu), su_stable = tStable }
+    in
+    mld' `seq` writeIORef (mln_data mln) mld' >>
+    ln_update lu su
+   
+-- need to GC the table. An element can be removed once it no longer
+-- contributes to the result
+mergeEvalGC :: Maybe T -> (Key,SigSt a) -> Maybe (Key, SigSt a)
+mergeEvalGC Nothing _ = Nothing
+mergeEvalGC (Just tm) (k,st) = 
     let (x,sf) = s_sample (st_signal st) tm in
     let bDone = isNothing (st_stable st) &&
-                isNothing x &&
-                s_is_final sf tm 
+                isNothing x && s_is_final sf tm
     in
-    if bDone then mln_clr mln k 
-        else let st' = st { st_signal = sf } in
-             st' `seq` mln_put mln k st'
+    if bDone then Nothing 
+             else Just (k, st { st_signal = sf })
 
 -- leastTime where `Nothing` is forever (upper bound)
 leastTime :: Maybe T -> Maybe T -> Maybe T

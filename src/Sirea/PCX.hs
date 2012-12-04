@@ -9,16 +9,17 @@
 -- as needed by providing unique names or paths. For example, files
 -- and directories in a filesystem are abundant resources. By clever
 -- partitioning and generation of names, a dynamic set of abundant 
--- resources can be represented. Partitions can generally be modular
--- and secure by forbidding filesystem-like `..` reverse paths. 
+-- resources can be represented. Secure, modular partitioning can be
+-- achieved by eliminating ambient authority and `..` reverse paths.
 --
 -- Resources represent services, state, sensors, actuators, or FFI.
 -- Abundant resources, such as state, should be deterministically
 -- named - e.g. using a client name for dynamic resources. Stateful
--- resources are generally persistent in RDP unless they have some
+-- resources are generally persistent for RDP unless they have some
 -- natural explanation for their volatility. External resources are
--- eternal resources, no initialization or finalization. State may
--- be fine-grained, e.g. for specific forms, widgets, registries.
+-- eternal resources, thus need no initialization or finalization.
+-- But some state resources might be `reset` to a pristine state to
+-- recover storage costs.  
 -- 
 -- Sirea supports RDP's conservative notion of resources with PCX, a
 -- generic context object capable of representing ad-hoc resources.

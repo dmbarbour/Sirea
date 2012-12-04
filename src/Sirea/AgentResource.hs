@@ -1,33 +1,32 @@
 {-# LANGUAGE TypeOperators, MultiParamTypeClasses #-}
 
--- | AgentResource provides a convenient way to treat RDP behaviors
--- as shared resources. Developers could achieve equivalent effect
--- at least two ways purely within RDP:
+-- | AgentResource enables developers of FFI or resource adapters to
+-- efficiently and easily mix RDP code with their implementation.
+--  
+-- Conceptually, we want some resources to be controlled by services
+-- external to the Sirea application. Instead of direct influence on
+-- resources, we communicate with the services, which will control
+-- the resources on our behalf. This design can reduce replication 
+-- of effort within or between applications.
 --
---   * replicate behavior wherever used (leverage RDP's idempotence)
---   * behavior near toplevel that observes activity monitor
---
--- However, Sirea does not optimize replicate behaviors, and placing
--- a behavior near the toplevel can be annoying when the reason for
--- it is buried deep in some implementation-dependent resource. This
--- module thus provides advantages for convenience and performance.
+-- AgentResource can represent passive services, those active only
+-- during a request. This is sufficient for demand-driven resources. 
+-- If an active service is needed (e.g. with stateful control), the
+-- developer will need something more. 
 -- 
--- AgentResource treats the agent as defined at the toplevel and
--- observing the activity monitor. When any demand is placed on the
--- monitor, the agent will see it, activate, and begin performing
--- its primary function. When there is no more demand for the agent,
--- the agent returns to waiting passively on the monitor.
+-- The word "agent" refers to the view of concurrent RDP behaviors
+-- and toplevel applications as agents in multi-agent system. Each
+-- AgentResource operates near the toplevel of the application, but
+-- only while actively invoked from the main application. Even when
+-- an agent is invoked many times concurrently, only one instance is
+-- created.
 --
--- The primary reason to use an AgentResource is to support resource
--- adapters. It is often convenient to define a resource's behavior,
--- or at least segments of it, in terms of RDP behaviors. Also, the
--- uniqueness of `invokeAgent` simplifies assertions of idempotence.
--- Safe use of UnsafeOnUpdate is easier to validate if performed by
--- an invoked agent.
+-- The resulting exclusive control can also simplify implementation,
+-- e.g. making it easy to achieve RDP's idempotence properties with
+-- UnsafeOnUpdate.
 --
--- To communicate more than demand for the agent's services requires
--- indirect methods - shared state, demand monitor, or blackboard
--- metaphor.
+-- Communication with agents is typically indirect via shared state,
+-- demand monitor, or other blackboard metaphor. 
 --
 module Sirea.AgentResource
     ( invokeAgent
@@ -38,36 +37,30 @@ import Data.Typeable
 import Sirea.Behavior
 import Sirea.BCX
 
--- | Agent behaviors for AgentResource are defined in a typeclass.  
+-- | The RDP behaviors of AgentResources are defined in a typeclass.
+-- The behaviors are indexed by partition and a `duty` type. Use the
+-- `invokeAgent` behavior to compile and install a unique instance
+-- of the AgentResource (even if invoked many times concurrently).
 --
--- Use `invokeAgent` to compile and install the agent behavior when
--- there is need for it. Each agent behavior is associated with a
--- partition and a duty. 
---
--- Suggestion: Encapsulate a duty newtype and associated invokeAgent
--- behavior within a module, such that clients cannot accidentally
--- duplicate the agentBehaviorSpec within a SireaApp. Protect the
--- uniqueness guarantee. That is, instead of exporting `duty` and
--- having client use `invokeAgent`, export a behavior that wraps
--- `invokeAgent`.
+-- Recommendation is to keep the `duty` types hidden, and export the
+-- behaviors that use invokeAgent directly. This ensures uniqueness.
 class (Partition p, Typeable duty) => AgentBehavior p duty where
     -- | This should be instantiated as: agentBehaviorSpec _ = ...
-    -- The `duty` parameter is undefined, used only for type.
+    -- The `duty` parameter is undefined, used only for type. 
     agentBehaviorSpec :: duty -> BCX w (S p ()) (S p ())
 
 
--- | To access an agent behavior as a resource, use `invokeAgent`.
--- This will ensure only one copy of the agent behavior is active,
--- even if invoked from multiple locations in the Sirea application.
--- The agent will remain active so long as there is at least one
--- demand for it. If there is no anticipated demand for the agent,
--- it will be uninstalled and GC'd until next invocation.
+-- | `invokeAgent` will install a unique instance of agent behavior
+-- (one for each unique partition-duty pair). This behavior is built
+-- and installed on demand, then uninstalled and GC'd when there is
+-- no active demand, potentially many times in a Haskell process. 
+-- Concurrent invocations do not result in extra instances. 
 --
--- Using `agentBehavior` directly would instead cause one copy of
--- the behavior to be installed for each use. Due to idempotence,
--- the resulting system should have the same effect. However, it
--- will be more expensive if there is more than one instance of the
--- agent behavior installed and active.
+-- Logically, use of `invokeAgent` should have the same results as
+-- many concurrent instances due to RDP's idempotence. However, the
+-- unique installation may be much more efficient and will simplify
+-- safe use of non-idempotent implementations (e.g. UnsafeOnUpdate). 
+--
 invokeAgent :: (AgentBehavior p duty) => duty -> BCX w (S p ()) (S p ())
 invokeAgent = error "TODO! invokeAgent"
 
