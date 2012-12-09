@@ -398,7 +398,6 @@ buildDisjFull_sig l r =
     let onEmit sm =
             let sul = sm_emit disjMaskLeft sm in
             let sur = sm_emit disjMaskRight sm in
-            ln_touch lur >>
             ln_update lul sul >> ln_update lur sur
     in
     ln_withSigM onTouch onEmit >>= \ (a,u) ->
@@ -449,7 +448,6 @@ splitB = mkLnkB trSplit $ mkLnkPure lnkSplit
             let update su = 
                     let sul = (su_fmap (s_adjn . s_full_map takeLeft)) su in
                     let sur = (su_fmap (s_adjn . s_full_map takeRight)) su in
-                    ln_touch lur >>
                     ln_update lul sul >> ln_update lur sur
             in
             let lu = LnkUp { ln_touch = touch, ln_update = update } in
@@ -782,27 +780,17 @@ makePhaseLU rf pq lu = LnkUp { ln_touch = touch, ln_update = update }
     where touch = return ()
           update su =
             readIORef rf >>= \ (su0,bPrepared) ->
-            writeIORef rf (appendSigUp su0 su, True) >>
+            writeIORef rf (su_piggyback su0 su, True) >>
             unless bPrepared doPrepare
           doPrepare = 
-            ln_touch lu >> 
-            pq deliver
+            pq deliver >> -- enqueue before touch to preserve order
+            ln_touch lu
           deliver = -- called later, by PhaseQ
             readIORef rf >>= \ (su,bPrepared) ->
             assert bPrepared $
             writeIORef rf (suZero,False) >>
             ln_update lu su
 
--- appendSigUp will support piggybacking of updates.
-appendSigUp :: SigUp a -> SigUp a -> SigUp a
-appendSigUp su0 su = SigUp { su_state = state', su_stable = stable' }
-    where stable' = su_stable su  -- assume monotonic stability
-          state' = (calcS <$> su_state su0 <*> su_state su)
-                   <|> su_state su  -- su is first state update 
-                   <|> su_state su0 -- su is a stability update
-          calcS (s0,t0) (sf,tf) =
-            if (t0 >= tf) then (sf,tf) else
-            (s_switch' s0 tf sf, t0)
 
 -- | keepAliveB will keep the first element alive so long as other
 -- parts of the signal are alive. (used by unsafeOnUpdateBLN)

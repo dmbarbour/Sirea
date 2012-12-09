@@ -304,7 +304,7 @@ obSend cw p1 p2 = obwAddWork
             let urgent' = obw_urgent obw || bUrgent in
             let work' = work:(obw_work obw) in
             let obw' = OBW { obw_urgent = urgent', obw_sched = True, obw_work = work' } in
-            writeIORef (ob_state ob) >>
+            obw' `seq` writeIORef (ob_state ob) obw' >>
             unless bWasSched obwSchedule
           obwSchedule = addTCSend tc1 deliverNowOrLater 
           deliverNowOrLater =

@@ -27,7 +27,6 @@ module Sirea.Build
     , SireaApp
     , SireaAppObject(..)
     , bUnsafeExit
-    , bStartTime
     ) where
 
 import Prelude hiding (catch)
@@ -225,8 +224,8 @@ beginApp cw rfSD lu =
     let su = SigUp { su_state = Just (s_always (), tStart)
                    , su_stable = Just tStable } in
     let nextStep = maintainApp apw tStable in
-    tStart `seq`
-    setStartTime cp0 tStart >>
+    --tStart `seq`
+    --setStartTime cp0 tStart >>
     ln_update lu su >> -- activation!
     pulse >> -- first heartbeat
     schedule dtHeartbeat (addTCRecv tc0 nextStep)
@@ -264,8 +263,8 @@ maintainApp apw tStable =
                     let su = SigUp { su_state = Just (sig, tStable)
                                    , su_stable = Just tStable' } in
                     let nextStep = maintainApp apw tStable' in
-                    tRestart `seq` 
-                    setStartTime (findInPCX (ap_cw apw)) tRestart >>
+                    --tRestart `seq` 
+                    --setStartTime (findInPCX (ap_cw apw)) tRestart >>
                     ln_update (ap_luMain apw) su >>
                     schedule dtHeartbeat (addTCRecv tc0 nextStep)
                 else -- NORMAL MAINTENANCE 
@@ -380,12 +379,11 @@ instance Typeable ExitR where
 instance Resource ExitR where
     locateResource _ = liftM ExitR $ newIORef False
 
--- | bStartTime - obtain logical start time of current contiguous
--- period of activity. Usually, this corresponds to the application
--- start time, but if any long pause is detected in the main loop,
--- Sirea will "restart" the application by setting the main signal
--- to inactive for a period of time. In that case, the start time 
--- will change.
+
+{- TODO: Switch to a more generic volatile timestamp utility.
+
+-- | bStartTime - obtain logical start time of the application, more
+-- precisely for current period of activity (since last restart).
 --
 -- Use cases for start time: naming log files, special handling of 
 -- continuity-sensitive resources (e.g. volatile state).
@@ -428,5 +426,8 @@ instance Resource StartTime where
 -- sets the start time for one SireaApp.
 setStartTime :: PCX P0 -> T -> IO () 
 setStartTime cp0 t = writeIORef (rfStartTime $ findInPCX cp0) t
+
+-}
+
 
 

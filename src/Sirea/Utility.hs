@@ -16,6 +16,7 @@ import Sirea.PCX
 import Sirea.Time
 import Sirea.Link
 import Sirea.Signal
+
 import Sirea.Internal.Tuning (dtPrintExpire)
 import Data.Typeable
 import Data.IORef
@@ -86,6 +87,19 @@ instance Typeable PrintBuffer where
 instance Resource PrintBuffer where
     locateResource _ = liftM PrintBuffer $ newIORef [] 
            
+
+{- IDEA: a volatile, stateful `timestamp` behavior
+          i.e. String -> BCX w (S p ()) (S p T)
+
+   State is the time value when initially activated.
+   Holds that state until deactivated.
+   Basically reports time of contiguous activation.
+   Since naturally volatile, no persistence needed.
+   Could be useful for integrating tuple spaces, etc.
+-}
+
+
+
 {- Don't really know how to extract signal at `p`. Maybe a simplified
    variation would work?
 
@@ -136,8 +150,8 @@ undefinedB = unsafeOnUpdateBL (return undefinedIO) >>> unsafeLinkB mkKeepAlive
 -- any merges further on. 
 sendNothing :: Lnk y -> Lnk (S p ())
 sendNothing LnkDead = LnkDead
-sendNothing (LnkProd x y) = (sendNothing x) `lnPlus` (sendNothing y)
-sendNothing (LnkSum x y)  = (sendNothing x) `lnPlus` (sendNothing y)
+sendNothing (LnkProd x y) = (sendNothing x) `ln_append` (sendNothing y)
+sendNothing (LnkSum x y)  = (sendNothing x) `ln_append` (sendNothing y)
 sendNothing (LnkSig lu) = LnkSig (LnkUp { ln_touch = touch, ln_update = update })
     where touch = ln_touch lu
           update su = 
@@ -149,13 +163,6 @@ sendNothing (LnkSig lu) = LnkSig (LnkUp { ln_touch = touch, ln_update = update }
             let su' = SigUp { su_stable = tStable, su_state = st' } in
             ln_update lu su'
 
-lnPlus :: Lnk (S p ()) -> Lnk (S p ()) -> Lnk (S p ())
-lnPlus LnkDead y = y
-lnPlus x LnkDead = x
-lnPlus (LnkSig lux) (LnkSig luy) = LnkSig luz
-    where luz = LnkUp { ln_touch = touch, ln_update = update }
-          touch = ln_touch lux >> ln_touch luy
-          update su = ln_touch luy >> (ln_update lux su >> ln_update luy su)
 
 -- TODO:
 --   bunit :: b x (S p ()).

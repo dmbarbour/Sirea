@@ -71,8 +71,8 @@ batchesInFlight = 6
 -- some historical data to accommodate late arriving observers. The
 -- demand sources aspect impacts stability, so is more limited. 
 dtDaggrHist, dtMdistHist :: DT
-dtDaggrHist = 0.036 -- how long to tolerate late-arriving demands
-dtMdistHist = 0.144 -- how long to tolerate late-arriving observers
+dtDaggrHist = dtHeartbeat     -- how long to tolerate late-arriving demands
+dtMdistHist = 2 * dtHeartbeat -- how long to tolerate late-arriving observers
 
 -- UnsafeOnUpdate behaviors will execute IO actions as they become
 -- stable. But eventually they'll receive a final stability update.
@@ -80,7 +80,7 @@ dtMdistHist = 0.144 -- how long to tolerate late-arriving observers
 -- be at some time well in the future of the current stability. This
 -- tunes how far to search for that Nothing before aborting. 
 dtFinalize :: DT
-dtFinalize = 36.0 -- pretty much guarantees completion
+dtFinalize = 36.0 -- pretty much guarantee completion
 
 
 -- For console printing, currently I use a simple expiration model

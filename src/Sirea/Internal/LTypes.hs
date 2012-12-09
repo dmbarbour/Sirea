@@ -6,12 +6,11 @@ module Sirea.Internal.LTypes
     ( MkLnk, Lnk, LnkW(..), LnkUp(..)
     , ln_left, ln_right, ln_fst, ln_snd, ln_dead
     , ln_zero, ln_lnkup, ln_append, ln_lumap, ln_sumap
-    , SigUp(..), su_signal, su_time, su_fmap, su_delay, su_apply
+    , SigUp(..), su_signal, su_time, su_fmap, su_delay, su_apply, su_piggyback
     , SigSt(..), st_zero, st_poke, st_clear, st_sigup
     , SigM(..), sm_zero, sm_update_l, sm_sigup_l, sm_update_r, sm_sigup_r
     , sm_waiting, sm_stable, sm_emit, sm_cleanup
-    , ln_forEach, ln_terminate, ln_freeze, ln_touchAll
-    , ln_withSigM
+    , ln_forEach, ln_freeze, ln_touchAll, ln_withSigM
     ) where
 
 import Sirea.Internal.STypes
@@ -65,14 +64,17 @@ data LnkW s a where
 -- can be represented ultimately as a complex product of LnkUp 
 -- structures. 
 --
---   ln_touch - call this if an update is guaranteed in the current
---      round but not immediately. Allows later stages in the pipe
---      to wait for the update. Can prevent redundant computations.
+--   ln_touch - is called in initial phase of updates within a step.
+--      This provides advance warning that an update is coming later
+--      in the step. Affects ordering of updates and breaks cycles
+--      involving shared resources. 
 --
 --   ln_update - updates the entire future of a signal (see SigUp).
---      Shutdown is also modeled as an update, using s_never.
+--      In any given step, a link must be updated only once, and 
+--      must be preceded by touch. Behaviors are initially activated
+--      and finally deactivated by updates with appropriate signals
+--      and stability.
 -- 
--- Dead code is better represented by LnkDead than by trivial LnkUp.
 data LnkUp a = LnkUp
     { ln_touch  :: !(IO ())
     , ln_update :: !(SigUp a -> IO ())
@@ -89,12 +91,11 @@ ln_zero = LnkUp
     , ln_update = const $ return ()
     }
 
--- duplicate a signal. Note that this will touch the second signal
--- to indicate an update is coming whenever the first is updated.
+-- duplicate touches and updates.
 ln_append :: LnkUp a -> LnkUp a -> LnkUp a
 ln_append x y =
     let touch = ln_touch x >> ln_touch y in
-    let update su = ln_touch y >> ln_update x su >> ln_update y su in
+    let update su = ln_update x su >> ln_update y su in
     LnkUp { ln_touch = touch, ln_update = update }
 
 
@@ -147,7 +148,7 @@ ln_forEach fn (LnkProd x y) = mappend <$> ln_forEach fn x <*> ln_forEach fn y
 ln_forEach fn (LnkSum x y) = mappend <$> ln_forEach fn x <*> ln_forEach fn y
 ln_forEach fn (LnkSig lu) = fn lu
 
-
+{-
 -- | apply a termination signal every element in a link
 ln_terminate :: T -> Lnk x -> IO ()
 ln_terminate t = ln_forEach (terminate t)
@@ -156,6 +157,8 @@ terminate :: T -> LnkUp x -> IO ()
 terminate tm lu = ln_update lu sigTerm
     where sigTerm = SigUp { su_state = Just (s_never, tm)
                           , su_stable = Nothing }
+
+-}
 
 -- | freeze the current signals on a link
 ln_freeze :: Lnk x -> IO ()
@@ -216,6 +219,17 @@ su_delay dt = if (0 == dt) then id else \ su ->
     let state' = fmap (\(s0,t) -> (s_delay dt s0, addTime t dt)) (su_state su) in
     let stable' = fmap (flip addTime dt) (su_stable su) in
     SigUp { su_state = state', su_stable = stable' }
+
+-- | Support piggybacking. Second update overrides the first.
+su_piggyback :: SigUp a -> SigUp a -> SigUp a
+su_piggyback su0 su = SigUp { su_state = state', su_stable = stable' }
+    where stable' = su_stable su    -- assume monotonic stability
+          state' = (calcS <$> su_state su0 <*> su_state su)
+                   <|> su_state su  -- su is first state update 
+                   <|> su_state su0 -- su is a stability update
+          calcS (s0,t0) (sf,tf) =
+            if (t0 >= tf) then (sf,tf) else
+            (s_switch' s0 tf sf, t0)
 
 ---------------------------------------------------------
 -- SigSt represents the state of one signal.
@@ -303,8 +317,12 @@ sm_sigup_t su =
 
 sm_sigup_l  :: SigUp x -> (SigM x y -> SigM x y) -- update time & left
 sm_sigup_r  :: SigUp y -> (SigM x y -> SigM x y) -- update time & right
-sm_sigup_l su = sm_sigup_t su . (sm_update_l . st_sigup) su
-sm_sigup_r su = sm_sigup_t su . (sm_update_r . st_sigup) su
+sm_sigup_l su = sm_sigup_t su . (sm_update_l . sm_sigup1) su
+sm_sigup_r su = sm_sigup_t su . (sm_update_r . sm_sigup1) su
+
+-- sm_sigup also checks that updates were appropriately touched.
+sm_sigup1 :: SigUp a -> SigSt a -> SigSt a
+sm_sigup1 su st = assert (st_expect st) $ st_sigup su st
 
 -- generate a link update from a SigM.
 -- This will combine two signals to generate a new signal.

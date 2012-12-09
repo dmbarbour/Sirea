@@ -13,7 +13,7 @@ module Sirea.Link
     -- the following are re-exported from LTypes
     , MkLnk, Lnk, LnkW(..), SigUp(..), LnkUp(..)
     , ln_zero, ln_lnkup, ln_fst, ln_snd, ln_left, ln_right, ln_dead
-    , ln_sumap, ln_lumap
+    , ln_sumap, ln_lumap, ln_append
     , su_fmap, su_apply
     ) where
 

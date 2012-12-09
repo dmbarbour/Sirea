@@ -38,11 +38,12 @@ module Sirea.PCX
 import Data.Typeable
 import Data.Dynamic
 import Data.IORef
+-- TODO: consider using Data.Map for higher performance lookups.
 import Control.Applicative
 import Control.Monad.Fix (mfix)
 import System.IO.Unsafe (unsafePerformIO, unsafeInterleaveIO)
 
--- TODO: a generic eventing system for resources.
+-- TODO: a generic eventing system for resources? (Typeable events...)
 
 -- | PCX p - Partition Resource Context. Abstract.
 --
@@ -174,9 +175,6 @@ newPCX nm =
 -- NOTE: it would be trivial to extend PCX with resources accessed by Ordinal.
 -- (Even via a Resource, this could be done.)
 -- Might be worth doing to support rich resources with dynamic behaviors.
-
--- TODO: maybe add support for ordinal-indexed spaces for state and demand monitors.
-
 
 -- DECISION: combine responsibility into PCX?
 --  a) simple string-based access to PCX.
