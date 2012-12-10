@@ -107,9 +107,9 @@ latentOnTime = B_latent
 type TR x y = LnkD LDT x -> LnkD LDT y
 type TS x = TR x x
 data LDT = LDT 
-    { ldt_curr :: {-# UNPACK #-} !DT   -- actual delay from start of behavior
-    , ldt_goal :: {-# UNPACK #-} !DT   -- aggregated but unapplied logical delay
-    , ldt_live :: {-# UNPACK #-} !Bool -- is this a live branch (not binl or binr?)
+    { ldt_curr :: !DT   -- actual delay from start of behavior
+    , ldt_goal :: !DT   -- aggregated but unapplied logical delay
+    , ldt_live :: !Bool -- is this a live branch (not binl or binr?)
     }
 
 -- ldt_zero: an LDT suitable for starting a compilation.

@@ -40,9 +40,9 @@ import Sirea.Time
 import Sirea.Link
 import Sirea.Partition
 import Sirea.PCX
-import qualified Sirea.Internal.Table as Table
 import Sirea.Internal.BCross (isUrgentUpdate) -- to avoid duplication of code
 import Sirea.Internal.Tuning (dtDaggrHist, dtMdistHist)
+import Sirea.Internal.LTypes -- for convenient SigSt, et. al.
 
 type Key = Int
 
@@ -73,13 +73,13 @@ data DemandAggr e z = DemandAggr
 
 data DemandData e z = DemandData
     { dd_touchCt    :: {-# UNPACK #-} !Int       -- waiting on updates?
-    , dd_flush      :: {-# UNPACK #-} !Bool      -- GC flush requested?
-    , dd_flushSched :: {-# UNPACK #-} !Bool      -- is GC flush scheduled?
-    , dd_tmup       :: {-# UNPACK #-} !(Maybe T) -- time of earliest demand update
-    , dd_stable     :: {-# UNPACK #-} !(Maybe T) -- time of reported stability
+    , dd_flush      :: !Bool                     -- GC flush requested?
+    , dd_flushSched :: !Bool                     -- is GC flush scheduled?
+    , dd_tmup       :: !(Maybe T)                -- time of earliest demand update
+    , dd_stable     :: !(Maybe T)                -- time of reported stability
     , dd_nextKey    :: {-# UNPACK #-} !Key       -- next key for the table
     , dd_table      :: !(M.Map Key (SigSt e))    -- track active demands
-    , dd_pending    :: {-# UNPACK #-} !(Maybe (SigUp z)) -- any undelivered update.
+    , dd_pending    :: !(Maybe (SigUp z))        -- any undelivered update.
     }
 
 -- | Create a demand aggregator, given the output target.
@@ -95,7 +95,7 @@ newDemandAggr cp zlu zpf = DemandAggr
     <*> pure zlu
     <*> pure (mkPartD cp)
 
-ddZero :: DemandData e
+ddZero :: DemandData e z
 ddZero = DemandData
     { dd_touchCt    = 0
     , dd_flush      = False
@@ -144,7 +144,8 @@ touchDaggr da k =
         let tbl' = M.insert k st' tbl in
         let tc'  = succ (dd_touchCt dd) in
         let dd'  = dd { dd_touchCt = tc', dd_table = tbl', dd_flush = False } in
-        dd' `seq` writeIORef (da_data da) dd' >>
+        dd' `seq` 
+        writeIORef (da_data da) dd' >>
         when (1 == tc') (activateDaggr da)
 
 -- Propagate touch. Potentially detect cycles. Cycles are reliably
@@ -180,7 +181,8 @@ breakDaggrCycle da =
     let tc' = succ tc in -- extra touch to block normal updates
     let su = getPendingUpdateDD dd in
     let dd' = dd { dd_touchCt = tc', dd_pending = Nothing, dd_stable = (su_stable su) } in
-    dd' `seq` writeIORef (da_data da) dd' >> -- 
+    dd' `seq` 
+    writeIORef (da_data da) dd' >> -- 
     pd_endOfStep (da_partd da) (repairDaggrCycle da) >> -- later handle this step's updates
     ln_update (da_link da) su -- force an update to break cycles
 
@@ -190,7 +192,8 @@ updateDaggr da k su =
     readIORef (da_data da) >>= \ dd ->
     let dd' = updateDD k su dd in
     let bFinal = (0 == dd_touchCt dd') in
-    dd' `seq` writeIORef (da_data da) dd' >>
+    dd' `seq`
+    writeIORef (da_data da) dd' >>
     when bFinal (deliverDaggr da)
     
 updateDD :: Key -> SigUp e -> DemandData e z -> DemandData e z
@@ -213,8 +216,8 @@ deliverDaggr da =
     readIORef (da_data da) >>= \ dd ->
     let su = getPendingUpdateDD dd in
     let dd' = dd { dd_pending = Nothing, dd_stable = (su_stable su) } in
-    dd' `seq` writeIORef (da_data da) dd' >>
-    when (dd_flush dd) (scheduleDaggrFlush da) >>
+    dd' `seq` 
+    writeIORef (da_data da) dd' >>
     ln_update (da_link da) su
 
 -- After we break a demand aggregation cycle, we must recover it in
@@ -225,7 +228,7 @@ repairDaggrCycle da =
     clearCycleTouch >> -- clear the touch from breakDaggrCycle
     processDaggr da >> -- compute next update
     readIORef (da_data da) >>= \ dd ->
-    let su = getPendingUpdate dd in
+    let su = getPendingUpdateDD dd in
     let bUrgent = isUrgentUpdate (dd_stable dd) su in
     let bMustUp = not (isNothing (su_state su)) in
     if bUrgent 
@@ -233,7 +236,7 @@ repairDaggrCycle da =
         else when bMustUp (scheduleFlushDaggr da)
     where clearCycleTouch =
             readIORef (da_data da) >>= \ dd ->
-            assert (1 == dd_touchCt dd) $ -- all incoming updates received!
+            assert (1 == dd_touchCt dd) $ -- should be finished with updates
             let dd' = dd { dd_touchCt = 0 } in
             writeIORef (da_data da) dd'
 
@@ -250,17 +253,18 @@ processDaggr da =
     let tRec = dd_stable dd <|> Just tTgt in -- effective recorded stability
     let tbl  = dd_table dd in
     let lst  = M.toAscList tbl in
-    let lst' = mapMaybe (daggrTableGC tTgt) lst in -- GC of demand sources
+    let lst' = M.mapMaybe (daggrTableGC tTgt) lst in -- GC of demand sources
     let tbl' = M.fromAscList lst' in
     let done = null lst' in
     let bInactive = all isNothing (fmap (st_stable . snd) lst') in
     let bNeedFlush = bInactive && not done in
     let tStable = if done then Nothing else Just tTgt in
-    let tUp = max <$> tRec <*> dd_tmup dd in -- chops straggling updates.
+    let tUp = max <$> tRec <*> dd_tmup dd in -- chop any straggling updates.
     let suNew = case tUp of
             Nothing -> SigUp { su_state = Nothing, su_stable = tStable } 
             Just tu -> let eSigs = ((`s_trim` tu) . st_signal . snd) `fmap` lst in
-                       let zSig  = dd_nzip dd eSigs in
+                       let zSig  = da_nzip da eSigs in
+                       zSig `seq`
                        SigUp { su_state = Just (zSig,tu), su_stable = tStable }
     in
     let su = maybe suNew (`su_piggyback` suNew) (dd_pending dd) in
@@ -272,7 +276,6 @@ processDaggr da =
     su `seq` dd' `seq`
     writeIORef (da_data da) dd' >>
     when bNeedFlush (scheduleFlushDaggr da)
-
 
 -- Garbage Collection of DemandAggr elements. An demand source can
 -- be eliminated if it is fully stable and all its active values are
@@ -295,7 +298,7 @@ scheduleFlushDaggr da =
     readIORef (da_data da) >>= \ dd ->
     let bSchedFlush = not (dd_flushSched dd) in
     let dd' = dd { dd_flush = True, dd_flushSched = True } in
-    dd' `seq` writeIORef (da_data da) dd' >>
+    writeIORef (da_data da) dd' >>
     when bSchedFlush (pd_eventually (da_partd da) (flushDaggr da))
 
 -- a `flushDaggr` operation is a pseudo-update (doesn't modify the
@@ -306,7 +309,7 @@ flushDaggr da =
     readIORef (da_data da) >>= \ dd ->
     let bDoFlush = dd_flush dd in
     let dd' = dd { dd_flush = False, dd_flushSched = False } in
-    dd' `seq` writeIORef (da_data da) dd' >>
+    writeIORef (da_data da) dd' >>
     when bDoFlush (pseudoUpdate da)
 
 -- a pseudo-update acts much like a DemandLnk update, except it does
@@ -318,44 +321,33 @@ pseudoUpdate da = updateLater >> touchNow
             readIORef (da_partd da) >>= \ dd ->
             let tc' = succ (dd_touchCt dd) in
             let dd' = dd { dd_touchCt = tc', dd_flush = False } in
-            dd' `seq` writeIORef (da_partd da) dd' >>
+            writeIORef (da_partd da) dd' >>
             when (1 == tc') (activateDaggr da)
-          updateLater = pd_phaseDelay (da_partd da) $
+          updateLater = onNextPhase $
             readIORef (da_data da) >>= \ dd ->
             let tc' = pred (dd_touchCt dd) in
             assert (tc' >= 0) $
             let dd' = dd { dd_touchCt = tc' } in
-            dd' `seq` writeIORef (da_data da) dd' >>
+            writeIORef (da_data da) dd' >>
             when (0 == tc') (deliverDaggr da)
+          onNextPhase = pd_phaseDelay (da_partd da)
 
 
 leastTime :: Maybe T -> Maybe T -> Maybe T
 leastTime l r = (min <$> l <*> r) <|> l <|> r
 
 -- | MonitorDist supports output to multiple observers (monitors) of
--- a resource or signal. A MonitorDist has three responsibilities:
--- 
---   * distribute a signal to many observers
---   * mask input signal with observer's query
---   * keep some history for late-arriving observers
---
--- This is mostly quite simple. The main difficulty is the GC aspect
--- when the main `z` signal becomes inactive. The inactive signal
--- may still have some vestigial values that must be cleared over on
--- the heartbeat (and adjusted for dtMdistHist).
---
--- Assuming the md_signal is kept intact, the individual links can
--- use it more directly rather than keeping their own copies. 
---
+-- a resource or signal. For simplicity, the main signal is stored 
+-- in only one place to support observers.
 data MonitorDist z = MonitorDist 
     { md_data       :: !(IORef (MDD z))   -- mutable data of MonitorDist
     , md_partd      :: !(PartD)           -- scheduler and time
-    , md_default    :: !(Sig z)           -- default signal
     }
+
 -- mutable data for the full MonitorDist
 data MDD z = MDD
-    { mdd_signal    :: {-# UNPACK #-} !(SigSt z) -- track current signal
-    , mdd_cleanup   :: {-# UNPACK #-} !Bool      -- cleanup on heartbeat?
+    { mdd_signal    :: !(SigSt z) -- track current signal
+    , mdd_cleanup   :: !Bool      -- cleanup on heartbeat?
     , mdd_nextKey   :: {-# UNPACK #-} !Key       -- next key for table!   
     , mdd_table     :: !(M.Map Key (LnkUp z))    -- to alert active observers
     }
@@ -374,7 +366,6 @@ mddZero z0 = MDD
     , mdd_nextKey = 60000 -- arbitrary 
     , mdd_table   = M.empty
     }
-
 
 -- | Each MonitorDist has one main LnkUp where it receives a primary
 -- signal, which is later distributed to observers. The primary must
@@ -397,18 +388,75 @@ primaryMonitorLnk md = LnkUp { ln_touch = touch, ln_update = update }
             readIORef (md_data md) >>= \ mdd ->
             let lOut = M.elems (mdd_table mdd) in
             let st   = mdd_signal mdd in
-            let st'  = assert (st_expect st) $ st_sigup su st in
-            let mdd' = mdd { mdd_signal = st',  } in
+            assert (st_expect st) $
+            let st'  = st_sigup su st in
+            let mdd' = mdd { mdd_signal = st' } in
             writeIORef (md_data md) mdd' >>
-            -- cleanup at end of step to simplify observers
+            -- cleanup at end of step 
+            -- (ensures observers have chance to see current state)
             pd_endOfStep (md_partd md) (cleanupMD md) >>
             -- distribute update to all observers!
             mapM_ (`ln_update` su) lOut
     
--- end of round cleanup or GC
+-- End of round cleanup for MonitorDist. Simply cuts recorded signal
+-- based on current time, and possibly schedules further cleanup on
+-- a later heartbeat (if necessary). 
 cleanupMD :: MonitorDist z -> IO ()
 cleanupMD md = 
-    
+    readIORef (md_data md) >>= \ mdd ->
+    pd_time (md_partd md) >>= \ tClock ->
+    let tCut = tClock `subtractTime` dtMdistHist in
+    let st = mdd_signal mdd in
+    let st' = st_clear tCut st in
+    let bNeedsMoreCleanup = -- heartbeat-based cleanup
+            isNothing (st_stable st) &&
+            not (s_is_final tCut (st_signal st'))
+    in
+    let mdd' = mdd { mdd_signal = st' } in
+    mdd' `seq` 
+    writeIORef (md_data md) mdd' >>
+    when bNeedsMoreCleanup (schedCleanupMD md)
+
+-- Schedule further cleanup on a later heartbeat. This is idempotent
+-- to ensure that only one cleanup is scheduled on next heartbeat.
+-- (MonitorDist might cleanup twice in a round if it is then updated
+-- in the heartbeat round. But this is okay; cleanup is idempotent.)
+schedCleanupMD :: MonitorDist z -> IO ()
+schedCleanupMD md =
+    readIORef (md_data md) >>= \ mdd ->
+    unless (mdd_cleanup mdd) $
+        let mdd' = mdd { mdd_cleanup = True } in
+        writeIORef (md_data md) mdd' >>
+        eventually runCleanup
+    where eventually = pd_eventually (md_partd md)
+          atEndOfStep = pd_endOfStep (md_partd md)
+          runCleanup = 
+            readIORef (md_data md) >>= \ mdd ->
+            let mdd' = mdd { mdd_cleanup = False } in
+            writeIORef (md_data md) mdd' >>
+            atEndOfStep (cleanupMD md)
+
+-- install, returning the key     
+installMD :: MonitorDist z -> LnkUp z -> IO Key
+installMD md lz =
+    readIORef (md_data md) >>= \ mdd ->
+    let k = succ (mdd_nextKey mdd) in
+    let tbl' = M.insert k lz (mdd_table mdd) in
+    let bExpecting = st_expect (mdd_signal mdd) in
+    let mdd' = mdd { mdd_nextKey = k, mdd_table = tbl' } in
+    k `seq` mdd' `seq` 
+    writeIORef (md_data md) mdd' >>
+    return k
+
+-- uninstall, using the key. The key should not be used again.
+uninstallMD :: MonitorDist z -> Key -> IO ()
+uninstallMD md k =
+    readIORef (md_data md) >>= \ mdd ->
+    assert (M.member k (mdd_table mdd)) $
+    let tbl' = M.delete k (mdd_table mdd) in
+    let mdd' = mdd { mdd_table = tbl' } in
+    mdd' `seq` 
+    writeIORef (md_data md) mdd'
 
 -- MonLn is data associated with one newMonitorLnk
 data MonLn z = MonLn
@@ -419,9 +467,24 @@ data MonLn z = MonLn
 
 -- mutable data for a monitor link
 data MLD = MLD 
-    { mld_key    :: {-# UNPACK #-} !(Maybe Key)
-    , mld_signal :: {-# UNPACK #-} !(SigSt ())
-    , mld_tmup   :: {-# UNPACK #-} !(Maybe T)
+    { mld_key    :: !(Maybe Key)     -- install/uninstall key
+    , mld_signal :: !(SigSt ())      -- observer's signal
+    , mld_tmup   :: !(Maybe T)       -- least update time
+    , mld_cleanup:: !Bool            -- scheduled heartbeat cleanup 
+    }
+
+newMonLn :: MonitorDist z -> LnkUp z -> IO (MonLn z)
+newMonLn md lzo = MonLn 
+    <$> newIORef mldZero
+    <*> pure lzo 
+    <*> pure md
+
+mldZero :: MLD
+mldZero = MLD 
+    { mld_key = Nothing
+    , mld_signal = st_zero
+    , mld_tmup = Nothing
+    , mld_cleanup = False
     }
 
 -- | Each observer will build a link to the MonitorDist. The task of
@@ -437,107 +500,154 @@ data MLD = MLD
 -- demand stability as a simple function of the partition's time.
 --
 newMonitorLnk :: MonitorDist z -> LnkUp z -> IO (LnkUp ())
-newMonitorLnk md lzo = lnMonitor <$> newMonLn md lzo
+newMonitorLnk md lzo = monLnRecvO <$> newMonLn md lzo
 
-mldZero :: MLD
-mldZero = MLD 
-    { mld_key = Nothing
-    , mld_sig = st_zero
-    , mld_tmup = Nothing
-    }
-
-newMonLn :: MonitorDist z -> LnkUp z -> IO (MonLn z)
-newMonLn md lzo = MonLn 
-    <$> newIORef sm_zero
-    <*> pure lzo 
-    <*> pure md
-    <*> newIORef Nothing
-
--- lnMonitor is similar to ln_withSigM except that it must manage
--- installation of the LnkUp resource. 
-lnMonitor :: MonLn z -> LnkUp ()
-lnMonitor mln = loi
-    where loi = LnkUp { ln_touch = pokeO, ln_update = updateO }
-          lzi = LnkUp { ln_touch = pokeZ, ln_update = updateZ }
-          lzo = mln_lzout mln
-          rfSigM = mln_rfSigM mln
-          onPoke fn =   
-            readIORef rfSigM >>= \ sm ->
-            writeIORef rfSigM (fn st_poke sm) >>
-            unless (sm_waiting sm) (ln_touch lzo)
-          pokeO = onPoke sm_update_l
-          pokeZ = onPoke sm_update_r
-          updateO su = modifyIORef rfSigM (sm_sigup_l su) >> maybeInstallMon mln >> emit
-          updateZ su = modifyIORef rfSigM (sm_sigup_r su) >> emit
-          emit =
-            readIORef rfSigM >>= \ sm ->
-            unless (sm_waiting sm) $
-                let sm' = sm_cleanup (sm_stable sm) sm in
-                sm' `seq` writeIORef rfSigM sm' >>
-                maybeUninstallMon mln >>
-                let su = sm_emit (flip s_mask) sm in 
-                ln_update lzo su
-
-
-
---
--- I keep a heuristic estimate of when an mln should be installed.
--- (Where `installed` means observing the `b` signal.) 
-shouldBeInstalled :: SigM () b -> Bool
-shouldBeInstalled sm = 
-    let tMin = leastTime (sm_stable sm) (sm_tmup sm) in
-    case tMin of
-        Nothing -> False
-        Just tm ->  
-            let sig = (st_signal . sm_lsig) sm in
-            let done = s_term sig tm in
-            not done
-
-          maybeInstall =
-            readIORef rfSigM >>= \ sm ->
-            when (shouldBeInstalled sm) $ 
-                installMonLn mln
-          maybeUninstall =
-            readIORef rfSigM >>= \ sm ->
-            unless (shouldBeInstalled sm) $
-                uninstallMonLn mln
-
-
-uninstallMonLn, installMonLn :: MonLn z -> IO ()
+-- install MonLn to observe the associated MonitorDist
+installMonLn :: MonLn z -> IO ()
 installMonLn mln =
-    let rfIdx = mln_rfIdx mln in
-    let rfSigM = mln_rfSigM mln in
-    let md = mln_mdist mln in
-    let lzi = mln_lzout mln in
-    readIORef rfIdx >>= \ mbk ->
-    case mbk of
-        Just _ -> return () -- already installed
-        Nothing ->
-            -- prepare for future z inputs 
-            readIORef (md_nextid md) >>= \ k0 ->
-            let k = succ k0 in
-            k `seq` 
-            writeIORef (md_nextid md) k >>
-            writeIORef rfIdx (Just k) >>
-            Table.put (md_table md) k (Just lzi) >>
-            -- obtain initial state for z signal (& touch state)
-            readIORef (md_signal md) >>= \ sz ->
-            readIORef rfSigM >>= \ sm ->
-            let sm' = sm { sm_rsig = sz } in
-            writeIORef rfSigM sm' 
-          
+    readIORef (mln_data mln) >>= \ mld ->
+    when (isNothing (mld_key mld)) $
+        -- install and track key
+        let lzi = monLnRecvZ mln in
+        installMD (mln_mdist mln) lzi >>= \ k ->
+        let mld' = mld { mld_key = Just k } in
+        writeIORef (mln_data mln) mld' >>
+        -- potentially deliver touch (if waiting on z)
+        readIORef (md_data (mln_mdist mln)) >>= \ mdd ->
+        let bTouchZ = st_expect (mdd_signal mdd) in
+        when bTouchZ (ln_touch lzi)
 
+uninstallMonLn :: MonLn z -> IO ()
 uninstallMonLn mln =
-    let rfIdx = mln_rfIdx mln in
-    let rfSigM = mln_rfSigM mln in
+    readIORef (mln_data mln) >>= \ mld ->
+    case (mld_key mld) of
+        Nothing -> return ()
+        Just k ->
+            let mld' = mld { mld_key = Nothing } in
+            mld' `seq` 
+            writeIORef (mln_data mln) mld' >>
+            uninstallMD (mln_mdist mln) k
+
+-- the main input link for a monitor link. The main `z` signal is 
+-- stored at an associated MonitorDist, so this mostly forwards the
+-- touch and tracks the update times.
+monLnRecvZ :: MonLn z -> LnkUp z
+monLnRecvZ mln = LnkUp { ln_touch = touch, ln_update = update} where
+    touch = 
+        readIORef (mln_data mln) >>= \ mld ->
+        let bAlreadyTouchedO = st_expect (mld_signal mld) in
+        unless bAlreadyTouchedO (ln_touch (mln_lzout mln))
+    update su =
+        readIORef (mln_data mln) >>= \ mld ->
+        let bWaitingOnO = st_expect (mld_signal mld) in
+        let tmup' = leastTime (mld_tmup mld) (snd `fmap` su_state su) in
+        let mld' = mld { mld_tmup = tmup' } in
+        writeIORef (mln_data mln) mld' >>
+        unless bWaitingOnO (monLnEmit mln)
+
+-- observer input for a monitor link. The observed `o` signal is
+-- stored locally, and may need to be GC'd on heartbeats in some
+-- special cases. 
+monLnRecvO :: MonLn z -> LnkUp o
+monLnRecvO mln = LnkUp { ln_touch = touch, ln_update = update} where
+    md = mln_mdist mln
+    testZTouched = (st_expect . mdd_signal) <$> readIORef (md_data md)
+    touch = 
+        installMonLn mln >> -- install whenever active
+        readIORef (mln_data mln) >>= \ mld ->
+        let st = mld_signal mld in
+        unless (st_expect st) $
+            let st' = st_poke st in
+            let mld' = mld { mld_signal = st' } in
+            writeIORef (mln_data mln) mld' >>
+            testZTouched >>= \ bZTouched ->
+            unless bZTouched (ln_touch (mln_lzout mln))
+    update su = 
+        readIORef (mln_data mln) >>= \ mld ->
+        let st = mld_signal mld in
+        assert (st_expect st) $
+        let st' = st_sigup su st in
+        let tmup' = leastTime (mld_tmup mld) (snd `fmap` su_state su) in
+        let mld' = mld { mld_signal = st', mld_tmup = tmup' } in
+        writeIORef (mln_data mln) mld' >>
+        testZTouched >>= \ bWaitingOnZ ->
+        unless bWaitingOnZ (monLnEmit mln)
+
+-- emit the primary update for a monitor link after both signals are
+-- stable within the step, also initiates cleanup (possibly with
+-- extra cleanup scheduled in future steps). 
+monLnEmit :: MonLn z -> IO ()
+monLnEmit mln =
     let md = mln_mdist mln in
-    readIORef rfIdx >>= \ mbk ->
-    case mbk of
-        Nothing -> return () -- not installed
-        Just k  -> -- clear associated states!
-            Table.put (md_table md) k Nothing >>
-            writeIORef rfSigM sm_zero >>
-            writeIORef rfIdx Nothing
+    readIORef (mln_data mln) >>= \ mld ->
+    readIORef (md_data md) >>= \ mdd ->
+    pd_time (md_partd md) >>= \ tNow ->
+    let stO = mld_signal mld in
+    let stZ = mdd_signal mdd in
+    -- at this point, we should be ready to emit, not waiting.
+    assert ((not . st_expect) stO && (not . st_expect) stZ) $
+
+    -- TODO: Some bad logic here. The `tStable` value must be set
+    --   to Nothing in the special case where stO is fully stable
+    --   and final beyond the point to which stZ is stable.
+    undefined
+
+{-
+
+
+    let tStableZ = st_stable stZ <|> Just (tNow `subtractTime` dtDaggrHist) in
+    let tStableO = st_stable stO in
+    let tStable = leastTime tStableZ tStableO in
+    let sig = s_mask (st_signal stZ) (st_signal stO) in
+    let su  = case (mdd_tmup mdd) of
+            Nothing -> SigUp { su_state = Nothing, su_stable = tStable } 
+            Just tu -> SigUp { su_state = Just (sig, tu), su_stable = tStable }
+    in
+    let (st',bUninstall,bSchedCleanup) = mldSigCleanup stO tStable in
+    let mld' = mld { mld_tmup = Nothing, mld_signal = st' } in
+    mld' `seq` writeIORef (mln_data mln) mld' >>
+    when bUninstall (uninstallMonLn mln) >>
+    when bSchedCleanup (schedMonLnCleanup mln) >>
+    ln_update (mln_lzout mln) su
+
+-- cleanup the signal given a stability value. Returns a triple:
+--    (st', bUninstall, bSchedCleanup)
+-- st' - the post-clean signal
+-- bUninstall - don't need to listen for more `z` updates
+-- bSchedCleanup - schedule a delayed cleanup
+mldSigCleanup :: SigSt () -> Maybe T -> (SigSt (),  Bool, Bool)
+mldSigCleanup _ Nothing = (st_zero, True, False)
+mldSigCleanup st (Just tm) = (st',bUninstall,bSchedCleanup) where 
+    st' = 
+
+-- the cleanup operation; unfortunately duplicates some computation
+-- from the update operation, but that's a tradeoff for a simpler
+-- external interface and to support 
+monLnCleanup :: MonLn z -> IO ()    
+monLnCleanup mln =
+    let md = mln_mdist mln in
+    readIORef (mln_data mln) >>= \ mld ->
+    readIORef (md_data md) >>= \ mdd ->
+    pd_time (md_partd md) >>= \ tNow ->
+    let stO' = maybe st_zero (`st_clear` stO) tStable in
+    let bFinal = maybe True (s_term (st_signal stO')) tStable in
+    let bNeedsMoreCleanup = not bFinal &&
+                            isNothing (st_stable stZ) && 
+                            isNothing (st_stable stO)
+    in
+    
+    let bNeedsExtra
+    
+    -}
+
+
+        
+
+    
+
+                
+            
+
 
 
 

@@ -265,10 +265,10 @@ data OutBox p = OutBox
     { ob_sem   :: !Semaphore -- bounds number of in-flight batches.
     , ob_state :: !(IORef OBW)
     }
-data OBWork = OBW 
-    { obw_urgent :: {-# UNPACK #-} !Bool -- are there any urgent updates in this batch? 
-    , obw_sched  :: {-# UNPACK #-} !Bool -- scheduled? (due to choke, can't rely on empty `work`)
-    , obw_work   :: [Work]               -- work to perform (reverse-ordered)
+data OBW = OBW 
+    { obw_urgent :: !Bool   -- are there any urgent updates in this batch? 
+    , obw_sched  :: !Bool   -- scheduled? (due to choke, can't rely on empty `work`)
+    , obw_work   :: ![Work] -- work to perform (reverse-ordered)
     }
 
 obwZero :: OBW

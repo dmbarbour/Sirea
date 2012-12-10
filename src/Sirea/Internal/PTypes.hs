@@ -16,7 +16,7 @@ import Data.Typeable
 import Data.IORef
 import Control.Applicative
 import Control.Exception (mask_)
-import Control.Monad (join, unless)
+import Control.Monad (join)
 
 -- | Stepper - incremental processing of RDP updates in Sirea.
 --
@@ -92,9 +92,9 @@ runReverse = sequence_ . reverse
 
 newTC :: IO TC
 newTC = TC <$> newIORef False
-           <*> newIORef (Left (return ()))
-           <*> newIORef Nothing
-           <*> newIORef (return ())
+           <*> newIORef (Left [])
+           <*> newIORef []
+           <*> newIORef []
            <*> newIORef (tZero,tZero)
     where tZero = mkTime 0 0
 
@@ -152,7 +152,7 @@ runTCWork rfw =
 -- This operation may wait: each outbox has a semaphore with limited
 -- number of in-flight batches. If a fast producer sends to a slower
 -- consumer, the producer may end up waiting.
-runTCSend :: IORef Work -> IO ()
+runTCSend :: IORef [Work] -> IO ()
 runTCSend rfEmit = 
     readIORef rfEmit >>= \ lw ->
     writeIORef rfEmit [] >>
@@ -162,11 +162,11 @@ runTCSend rfEmit =
 addTCRecv :: TC -> Work -> IO ()
 addTCRecv tc op = join $ atomicModifyIORef (tc_recv tc) putOpTakeEvent
     where putOpTakeEvent (Left lEvents) = (Right [op], runReverse lEvents)
-          putOpTakeEvent (Right lWork) = (Right op:lWork, return ())
+          putOpTakeEvent (Right lWork) = (Right (op:lWork), return ())
 
 addTCEvent :: TC -> Event -> IO ()
 addTCEvent tc ev = join $ atomicModifyIORef (tc_recv tc) addOrExecEvent
-    where addOrExecEvent (Left lEvents) = (Left ev:lEvents, return ())
+    where addOrExecEvent (Left lEvents) = (Left (ev:lEvents), return ())
           addOrExecEvent (Right lWork) = (Right lWork, ev)
 
 -- work is not modified atomically.
@@ -200,8 +200,8 @@ adjTime :: (T,T) -> T -> T
 adjTime (tEff0, tAct0) tNow =
     let dtAct = tNow `diffTime` tAct0 in -- difference in times.
     let dtEst = 0.96 * dtAct in -- heuristic to mitigate sudden shifts in OS clock
-    let tEst = if (dtEff > 0) then tEff0 `addTime` dtEst 
-                              else tEff0 `addTime` 0.001
+    let tEst = if (dtEst > 0) then tEff0 `addTime` dtEst 
+                              else tEff0 `addTime` 0.0001
     in 
     max tEst tNow 
 

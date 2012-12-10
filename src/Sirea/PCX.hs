@@ -63,8 +63,8 @@ import System.IO.Unsafe (unsafePerformIO, unsafeInterleaveIO)
 -- should be manipulated only by that partition thread.
 --
 data PCX p = PCX 
-    { pcx_ident :: PCXPath
-    , pcx_store :: IORef [(Dynamic, String)]
+    { pcx_ident :: !(PCXPath)
+    , pcx_store :: !(IORef [(Dynamic, String)])
     }
 
 -- | The PCX Path is a path of types and strings, ordered from leaf

@@ -188,8 +188,8 @@ ln_touchAll = ln_forEach ln_touch
 -- not be computed yet. The idea is to keep updating the future of
 -- the signal slightly before it becomes the present.
 data SigUp a = SigUp 
-    { su_state  :: {-# UNPACK #-} !(Maybe (Sig a , T))
-    , su_stable :: {-# UNPACK #-} !(Maybe T)
+    { su_state  :: !(Maybe (Sig a , T))
+    , su_stable :: !(Maybe T)
     }
 
 -- | signal held by update.
@@ -235,9 +235,9 @@ su_piggyback su0 su = SigUp { su_state = state', su_stable = stable' }
 -- SigSt represents the state of one signal.
 -- This is intended for use with SigM, primarily. 
 data SigSt a = SigSt
-    { st_signal ::                !(Sig a)    -- signal value
-    , st_stable :: {-# UNPACK #-} !(Maybe T)  -- signal stability
-    , st_expect :: {-# UNPACK #-} !Bool       -- expecting an update?
+    { st_signal :: !(Sig a)    -- signal value
+    , st_stable :: !(Maybe T)  -- signal stability
+    , st_expect :: !Bool       -- expecting an update?
     }
 
 -- st_zero is an initial SigSt value.
@@ -283,9 +283,9 @@ respectsStability = monotonicStability
 -- SigM represents states for two signals, for zip, merge, and 
 -- similar behaviors.
 data SigM x y = SigM
-    { sm_lsig :: {-# UNPACK #-} !(SigSt x)  -- state for left signal
-    , sm_rsig :: {-# UNPACK #-} !(SigSt y)  -- state for right signal
-    , sm_tmup :: {-# UNPACK #-} !(Maybe T)  -- earliest active update
+    { sm_lsig :: !(SigSt x)  -- state for left signal
+    , sm_rsig :: !(SigSt y)  -- state for right signal
+    , sm_tmup :: !(Maybe T)  -- earliest active update
     }
 
 -- initial SigM. Note that st_expect is set True so we don't lose

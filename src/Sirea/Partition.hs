@@ -33,7 +33,6 @@
 --
 module Sirea.Partition 
     ( Partition(..)
-    , Scheduler(..)
     , BCross(..)
 {-  , BScope(..)
     , Scope      -}

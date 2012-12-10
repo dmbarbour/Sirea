@@ -154,6 +154,7 @@ buildEval dtx lnyFinal =
     -- Merge multiple `Lnk y` signals based on unique indexes.
     let arbitraryStartingIndex = 10000 in
     newIORef arbitraryStartingIndex >>= \ rfIdx ->
+    mkMergeLnkFactory lnyFinal >>= \ mkLny ->
     let compile b = takeIdx rfIdx >>= compileBC1 b . mkLny in
     let compileE (t,mb) =
             maybe (return LnkDead) compile mb >>= \ lx ->
@@ -264,12 +265,12 @@ dynToLnkUp dyn = LnkUp { ln_touch = dynSigTouch dyn
 -- the operations on it. 
 newtype Dyn a = Dyn (IORef (DynSt a))
 data DynSt a = DynSt 
-    { dyn_sigst  :: {-# UNPACK #-} !(SigSt a)   -- concrete input signal
-    , dyn_tmupd  :: {-# UNPACK #-} !(Maybe T)   -- earliest update time between signal and behaviors
-    , dyn_blink  :: ![(T,LnkUp a)]              -- links prepared to receive signals.
-    , dyn_bstable:: {-# UNPACK #-} !(Maybe T)   -- current stability of dynamic behaviors
-    , dyn_btouch :: {-# UNPACK #-} !Bool        -- still expecting update to active links?
-    , dyn_touched:: {-# UNPACK #-} !Bool        -- touched in this round? (cleared on final update)
+    { dyn_sigst  :: !(SigSt a)   -- concrete input signal
+    , dyn_tmupd  :: !(Maybe T)   -- earliest update time between signal and behaviors
+    , dyn_blink  :: ![(T,LnkUp a)] -- links prepared to receive signals.
+    , dyn_bstable:: !(Maybe T)   -- current stability of dynamic behaviors
+    , dyn_btouch :: !Bool        -- still expecting update to active links?
+    , dyn_touched:: !Bool        -- touched in this round? (cleared on final update)
     }
 
 dyn_zero :: DynSt a
@@ -523,7 +524,7 @@ newtype MergeLnk a = MergeLnk { mln_data :: IORef (MLD a) }
 data MLD a = MLD
     { mld_touchCt  :: {-# UNPACK #-} !Int
     , mld_table    :: !(M.Map Key (SigSt a))
-    , mld_tmup     :: {-# UNPACK #-} !(Maybe T)
+    , mld_tmup     :: !(Maybe T)
     }
 
 mkMergeLnk :: IO (MergeLnk a)
@@ -542,7 +543,7 @@ mld_getSt mld k = fromMaybe st_zero $ M.lookup k (mld_table mld)
 -- touch key (if not already touched)
 mld_touch :: MLD a -> Key -> MLD a
 mld_touch mld k =
-    let st = mld_get mld k in
+    let st = mld_getSt mld k in
     if st_expect st then mld else
     let st' = st_poke st in
     let tbl' = M.insert k st' (mld_table mld) in
@@ -620,6 +621,7 @@ emitMergedSignal mln lu =
                     let sigMerged    = foldr (flip s_merge) s_never lSigsTrimmed in
                     SigUp { su_state = Just (sigMerged, tu), su_stable = tStable }
     in
+    let mld' = MLD { mld_table = tbl', mld_tmup = Nothing, mld_touchCt = 0 } in
     mld' `seq` writeIORef (mln_data mln) mld' >>
     ln_update lu su
    

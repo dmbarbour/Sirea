@@ -14,7 +14,7 @@ import Sirea.Internal.DiscreteTimedSeq
 -- A signal is defined for all times, but in practice the past is
 -- dropped (collected) while the future is updated over time. 
 data Sig a = Sig 
-    { s_head :: {-# UNPACK #-} !(Maybe a) 
+    { s_head :: !(Maybe a) 
     , s_tail :: !(DSeq (Maybe a)) 
     }
 

@@ -15,7 +15,6 @@ module Sirea.B
     ( B
     ) where
 
-import Sirea.Time
 import Sirea.Behavior
 -- import Sirea.Partition
 import Sirea.Internal.BTypes

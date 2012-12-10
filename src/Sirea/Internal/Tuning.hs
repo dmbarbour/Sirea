@@ -8,12 +8,15 @@ module Sirea.Internal.Tuning
     , batchesInFlight
     , dtDaggrHist, dtMdistHist
     , dtFinalize
+    , dtPrintExpire
     ) where
+
+import Sirea.Time (DT)
 
 -- The main Sirea application has a few tuning parameters related to
 -- periodic updates, heartbeats, graceful startup and shutdown. Also
 -- a reset period - if the main thread seems frozen too long.
-dtRestart, dtStability, dtStep, dtGrace :: DT
+dtRestart, dtStability, dtHeartbeat, dtGrace :: DT
 dtRestart   = 1.20   -- how long a pause to cause a restart
 dtStability = 0.30   -- stability of main signal (affects halting time)
 dtHeartbeat = 0.06   -- heartbeat and periodic increase of stability
