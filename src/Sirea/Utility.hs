@@ -85,7 +85,7 @@ instance Typeable PrintBuffer where
     typeOf _ = mkTyConApp typb []
         where typb = mkTyCon3 "sirea-core" "Sirea.Utility.Internal" "PrintBuffer"
 instance Resource PrintBuffer where
-    locateResource _ = liftM PrintBuffer $ newIORef [] 
+    locateResource _ _ = liftM PrintBuffer $ newIORef [] 
            
 
 {- IDEA: a volatile, stateful `timestamp` behavior
@@ -150,8 +150,8 @@ undefinedB = unsafeOnUpdateBL (return undefinedIO) >>> unsafeLinkB mkKeepAlive
 -- any merges further on. 
 sendNothing :: Lnk y -> Lnk (S p ())
 sendNothing LnkDead = LnkDead
-sendNothing (LnkProd x y) = (sendNothing x) `ln_append` (sendNothing y)
-sendNothing (LnkSum x y)  = (sendNothing x) `ln_append` (sendNothing y)
+sendNothing (LnkProd x y) = (sendNothing x) `lnPlus` (sendNothing y)
+sendNothing (LnkSum x y)  = (sendNothing x) `lnPlus` (sendNothing y)
 sendNothing (LnkSig lu) = LnkSig (LnkUp { ln_touch = touch, ln_update = update })
     where touch = ln_touch lu
           update su = 
@@ -163,6 +163,10 @@ sendNothing (LnkSig lu) = LnkSig (LnkUp { ln_touch = touch, ln_update = update }
             let su' = SigUp { su_stable = tStable, su_state = st' } in
             ln_update lu su'
 
+lnPlus :: Lnk (S p a) -> Lnk (S p a) -> Lnk (S p a)
+lnPlus LnkDead y = y
+lnPlus x LnkDead = x
+lnPlus x y = LnkSig (ln_lnkup x `ln_append` ln_lnkup y)
 
 -- TODO:
 --   bunit :: b x (S p ()).

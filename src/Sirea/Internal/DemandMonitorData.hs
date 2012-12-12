@@ -25,15 +25,14 @@
 --
 module Sirea.Internal.DemandMonitorData
     ( DemandAggr, newDemandAggr, newDemandLnk
-    , MonitorDist, newMonitorDist, mainMonitorLnk, newMonitorLnk
+    , MonitorDist, newMonitorDist, primaryMonitorLnk, newMonitorLnk
     ) where
 
 import Data.IORef
-import Data.Maybe (fromMaybe, isNothing)
-import Data.List (foldl')
+import Data.Maybe (fromMaybe, isNothing, mapMaybe)
 import qualified Data.Map.Strict as M
 import Control.Applicative
-import Control.Monad (unless, when, void, sequence_, mapM_)
+import Control.Monad (unless, when)
 import Control.Exception (assert)
 import Sirea.Signal
 import Sirea.Time
@@ -111,7 +110,7 @@ ddZero = DemandData
 newDemandLnk :: DemandAggr e z -> IO (LnkUp e)
 newDemandLnk da =
     newIORef Nothing >>= \ rfK -> -- acquire Key later, in Demand Monitor's partition
-    let getKey = loadKey da rfK in
+    let getKey = loadDaggrKey da rfK in
     let touch = getKey >>= touchDaggr da in
     let update su = getKey >>= \ k -> updateDaggr da k su in
     let lu = LnkUp { ln_touch = touch, ln_update = update } in
@@ -119,8 +118,8 @@ newDemandLnk da =
 
 -- keys are computed with explicitly lazy IO, via an IORef
 -- (this helps assure me of which thread it runs in)
-loadKey :: DemandAggr e z -> IORef (Maybe Key) -> IO Key
-loadKey da rfK =
+loadDaggrKey :: DemandAggr e z -> IORef (Maybe Key) -> IO Key
+loadDaggrKey da rfK =
     readIORef rfK >>= \ mk ->
     case mk of
         Just k -> return k
@@ -253,7 +252,7 @@ processDaggr da =
     let tRec = dd_stable dd <|> Just tTgt in -- effective recorded stability
     let tbl  = dd_table dd in
     let lst  = M.toAscList tbl in
-    let lst' = M.mapMaybe (daggrTableGC tTgt) lst in -- GC of demand sources
+    let lst' = mapMaybe (daggrTableGC tTgt) lst in -- GC of demand sources
     let tbl' = M.fromAscList lst' in
     let done = null lst' in
     let bInactive = all isNothing (fmap (st_stable . snd) lst') in
@@ -287,8 +286,8 @@ daggrTableGC tm (k,st) =
     let bDone = isNothing (st_stable st) && 
                 isNothing x && s_is_final sf tm 
     in
-    if bDone then Nothing
-             else Just (k, SigSt { st_signal = sf })
+    let st' = st { st_signal = sf } in
+    if bDone then Nothing else Just (k, st')
 
 -- Schedule a flushDaggr operation for the next heartbeat. Ensures
 -- that no more than one flush is scheduled (for bounded space).
@@ -318,10 +317,10 @@ flushDaggr da =
 pseudoUpdate :: DemandAggr e z -> IO ()
 pseudoUpdate da = updateLater >> touchNow 
     where touchNow =
-            readIORef (da_partd da) >>= \ dd ->
+            readIORef (da_data da) >>= \ dd ->
             let tc' = succ (dd_touchCt dd) in
             let dd' = dd { dd_touchCt = tc', dd_flush = False } in
-            writeIORef (da_partd da) dd' >>
+            writeIORef (da_data da) dd' >>
             when (1 == tc') (activateDaggr da)
           updateLater = onNextPhase $
             readIORef (da_data da) >>= \ dd ->
@@ -338,7 +337,8 @@ leastTime l r = (min <$> l <*> r) <|> l <|> r
 
 -- | MonitorDist supports output to multiple observers (monitors) of
 -- a resource or signal. For simplicity, the main signal is stored 
--- in only one place to support observers.
+-- in only one place to support observers. For simple GC, observers
+-- are kept in a simple table (modeled with a map). 
 data MonitorDist z = MonitorDist 
     { md_data       :: !(IORef (MDD z))   -- mutable data of MonitorDist
     , md_partd      :: !(PartD)           -- scheduler and time
@@ -346,10 +346,17 @@ data MonitorDist z = MonitorDist
 
 -- mutable data for the full MonitorDist
 data MDD z = MDD
-    { mdd_signal    :: !(SigSt z) -- track current signal
-    , mdd_cleanup   :: !Bool      -- cleanup on heartbeat?
-    , mdd_nextKey   :: {-# UNPACK #-} !Key       -- next key for table!   
-    , mdd_table     :: !(M.Map Key (LnkUp z))    -- to alert active observers
+    { mdd_signal    :: !(SigSt z)           -- track current signal
+    , mdd_tmup      :: !(Maybe T)           -- time of recent update
+    , mdd_flush     :: !Bool                -- special update on hearbeat?
+    , mdd_nextKey   :: {-# UNPACK #-} !Key  -- next key for table!   
+    , mdd_table     :: !(M.Map Key (MLN z)) -- set of active observers
+    }
+
+data MLN z = MLN 
+    { mln_lzout     :: !(LnkUp z)           -- final output (after mask!)
+    , mln_signal    :: !(SigSt ())          -- observer query (mask)
+    , mln_tmup      :: !(Maybe T)           -- tracks observed update time
     }
 
 -- | track a new set of observers
@@ -357,12 +364,12 @@ newMonitorDist :: (Partition p) => PCX p -> Sig z -> IO (MonitorDist z)
 newMonitorDist cp z0 = MonitorDist 
     <$> newIORef (mddZero z0)
     <*> pure (mkPartD cp)
-    <*> pure z0
 
 mddZero :: Sig z -> MDD z
 mddZero z0 = MDD
     { mdd_signal  = st_zero { st_signal = z0 } 
-    , mdd_cleanup = False
+    , mdd_tmup    = Nothing
+    , mdd_flush   = False
     , mdd_nextKey = 60000 -- arbitrary 
     , mdd_table   = M.empty
     }
@@ -379,24 +386,53 @@ primaryMonitorLnk md = LnkUp { ln_touch = touch, ln_update = update }
             readIORef (md_data md) >>= \ mdd ->
             let st = mdd_signal mdd in
             unless (st_expect st) $
-                let lOut = M.elems (mdd_table mdd) in
                 let st' = st_poke st in
                 let mdd' = mdd { mdd_signal = st' } in
-                writeIORef (md_data md) mdd' >> -- record touch
-                mapM_ ln_touch lOut -- touch all active observers
+                let lst = M.elems (mdd_table mdd) in
+                writeIORef (md_data md) mdd' >>
+                mapM_ touchOne lst
+          touchOne mln =
+            unless (st_expect (mln_signal mln)) $
+                ln_touch (mln_lzout mln)
           update su =
             readIORef (md_data md) >>= \ mdd ->
-            let lOut = M.elems (mdd_table mdd) in
             let st   = mdd_signal mdd in
             assert (st_expect st) $
             let st'  = st_sigup su st in
-            let mdd' = mdd { mdd_signal = st' } in
-            writeIORef (md_data md) mdd' >>
-            -- cleanup at end of step 
-            -- (ensures observers have chance to see current state)
-            pd_endOfStep (md_partd md) (cleanupMD md) >>
-            -- distribute update to all observers!
-            mapM_ (`ln_update` su) lOut
+            let tu   = snd `fmap` su_state su in
+            let lst  = M.elems (mdd_table mdd) in
+            let mdd' = mdd { mdd_signal = st', mdd_tmup = tu } in
+            mdd' `seq` writeIORef (md_data md) mdd' >>  -- track state
+            pd_endOfStep (md_partd md) (cleanupMD md) >> -- schedule GC
+            pd_time (md_partd md) >>= \ tNow -> -- may need for effective stability
+            mapM_ (updateMD tNow mdd') lst
+ 
+-- update MLN.
+--
+-- The main difficulty seems to be recognition of a `final` update,
+-- and GC of historical data.  Does not perform any GC, only delivers update if
+-- possible at the given moment. The main difficulty here seems
+-- to be deciding when to deliver the "final" update for a given
+-- MLN observer. That can occur if the effective stability is
+-- greater than the 
+updateMD :: T -> MDD z -> MLN z -> IO ()
+updateMD tNow mdd mln =
+    let bWait = st_expect (mdd_signal mdd) || st_expect (mln_signal mln) in
+    unless bWait $
+        error "TODO!"
+    {-
+        let tmup  = leastTime (mdd_tmup mdd) (mln_tmup mln) in
+        let tStable = 
+        let su    = case tmup of
+                Nothing -> SigUp { su_
+    -}
+
+cleanupMD :: MonitorDist z -> IO ()
+cleanupMD = error "TODO!"
+ 
+
+{-
+
     
 -- End of round cleanup for MonitorDist. Simply cuts recorded signal
 -- based on current time, and possibly schedules further cleanup on
@@ -458,21 +494,6 @@ uninstallMD md k =
     mdd' `seq` 
     writeIORef (md_data md) mdd'
 
--- MonLn is data associated with one newMonitorLnk
-data MonLn z = MonLn
-    { mln_data   :: !(IORef MLD)     -- mutable data; tracking of signals
-    , mln_lzout  :: !(LnkUp z)       -- destination of observed signal
-    , mln_mdist  :: !(MonitorDist z) -- source of observed signal
-    }
-
--- mutable data for a monitor link
-data MLD = MLD 
-    { mld_key    :: !(Maybe Key)     -- install/uninstall key
-    , mld_signal :: !(SigSt ())      -- observer's signal
-    , mld_tmup   :: !(Maybe T)       -- least update time
-    , mld_cleanup:: !Bool            -- scheduled heartbeat cleanup 
-    }
-
 newMonLn :: MonitorDist z -> LnkUp z -> IO (MonLn z)
 newMonLn md lzo = MonLn 
     <$> newIORef mldZero
@@ -487,6 +508,8 @@ mldZero = MLD
     , mld_cleanup = False
     }
 
+-}
+
 -- | Each observer will build a link to the MonitorDist. The task of
 -- this link is to mask the MonitorDist signal with the observer's
 -- query. For this to work well, the MonitorDist signal should be
@@ -500,7 +523,35 @@ mldZero = MLD
 -- demand stability as a simple function of the partition's time.
 --
 newMonitorLnk :: MonitorDist z -> LnkUp z -> IO (LnkUp ())
-newMonitorLnk md lzo = monLnRecvO <$> newMonLn md lzo
+newMonitorLnk md lzo = 
+    newIORef Nothing >>= \ rfK ->
+    let getKey = loadMDKey md rfK in
+    let touch = getKey >>= touchMLN md lzo in
+    let update su = getKey >>= \ k -> updateMLN md k su in
+    let lu = LnkUp { ln_touch = touch, ln_update = update } in
+    return lu
+
+loadMDKey :: MonitorDist z -> IORef (Maybe Key) -> IO Key
+loadMDKey md rfK =
+    readIORef rfK >>= \ mbK ->
+    case mbK of
+        Just k -> return k
+        Nothing ->
+            readIORef (md_data md) >>= \ mdd ->
+            let k = succ (mdd_nextKey mdd) in
+            let mdd' = mdd { mdd_nextKey = k } in
+            k `seq` mdd' `seq`
+            writeIORef (md_data md) mdd' >>
+            writeIORef rfK (Just k) >>
+            return k
+
+touchMLN :: MonitorDist z -> LnkUp z -> Key -> IO ()
+touchMLN = error "TODO!"
+
+updateMLN :: MonitorDist z -> Key -> SigUp () -> IO ()
+updateMLN = error "TODO!"
+
+{-
 
 -- install MonLn to observe the associated MonitorDist
 installMonLn :: MonLn z -> IO ()
@@ -591,6 +642,8 @@ monLnEmit mln =
     --   to Nothing in the special case where stO is fully stable
     --   and final beyond the point to which stZ is stable.
     undefined
+
+-}
 
 {-
 

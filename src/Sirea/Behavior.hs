@@ -21,6 +21,8 @@ module Sirea.Behavior
     , BSum(..), binl, bright, binr, bassocrs, (+++), (|||)
     , bconjoin
     , BDisjoin(..)
+    , bdisjoinry, bdisjoinryy, bdisjoinrz, bdisjoinrzz
+    , bdisjoinly, bdisjoinlyy, bdisjoinlz, bdisjoinlzz
     , bIfThenElse, bUnless, bWhen -- utility
     , BZip(..), bzip, bzipWith, bunzip
     , BSplit(..), bsplitWith, bsplitOn, bunsplit, bsplitMaybe
@@ -399,9 +401,8 @@ bconjoin = getX &&& getYZ
 class (BSum b, BProd b) => BDisjoin b where
     bdisjoin :: (SigInP p x) => b (x :&: ((S p () :&: y) :|: z)) ((x :&: y) :|: (x :&: z))
 
-{- I can't imagine actually using any of these; `bdisjoin` is such a big act that 
-   I tend to treat it carefully each time I need it.
 
+-- helpers for `bdisjoin` in various arrangements of values. 
 bdisjoinly  :: (BDisjoin b, BFmap b, SigInP p x) => b (x :&: (S p y :|: z))  ((x :&: S p y) :|: (x :&: z))
 bdisjoinlyy :: (BDisjoin b, BFmap b, SigInP p x) => b (x :&: ((S p y :&: y') :|: z)) ((x :&: (S p y :&: y')) :|: (x :&: z))
 bdisjoinlz  :: (BDisjoin b, BFmap b, SigInP p x) => b (x :&: (y :|: S p z)) ((x :&: y) :|: (x :&: S p z))
@@ -423,8 +424,6 @@ bdisjoinry   = bswap >>> bdisjoinly  >>> (bswap +++ bswap)
 bdisjoinryy  = bswap >>> bdisjoinlyy >>> (bswap +++ bswap)
 bdisjoinrz   = bswap >>> bdisjoinlz  >>> (bswap +++ bswap)
 bdisjoinrzz  = bswap >>> bdisjoinlzz >>> (bswap +++ bswap)
-
--}
 
 -- | bIfThenElse expresses a common pattern seen in many functional
 -- languages, but in the context of RDP's reactive model. It will

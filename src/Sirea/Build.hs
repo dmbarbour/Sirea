@@ -46,7 +46,6 @@ import Sirea.Internal.PulseSensor (runPulseActions)
 import Sirea.Internal.Tuning (dtRestart, dtStability, dtHeartbeat, dtGrace)
 import Sirea.Behavior
 import Sirea.Partition
-import Sirea.Link
 import Sirea.UnsafeOnUpdate
 import Sirea.PCX
 import Sirea.BCX
@@ -377,7 +376,7 @@ instance Typeable ExitR where
     typeOf _ = mkTyConApp tycExitR []
         where tycExitR = mkTyCon3 "sirea-core" "Sirea.Build.Internal" "ExitR"
 instance Resource ExitR where
-    locateResource _ = liftM ExitR $ newIORef False
+    locateResource _ _ = liftM ExitR $ newIORef False
 
 
 {- TODO: Switch to a more generic volatile timestamp utility.

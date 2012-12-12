@@ -36,6 +36,7 @@ module Sirea.AgentResource
 import Data.Typeable
 import Sirea.Behavior
 import Sirea.BCX
+import Sirea.Partition
 
 -- | The RDP behaviors of AgentResources are defined in a typeclass.
 -- The behaviors are indexed by partition and a `duty` type. Use the

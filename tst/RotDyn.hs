@@ -13,7 +13,6 @@ import Sirea.Prelude
 import Sirea.Clock
 import Sirea.Time
 
-
 rotate567 :: BCX w (S p ()) (S p Int :&: S p Int :&: S p Int)
 rotate567 = bclockOfFreq 3 >>> bfmap tmNanos >>> bfmap (`div` 333333333) >>>
             (bfmap (`mod` 5) &&& bfmap (`mod` 6) &&& bfmap (`mod` 7)) >>>
@@ -24,7 +23,7 @@ add = bzipWith (+)
 sub = bzipWith (-)
 pow = bzipWith (^)
 mul = bzipWith (*)
-ssq = bzipWith $ \ b c -> (b*b) + (c*c)
+ssq = bzipWith (\ b c -> (b*b) + (c*c))
 
 nToF :: Int -> BCX w (S p Int :&: S p Int) (S p Int)
 nToF 0 = add

@@ -37,5 +37,5 @@ rotateFib :: BCX w (S P0 ()) (S P0 ())
 rotateFib = rotateI >>> fibPrint
 
 main :: IO ()
-main = runSireaApp $ bconst 15 >>> fibPrint >>> bUnsafeExit
+main = runSireaApp $ bconst 11 >>> fibPrint >>> bUnsafeExit
 

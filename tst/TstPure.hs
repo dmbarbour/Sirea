@@ -41,7 +41,7 @@ tstInR = bvoid $ binr >>> bleft (assertDeadOnInput "tstInR lives in L") >>> brig
 tstDeadOutput = bvoid (assertDeadOnOutput "tstDeadOutput lives") >>> assertb "tstDeadOutput" (== ())
 
 tstDisjoinL = bvoid $ (bconst (Left 7) &&& bconst 6) 
-                >>> bfirst bsplit 
+                >>> bfirst bsplit -- ((Int :|: Int) :&: Int)
                 >>> bdisjoinrz 
                 >>> (bzipWith (*) +++ bzipWith (*))
                 >>> (assertb "tstDisjoinL" (== 42) +++ assertb "tstDisjoinL in R?" (const False))
@@ -52,7 +52,6 @@ tstDisjoinR = bvoid $ (bconst (Right 7) &&& bconst 6)
                 >>> (bzipWith (*) +++ bzipWith (*))
                 >>> (assertb "tstDisjoinR in L?" (const False) +++ assertb "tstDisjoinR" (== 42))
 
- 
 --tstFail = bvoid $ assertb "tstFail" (const False)
 
 tstAssocp = bvoid $ bdup >>> bsecond bdup >>> (bconst 7 *** (bconst 2 *** bconst 3)) >>>

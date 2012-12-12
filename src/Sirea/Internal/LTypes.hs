@@ -11,6 +11,7 @@ module Sirea.Internal.LTypes
     , SigM(..), sm_zero, sm_update_l, sm_sigup_l, sm_update_r, sm_sigup_r
     , sm_waiting, sm_stable, sm_emit, sm_cleanup
     , ln_forEach, ln_freeze, ln_touchAll, ln_withSigM
+    , tmAncient
     ) where
 
 import Sirea.Internal.STypes
@@ -180,7 +181,8 @@ ln_touchAll = ln_forEach ln_touch
 --    stability - the new stability of the signal, after applying
 --      the state update. A promise that all future updates happen
 --      no earlier than the given instant in time, to support GC. 
---      The value Nothing here means stable forever.
+--        The value Nothing here means stable forever.
+--        The value `tmAncient` can be used as a lower bound.
 -- Stability always updates. State might not update, i.e. to avoid
 -- recomputing a signal when it is known it did not change.
 --
@@ -231,6 +233,12 @@ su_piggyback su0 su = SigUp { su_state = state', su_stable = stable' }
             if (t0 >= tf) then (sf,tf) else
             (s_switch' s0 tf sf, t0)
 
+-- | tmAncient is meant to be a lower bound for stability, used by
+-- SigM and other locations that cannot afford to lose information
+-- if one initial signal arrives later than another.
+tmAncient :: Maybe T
+tmAncient = Just (mkTime 0 0)
+
 ---------------------------------------------------------
 -- SigSt represents the state of one signal.
 -- This is intended for use with SigM, primarily. 
@@ -240,9 +248,15 @@ data SigSt a = SigSt
     , st_expect :: !Bool       -- expecting an update?
     }
 
--- st_zero is an initial SigSt value.
+-- st_zero is an initial SigSt value. 
+--
+-- The intial stability is set to tmAncient to avoid confusing
+-- lower and upper bounds. This will also prevent data-loss for
+-- SigM and other elements with static SigSt inputs. 
 st_zero :: SigSt a
-st_zero = SigSt { st_signal = s_never, st_stable = Nothing, st_expect = False }
+st_zero = SigSt { st_signal = s_never
+                , st_stable = tmAncient
+                , st_expect = False }
 
 -- st_poke is called by ln_touch to indicate expected updates
 st_poke :: SigSt a -> SigSt a
@@ -269,10 +283,11 @@ st_sigup su st =
           } 
 
 -- for some extra validation and debugging, ensure that stability
--- is non-decreasing (excepting Forever, which acts as a reset).
+-- is non-decreasing for normal updates. 
 monotonicStability :: Maybe T -> Maybe T -> Bool
 monotonicStability (Just t0) (Just tf) = (tf >= t0)
-monotonicStability _ _ = True
+monotonicStability _ Nothing = True
+monotonicStability _ _ = False
 
 -- validate that stability is respected by updates, i.e. that 
 -- no update happens earlier than the current stability.
@@ -288,15 +303,14 @@ data SigM x y = SigM
     , sm_tmup :: !(Maybe T)  -- earliest active update
     }
 
--- initial SigM. Note that st_expect is set True so we don't lose
--- any information (in case of multiple updates on one signal before
--- first update on other signal).
+-- initial SigM. 
 sm_zero :: SigM x y
 sm_zero = SigM 
-    { sm_lsig = st_poke st_zero
-    , sm_rsig = st_poke st_zero
+    { sm_lsig = st_zero
+    , sm_rsig = st_zero
     , sm_tmup = Nothing 
     }
+
 
 sm_update_l :: (SigSt x -> SigSt x) -> (SigM x y -> SigM x y)
 sm_update_r :: (SigSt y -> SigSt y) -> (SigM x y -> SigM x y)

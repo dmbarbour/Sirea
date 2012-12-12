@@ -39,6 +39,7 @@ import Sirea.Partition
 import Sirea.PCX
 import Sirea.Internal.DemandMonitorData
 import Sirea.Internal.BImpl (wrapEqFilter)
+import Sirea.Internal.Tuning (dtEqf)
 
 -- newDemandMonitor is the basis for other demand monitors.
 -- developers to control the zip function and an adjacency filter.
@@ -49,7 +50,7 @@ newDemandMonitor :: (Partition p)
                      -> IO (B (S p e) (S p ()), B (S p ()) (S p z)) 
 newDemandMonitor zfn eqfn cp = 
     newMonitorDist cp (zfn []) >>= \ md ->
-    wrapEqFilter dt_eqf eqfn (primaryMonitorLnk md) >>= \ lnMon ->
+    wrapEqFilter dtEqf eqfn (primaryMonitorLnk md) >>= \ lnMon ->
     newDemandAggr cp lnMon zfn >>= \ da ->
     return (demandFacetB da, monitorFacetB md)
 
