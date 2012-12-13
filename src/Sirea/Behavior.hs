@@ -753,3 +753,25 @@ benvseq bx by = bdup >>> (bfst *** bx) >>> by
 
 
 
+-- TODO: Consider switching to:
+--   (S p f x)
+-- Such that we're operating on time-varying signals of kind `f x`.
+-- This could impact:
+--
+--   bfmap, bzip, bsplit, btemporal
+--
+-- Unfortunately, it would also make many constraints difficult to
+-- validate, e.g. for `bdelay :: DT -> b x x` I'd need a global 
+-- constraint on `x` that says each element is delayable, or I'd
+-- need to enforce that more uniformly. (I think Oleg had some 
+-- answer for partial constraints.)
+--
+-- The alternative is use wrappers - `S p (f x)` technique, wrapping
+-- the `x` type to enforce constraints locally. The main difficulty
+-- here is that continous time-varying signals can't be ignorant of
+-- `bdelay`. With this technique, I'll probably need to wrao the `S`
+-- type as well, hide it behind another kind of behavior to enforce
+-- tighter constraints or open a GADT to new options.
+-- 
+
+

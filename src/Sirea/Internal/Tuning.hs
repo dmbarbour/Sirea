@@ -17,7 +17,7 @@ import Sirea.Time (DT)
 -- periodic updates, heartbeats, graceful startup and shutdown. Also
 -- a reset period - if the main thread seems frozen too long.
 dtRestart, dtStability, dtHeartbeat, dtGrace :: DT
-dtRestart   = 1.20   -- how long a pause to cause a restart
+dtRestart   = 3.00   -- how long a pause to cause a restart
 dtStability = 0.30   -- stability of main signal (affects halting time)
 dtHeartbeat = 0.06   -- heartbeat and periodic increase of stability
 dtGrace     = dtHeartbeat -- time allotted for graceful start and stop

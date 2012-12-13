@@ -27,7 +27,7 @@ import Sirea.Internal.Tuning (dtCompileFuture)
 import Sirea.Time
 import Sirea.Signal
 
-import Debug.Trace
+--import Debug.Trace
 
 
 type Key = Int
@@ -168,7 +168,7 @@ buildEval dtx lnyFinal =
     let touch = 
             readIORef rfBSig >>= \ st ->
             unless (st_expect st) $ -- prevents double touch
-                --trace "touchBSig" $
+                --traceIO "touchBSig" >>
                 let st' = st_poke st in
                 writeIORef rfBSig st' >>
                 dynBTouch dynX
@@ -178,8 +178,7 @@ buildEval dtx lnyFinal =
             let tu = fmap snd (su_state su) in
             buildUpdateRange rfTt tu st' >>= \ range -> -- compute compilation target
             mapM compileE range >>= \ dynLnks -> -- [(T,Lnk x)]
-            --trace ("updateBSig: " ++ show (map fst dynLnks)) $
-            mapM_ (ln_touchAll . snd) dynLnks >>
+            mapM_ (ln_touchAll . snd) dynLnks >> -- touch new links immediately
             dynBUpdate (su_stable su) dynLnks dynX 
     in
     let luB = LnkUp { ln_touch = touch, ln_update = update } in
@@ -341,7 +340,7 @@ dynSigUpdate (Dyn rf) su =
 --     into the future of the signal.
 dynBUpdate :: (Maybe T) -> [(T,Lnk x)] -> LnkW Dyn x -> IO ()
 dynBUpdate _ bl LnkDead = 
-    --trace "freezing dead dynamic links" $
+    --traceIO "freezing dead dynamic links" >>
     mapM_ (ln_freeze . snd) bl 
 dynBUpdate tm bl (LnkProd dynX dynY) =
     let blX = map (second ln_fst) bl in
@@ -369,7 +368,7 @@ dynUpdateLinks rf tStable [] =
 dynUpdateLinks rf tStable blu@(b:_) =
     readIORef rf >>= \ dyn ->
     assert (dyn_btouch dyn) $
-    --trace ("dynUpdateLinks: " ++ show (map fst blu)) $
+    --traceIO ("dynUpdateLinks: " ++ show (map fst blu)) >>
     let tmB = fst b in
     let tmup' = leastTime (dyn_tmup dyn) (Just tmB) in
     let (blKeep,blKill) = span ((< tmB) . fst) (dyn_blink dyn) in
@@ -389,7 +388,7 @@ dynCutDeadLinks :: T -> [(T,LnkUp a)] -> IO ()
 dynCutDeadLinks _ [] = return ()
 dynCutDeadLinks tCut bl =
     assert (all (>= tCut) (map fst bl)) $
-    trace ("Terminating @ " ++ show tCut ++ " count=" ++ show (length bl)) $
+    -- traceIO ("Terminating @ " ++ show tCut ++ " : " ++ show (map fst bl)) >>
     mapM_ (terminate tCut . snd) bl
 
 -- when we switch to a new dynamic behavor, we kill behaviors that
@@ -439,7 +438,7 @@ cleanBl = map fst . dropWhile (isNothing . su_stable . snd)
 -- most common update. Might even deserve its optimized form.
 emitStable :: IORef (DynSt a) -> IO ()
 emitStable rf =
-    --trace "emitStable" $
+    --traceIO "emitStable" >>
     readIORef rf >>= \ dyn ->
     assert ((isNothing . dyn_tmup) dyn) $
     assert ((not . dynExpect) dyn) $
@@ -474,7 +473,7 @@ loadStable tStable@(Just tS) = fn
 -- time is the earliest update time (for 
 emitUpdate :: IORef (DynSt a) -> T -> IO ()
 emitUpdate rf tu =
-    --trace ("emitUpdate @ " ++ show tu) $
+    --traceIO ("emitUpdate @ " ++ show tu) >>
     readIORef rf >>= \ dyn ->
     assert ((Just tu) == dyn_tmup dyn) $
     assert ((not . dynExpect) dyn) $ 

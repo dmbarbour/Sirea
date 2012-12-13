@@ -52,6 +52,8 @@ import Sirea.BCX
 import Sirea.Time
 import Sirea.Signal
 
+import Debug.Trace (traceIO)
+
 -- | This is what an RDP application looks like in Sirea:
 --
 --     type SireaApp = forall w . BCX w (S P0 ()) (S P0 ())
@@ -262,17 +264,22 @@ maintainApp apw tStable =
                     let su = SigUp { su_state = Just (sig, tStable)
                                    , su_stable = Just tStable' } in
                     let nextStep = maintainApp apw tStable' in
-                    --tRestart `seq` 
-                    --setStartTime (findInPCX (ap_cw apw)) tRestart >>
-                    ln_update (ap_luMain apw) su >>
-                    schedule dtHeartbeat (addTCRecv tc0 nextStep)
+                    -- Restarts happen due to sleeps, stops, or falling behind real-time
+                    let restartMsg = "SIREA APP RESTART @ " ++ show tStable ++ 
+                                     "  -->  " ++ show tRestart
+                    in 
+                    traceIO restartMsg >>
+                    -- tRestart `seq` 
+                    -- setStartTime (findInPCX (ap_cw apw)) tRestart >>
+                    schedule dtHeartbeat (addTCRecv tc0 nextStep) >>
+                    ln_update (ap_luMain apw) su
                 else -- NORMAL MAINTENANCE 
                     let tStable' = tNow `addTime` dtStability in
                     assert (tStable' > tStable) $ -- can't handle clock running backwards
                     let su = SigUp { su_state = Nothing, su_stable = Just tStable' } in
                     let nextStep = maintainApp apw tStable' in
-                    ln_update (ap_luMain apw) su >>
-                    schedule dtHeartbeat (addTCRecv tc0 nextStep)
+                    schedule dtHeartbeat (addTCRecv tc0 nextStep) >>
+                    ln_update (ap_luMain apw) su
 
 -- After we set the main signal to inactive, we must still wait for
 -- real-time to catch up, and should run a final few heartbeats to

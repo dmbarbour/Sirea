@@ -771,7 +771,7 @@ phaseUpdateB mkPQ = mkLnkB id lnPhase
             return (LnkSig lu')
 
 suZero :: SigUp a
-suZero = SigUp { su_state = Nothing, su_stable = Nothing }
+suZero = SigUp { su_state = Nothing, su_stable = tmAncient }
 
 type PhaseQ = IO () -> IO () -- receive a phase operation.
 
