@@ -62,18 +62,20 @@ Sirea is now in an alpha state. All the primitive behaviors (everything in Sirea
 
 ### Haskell Packages
 
-Several packages are planned for Sirea. This toplevel directory is **sirea-core**.
+Several packages are planned for Sirea. This toplevel directory is **sirea-core**. 
 
-* **sirea-core** (75%) primitive behaviors, demand monitor, resources, utilities, startup and shutdown. 
-* **sirea-glfw** keyboard, mouse, joystick, GL window
-* **sirea-filesys** simplistic reading and writing of files with reactive updates
-* **sirea-state** term rewriting, state transition system, tuple space, history
-* **sirea-stable** a stateless stable model based on weighted constraint logic
-* **sirea-webapp** live web apps; pages as loading agents; serve mixed client/server dynamic RDP behaviors
-* **sirea-plugins** live loading and constraint-based linking of plugins
-* **sirea-live** a blank-slate application for live programming, plugin based
+* **sirea-core** (80%) primitive behaviors, demand monitor, resources, utilities, startup and shutdown. 
+* **sirea-filesys** (1%) simplistic reading and writing of filesystem, with reactive updates 
+* **sirea-glfw** (1%) keyboard, mouse, joystick, GL window; experimental GL API in RDP/Sirea
+* **sirea-jackaudio** (0%) experimental stateless sound API in RDP/Sirea; JACK backend 
+* **sirea-state** (0%) term rewriting, state transition system, tuple space, history
+* **sirea-stable** (0%) a stateless stable model based on weighted constraint logic
+* **sirea-wx** (0%) experimental immediate-mode GUI API with external state; wxHaskell backend
+* **sirea-wapp** (0%) live web apps; pages as loading agents; serve mixed client/server dynamic RDP behaviors
+* **sirea-plugins** (0%) live loading and constraint-based linking of plugins, leveraging Data.Typeable and 
+* **sirea-live** (0%) a blank-slate application to run a live soup of plugins
 
-I'd also like to get some useful sounds (SuperCollider, Euterpa, or maybe microsounds?), likely something for video input, and probably something for wxWidgets (but shifting state outside the widgets). Some of these might become separate projects, too, rather than just separate packages.
+Once I start settling on APIs for GL, sound, GUI, web-services, etc. I plan to divide APIs into parts - one part for plugin header (a typable data type) and another part for the plugin implementations. For now, I expect to keep most of these together in one GIT project. 
 
 ### Specific Features
 
@@ -87,7 +89,7 @@ Reactive Demand Programming offers many wonderful, high level features that make
 
 * _Multi-Agent Systems._ If an RDP behavior is specified primarily for its effects, it is easy to consider it an *agent* for a multi-agent system. Sirea favors this idea for the higher level application behaviors: the initial `SireaApp` is an agent; the module Sirea.AgentResource allows unique agents to be modeled as resources via a typeclass; the *live programming* model will be agent-based, allowing multiple plugins to each contribute resources.
 
-* _Performance._ Sirea is designed to perform competitively and predictably. This includes a dynamic solution for the update ordering problem, efficient batching of updates between threads, use of stateful caches as needed, speculative evaluation and resource acquisition, bounded buffers to control memory and ensure fairness, a few simple optimizations, and behaviors for data parallelism. Sirea is suitable for soft real-time applications. 
+* _Performance._ Sirea is designed to perform competitively and predictably. This includes solutions for update ordering problems, batching of updates between threads, minimal use of caches, speculative evaluation and resource acquisition, bounded buffers to control memory and ensure fairness, a few simple optimizations, and behaviors for data parallelism. Sirea is suitable for soft real-time applications. 
 
 * _Batteries Included._ Sirea is intended to be a complete application framework, a valid option for industry work. Convenience functions, documentation, and utility behaviors are included. Planned packages will cover many common resources - user input, graphics, filesystem, web services. Ultimately, Sirea should be a serious, mature application framework - the first of its kind for truly declarative programming.
 
@@ -100,6 +102,10 @@ The weaknesses of Sirea RDP belong more to Sirea than to RDP.
 * RDP is designed for [object capability model](http://en.wikipedia.org/wiki/Object-capability_model) systems, using dynamic behaviors as runtime composable capabilities. (This is reflected, for example, in having fine-grained capabilities for many resources.) Sirea, however, is designed to be convenient in context of Haskell's module and type systems, and uses types to obtain ambient resources. I am not entirely comfortable with this tradeoff; it isn't necessary if one reifies the module and linking system (e.g. service registry and matchmaker). 
 
 * Sirea is sensitive to the OS clock. RDP requires robust, synchronized, monotonic clocks to work effectively, but is designed to tolerate a few milliseconds drift. Sirea is robust to small shifts in OS clock, but large sudden shift may cause problematic behavior. It is best to use Sirea in conjunction with robust time services for the OS.
+
+* Sirea provides no static analysis for cyclic feedback, stability, real-time implementation. 
+
+* Performance of dynamic behaviors is poor - i.e. expensive install and maintain; difficult to optimize and anticipate. RDP is designed with an assumption of at most a few 'layers' of dynamic behavior, for staged metaprogramming. Sirea can handle that much. A more dedicated RDP language might support deep optimizations across layers.
 
 
 Reactive Demand Programming (in Sirea)
