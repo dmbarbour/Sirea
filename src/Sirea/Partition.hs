@@ -160,7 +160,7 @@ getStepTime = getTCTime . findInPCX
 -- Partitions are better justified when they represent resources and
 -- various IO responsibilities.
 --   
-data Pt x
+data Pt x 
 
 instance Typeable1 Pt where
     typeOf1 _ = mkTyConApp tyConPt []

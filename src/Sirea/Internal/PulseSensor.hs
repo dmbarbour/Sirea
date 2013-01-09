@@ -1,3 +1,5 @@
+{-# LANGUAGE MultiParamTypeClasses, DeriveDataTypeable, FlexibleInstances #-}
+
 
 -- | The PulseSensor module supports weakly periodic tasks, usually
 -- for local garbage collection for resources like demand monitors,
@@ -33,11 +35,9 @@ import Sirea.Internal.PTypes
 type Work = IO () 
 type OnWork = IO ()
 newtype PulseReq = PulseReq (IORef (OnWork, [Work]))
+    deriving (Typeable)
 
-instance Typeable PulseReq where
-    typeOf _ = mkTyCon3 "sirea-core" "Sirea.PulseSensor" "PulseReq" `mkTyConApp` []
-
-instance Resource PulseReq where 
+instance Resource p PulseReq where 
     locateResource _ _ = PulseReq <$> newIORef (return (), [])
 
 runPulse :: PulseReq -> IO ()

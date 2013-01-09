@@ -1,3 +1,5 @@
+{-# LANGUAGE MultiParamTypeClasses, FlexibleInstances #-}
+
 -- | A declarative resource linking mechanism for Sirea and Haskell.
 --
 -- RDP has a conservative notion of resources: nothing is created,
@@ -47,13 +49,11 @@ import System.IO.Unsafe (unsafePerformIO, unsafeInterleaveIO)
 
 -- | PCX p - Partition Resource Context. Abstract.
 --
--- A partition context is an infinite, uniform space of resources.
--- Each partition holds any number of resources of each type, each
--- with a unique string identifier. Conceptually, it already holds
--- these resources, and we just need to locate them on demand. The
--- implementation is essentially lazy IO to initialize resources
--- when they are needed. (For safety, resources must not have any
--- observable effects caused by mere initialization.)
+-- A partition context is a vast space of resources. Conceptually, 
+-- it already holds the resources, and we locate them on demand. The
+-- implementation is technically lazy IO to initialize resources as
+-- needed, but this is hidden from the users if the Resources meet
+-- their contract.
 --
 -- NOTE: `PCX w` has connotations that `w` is the full world, i.e.
 -- the root partition created by `newPCX`. It is also used in type
@@ -94,10 +94,10 @@ instance Typeable1 PCX where
 -- This path is provided to the constructor because it may be useful
 -- for persistence or generation of a pseudo-random default state.
 --
-class (Typeable r) => Resource r where
+class (Typeable r) => Resource p r where
     locateResource :: PCXPath -> PCX p -> IO r
 
-instance (Typeable p) => Resource (PCX p) where
+instance (Typeable p) => Resource p0 (PCX p) where
     locateResource p _ =
         newIORef [] >>= \ store' ->
         return (PCX { pcx_ident = p, pcx_store = store' })
@@ -107,7 +107,7 @@ instance (Typeable p) => Resource (PCX p) where
 --
 --     findInPCX = findByNameInPCX ""
 --
-findInPCX :: (Resource r) => PCX p -> r
+findInPCX :: (Resource p r) => PCX p -> r
 findInPCX = findByNameInPCX ""
 
 -- | Find a resource in a partition based on both name and type.
@@ -131,10 +131,10 @@ findInPCX = findByNameInPCX ""
 -- Use of names can support dynamic behaviors and metaprogramming,
 -- but should be used with caution. There is no way to GC old names.
 --
-findByNameInPCX :: (Resource r) => String -> PCX p -> r
+findByNameInPCX :: (Resource p r) => String -> PCX p -> r
 findByNameInPCX nm pcx = unsafePerformIO (findByNameInPCX_IO nm pcx)
 
-findByNameInPCX_IO :: (Resource r) => String -> PCX p -> IO r 
+findByNameInPCX_IO :: (Resource p r) => String -> PCX p -> IO r 
 findByNameInPCX_IO nm pcx = mfix $ \ r -> 
     let pElt = (typeOf r, nm) in
     let path = pElt : pcx_ident pcx in

@@ -81,8 +81,8 @@ newtype ORefR x = ORefR (IORef (ORefSt x))
 instance Typeable1 ORefR where
     typeOf1 _ = mkTyConApp tycORefR []
         where tycORefR = mkTyCon3 "sirea-core" "Sirea.ORef.Internal" "ORefR"
-instance (ORefType x) => Resource (ORefR x) where
-    locateResource _ = ORefR <$> newIORef initORefSt
+instance (Partition p, ORefType x) => Resource p (ORefR x) where
+    locateResource _ _ = ORefR <$> newIORef initORefSt
 
 -- details for an active ORef:
 --   oref_hist   : history relative to stability

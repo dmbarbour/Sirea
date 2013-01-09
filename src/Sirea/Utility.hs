@@ -1,8 +1,8 @@
-{-# LANGUAGE MultiParamTypeClasses, TypeOperators, GADTs #-}
+{-# LANGUAGE MultiParamTypeClasses, DeriveDataTypeable, TypeOperators, GADTs #-}
 
 -- | Utility behaviors that lack a better home. 
 module Sirea.Utility
-    ( HasPrinter(..), bprint
+    ( bprint, bprint_
     , BUndefined(..), bundefined
     -- , BUnit(..)
     ) where
@@ -34,29 +34,14 @@ import Control.Monad (when, liftM)
 -}
 
 
--- | For debugging, it's often useful to dump information to the
--- console. The basic printer will print each unique message to a 
--- line on the console. Behavior for redundant messages is up to
--- the printer - e.g. replay after a few seconds, or skip them.
-class HasPrinter b p where bprint_ :: b (S p String) (S p ())
-
 -- | Print allows developer to provide show function (a -> String)
 -- and preserves the type of the input. This makes it easier to
 -- inject bprint into a behavior for debugging.
-bprint :: (HasPrinter b p, BFmap b, BProd b) 
-       => (a -> String) -> b (S p a) (S p a)
+bprint :: (a -> String) -> BCX w (S P0 a) (S P0 a)
 bprint showFn = bvoid $ bfmap showFn >>> bprint_
 
--- BPrint for BCX P0. At the moment: not quite correct for the
--- reprint behavior. Currently will reprint messages after a 
--- few seconds if they have not been printed recently. 
---
--- TODO: Fix printB for precise tracking of demands. Probably
--- use demand monitor & agent resource?
-instance HasPrinter (BCX w) P0 where bprint_ = printB
-
-printB :: BCX w (S P0 String) (S P0 ())
-printB = unsafeOnUpdateBCX mkPrinter >>> bconst ()
+bprint_ :: BCX w (S P0 String) (S P0 ())
+bprint_ = unsafeOnUpdateBCX mkPrinter >>> bconst ()
     where mkPrinter = return . mbPrint . pb_list . findInPCX
           mbPrint _ _ Nothing = return ()
           mbPrint pbL t (Just msg) = addToPrinter pbL t msg
@@ -80,11 +65,8 @@ updatelRC t msg lRC =
             let b' = b && (msg /= mx) in
             (r:l,b')
 
-newtype PrintBuffer = PrintBuffer { pb_list  :: IORef [(T,String)] }
-instance Typeable PrintBuffer where
-    typeOf _ = mkTyConApp typb []
-        where typb = mkTyCon3 "sirea-core" "Sirea.Utility.Internal" "PrintBuffer"
-instance Resource PrintBuffer where
+newtype PrintBuffer = PrintBuffer { pb_list  :: IORef [(T,String)] } deriving (Typeable)
+instance Resource P0 PrintBuffer where
     locateResource _ _ = liftM PrintBuffer $ newIORef [] 
            
 
@@ -119,8 +101,8 @@ class BUnit b x where
 
 -- | BUndefined - exploratory programming often involves incomplete
 -- behaviors. `bundefined` serves a similar role to `undefined` in
--- Haskell. Direct use of `undefined` might fail at compile time, 
--- even if embedded in dead code. `bundefined` will only fail if
+-- Haskell. Direct use of `undefined` might fail when compiling the
+-- behavior even if embedded in dead code. bundefined fails only if
 -- there is stable, active input signal, and a consumer for the 
 -- undefined result.
 -- 

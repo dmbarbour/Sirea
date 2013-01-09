@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveDataTypeable, MultiParamTypeClasses, FlexibleInstances #-}
 
 module Sirea.Internal.PTypes
     ( Stepper(..)
@@ -83,7 +84,8 @@ data TC = TC
     , tc_work :: !(IORef [Work])
     , tc_send :: !(IORef [Work])  
     , tc_time :: !(IORef (T,T)) -- (tEff,tAct)
-    }
+    } deriving (Typeable)
+
 type Event = IO ()
 type Work = IO ()
 
@@ -98,10 +100,7 @@ newTC = TC <$> newIORef False
            <*> newIORef (tZero,tZero)
     where tZero = mkTime 0 0
 
-instance Typeable TC where
-    typeOf _ = mkTyConApp tycTC []
-        where tycTC = mkTyCon3 "sirea-core" "Sirea.Partition.Internal" "TC"
-instance Resource TC where
+instance Resource p TC where
     locateResource _ _ = newTC
 
 -- | In each runStepper round:

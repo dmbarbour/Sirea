@@ -1,4 +1,4 @@
-{-# LANGUAGE GADTs, Rank2Types #-}
+{-# LANGUAGE GADTs, Rank2Types, MultiParamTypeClasses, DeriveDataTypeable #-}
 
 -- | Build a Sirea application for embedding in an external loop.
 --
@@ -378,11 +378,8 @@ bUnsafeExit = unsafeOnUpdateBCX $ \ cw ->
     let op _ = maybe (return ()) (const kill) in
     return op
 
-newtype ExitR = ExitR { inExitR :: IORef Bool }
-instance Typeable ExitR where
-    typeOf _ = mkTyConApp tycExitR []
-        where tycExitR = mkTyCon3 "sirea-core" "Sirea.Build.Internal" "ExitR"
-instance Resource ExitR where
+newtype ExitR = ExitR { inExitR :: IORef Bool } deriving (Typeable)
+instance Resource P0 ExitR where
     locateResource _ _ = liftM ExitR $ newIORef False
 
 

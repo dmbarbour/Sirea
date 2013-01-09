@@ -1,4 +1,4 @@
-{-# LANGUAGE GADTs #-}
+{-# LANGUAGE GADTs, MultiParamTypeClasses, FlexibleInstances #-}
 
 -- | BCross is the implementation of cross for B and BCX.
 --
@@ -201,7 +201,7 @@ newtype GobStopper = Gob { unGob :: IORef [Stopper] }
 instance Typeable GobStopper where
     typeOf _ = mkTyConApp tycGS []
         where tycGS = mkTyCon3 "Sirea" "Sirea.Partition.Internal" "GobStopper"
-instance Resource GobStopper where
+instance Resource w GobStopper where
     locateResource _ _ = Gob <$> newIORef []
 
 -- | runGobStopper will:
@@ -277,7 +277,7 @@ obwZero = OBW False False []
 instance Typeable1 OutBox where
     typeOf1 _ = mkTyConApp tycOB []
         where tycOB = mkTyCon3 "Sirea" "Sirea.Partition.Internal" "OutBox"
-instance (Partition p) => Resource (OutBox p) where
+instance (Partition p0, Partition p) => Resource p0 (OutBox p) where
     locateResource _ _ = OutBox <$> newSemaphore batchesInFlight
                                 <*> newIORef obwZero
 
