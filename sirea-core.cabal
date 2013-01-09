@@ -46,6 +46,7 @@ Library
     ,parallel (>= 3.0)
     ,time (>= 1.4)
     ,containers (>= 0.5)
+    --,hashtables (>= 1.0)
 
   Exposed-Modules:
     Sirea.Prelude
