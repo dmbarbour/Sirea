@@ -721,6 +721,7 @@ bevalbOrElse = bevalOrElse
 "bsecond.bfirst" forall f g .
                 (bsecond f) . (bfirst g) = (bfirst g) . (bsecond f)
 
+"bvoid.bvoid" bvoid . bvoid = bvoid
  #-}
 
 

@@ -129,6 +129,18 @@ instance (Partition p, Typeable e) => Resource p (DeMonL p e) where
 instance (Partition p) => Resource p (AMon p) where
     locateResource _ pcx = AMon <$> newDemandMonitor sigAny (==) pcx
  
+-- newDMD will return a coupled DemandAggr and MonitorDist pair.
+newDMD  :: (Partition p)
+        => ([Sig e] -> Sig z)
+        -> (z -> z -> Bool)
+        -> PCX p 
+        -> IO (DemandAggr e z, MonitorDist z)
+newDMD zfn eqfn cp =     
+    newMonitorDist cp (zfn []) >>= \ md ->
+    wrapEqFilter dtEqf eqfn (primaryMonitorLnk md) >>= \ lnMon ->
+    newDemandAggr cp lnMon zfn >>= \ d ->
+    return (d,md)
+
 -- newDemandMonitor is the basis for other demand monitors.
 -- developers to control the zip function and an adjacency filter.
 newDemandMonitor :: (Partition p) 
@@ -137,9 +149,7 @@ newDemandMonitor :: (Partition p)
                      -> PCX p -- partition resources (for time
                      -> IO (B (S p e) (S p ()), B (S p ()) (S p z)) 
 newDemandMonitor zfn eqfn cp = 
-    newMonitorDist cp (zfn []) >>= \ md ->
-    wrapEqFilter dtEqf eqfn (primaryMonitorLnk md) >>= \ lnMon ->
-    newDemandAggr cp lnMon zfn >>= \ da ->
+    newDMD zfn eqfn cp >>= \ (da,md) ->
     return (demandFacetB da, monitorFacetB md)
 
 demandFacetB :: DemandAggr e z -> B (S p e) (S p ())

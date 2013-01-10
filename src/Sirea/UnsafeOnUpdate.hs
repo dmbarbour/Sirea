@@ -35,7 +35,7 @@ module Sirea.UnsafeOnUpdate
 import Data.IORef
 import Data.Typeable
 import Control.Applicative
-import Control.Monad (unless)
+import Control.Monad (unless, when)
 import Sirea.Link
 import Sirea.Signal
 import Sirea.Time
@@ -48,13 +48,13 @@ import Sirea.Internal.Tuning (dtFinalize)
 
 import Control.Exception (assert)
 
+--import Debug.Trace
 
 -- | unsafeOnUpdateB - perform an IO action for every unique value
 -- in a signal as it becomes stable, then forward the update. There
 -- is also a one-time IO action on initial construction.
 unsafeOnUpdateB :: (Eq a) => IO (T -> Maybe a -> IO ()) -> B (S p a) (S p a)
 unsafeOnUpdateB mkOp = unsafeOnUpdateBL mkOp >>> undeadB
-
 
 -- | unsafeOnUpdateBL - a very lazy variation of unsafeOnUpdateB.
 -- This variation allows dead-code elimination of the behavior when
@@ -79,7 +79,7 @@ runToStability :: (Eq a) => IORef (Sig a, Maybe T) -> IORef (Maybe a)
 runToStability rfSig rfA op su =
     -- update the stored signal so we don't miss any updates.
     readIORef rfSig >>= \ (s0,t0) -> 
-    let tf  = su_stable su in
+    let tf  = su_stable su in 
     let sf  = maybe s0 (\(s,t) -> s_switch s0 t s) (su_state su) in
     let sfc = maybe s_never (s_trim sf) tf in -- cleaned up signal.
     sfc `seq` writeIORef rfSig (sfc,tf) >>
@@ -90,12 +90,15 @@ runToStability rfSig rfA op su =
     let tUpd   = snd <$> su_state su in
     let tLower = t0 <|> tUpd in
     let tUpper = tf <|> ((`addTime` dtFinalize) <$> (tUpd <|> t0)) in
+
+    --traceIO ("UnsafeOnUpdate @ " ++ show tLower ++ " - " ++ show tUpper) >>
     case (,) <$> tLower <*> tUpper of
         Just (tL,tU) ->
-            unless (tL == tU) $ assert (tL < tU) $
+            when (tL < tU) $
                 let lsigs = sigToList sf tL tU in
                 let action (t,a) =
-                        unless (t == tU) $ assert ((tL <= t) && (t < tU)) $
+                        unless (t == tU) $ 
+                            assert ((tL <= t) && (t < tU)) $
                             readIORef rfA >>= \ a0 ->
                             unless (a == a0) $
                                 writeIORef rfA a >> 

@@ -256,6 +256,7 @@ maintainApp apw tStable =
            ln_update (ap_luMain apw) su >> -- indicate signal inactive in future.
            schedule dtHeartbeat (addTCRecv tc0 nextStep)
       else getTCTime tc0 >>= \ tNow -> 
+           --traceIO ("heartbeat @ " ++ show tNow) >>
            if (tNow > (tStable `addTime` dtRestart))
                 then -- RESTART APPLICATION (halt then restore activity)
                     let tRestart = tNow `addTime` dtHeartbeat in

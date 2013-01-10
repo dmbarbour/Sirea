@@ -25,9 +25,12 @@ dtGrace     = dtHeartbeat -- time allotted for graceful start and stop
 -- At certain locations, where updates are delivered via partition
 -- stepper, we have opportunity to block or delay some updates. This
 -- can help regulate behavior in case of cyclic feedback systems. 
+--
+-- A more explicit choke may also be useful, in cases where we want
+-- block updates that apply too far in the future.
 dtInsigStabilityUp, dtFutureChoke :: DT
 dtInsigStabilityUp = dtHeartbeat - 0.001 -- largest insignificant pure-stability update
-dtFutureChoke      = dtEqf - 0.001       -- try to choke updates if far beyond stability
+dtFutureChoke      = dtEqf - 0.001       -- slow down updates if far beyond stability
 
 -- There are several cases where we'll want to evaluate signals into
 -- their near future. For `bseq` we simply want to flatten signals 
@@ -74,7 +77,7 @@ batchesInFlight = 6
 -- some historical data to accommodate late arriving observers. The
 -- demand sources aspect impacts stability, so is more limited. 
 dtDaggrHist, dtMdistHist :: DT
-dtDaggrHist = dtHeartbeat     -- how long to tolerate late-arriving demands
+dtDaggrHist = dtHeartbeat -- how long to tolerate late-arriving demands
 dtMdistHist = 2 * dtHeartbeat -- how long to tolerate late-arriving observers
 
 -- UnsafeOnUpdate behaviors will execute IO actions as they become
