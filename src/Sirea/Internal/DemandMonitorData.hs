@@ -14,10 +14,12 @@
 -- Ideally, I could detect cycles and clip them at a minimal subset
 -- of locations, thus exposing less intermediate state and doing
 -- minimal rework. Cycles have form: monitor >>> process >>> demand.
--- However, behaviors are mostly opaque to Sirea, and process can
--- hide presence of a cycle, and dynamic behaviors hinder analysis.
--- My efforts to detect cycles have so far been inadequate. Instead,
--- I assume cycles are present.
+-- However, they are difficult to detect due to dynamic behavior and
+-- intermediate processing. 
+--
+-- Until I have a robust, cheap way to detect cycles, I must assume
+-- they exist. For now, demands are always delivered the step after
+-- they become available. 
 --
 -- Demand aggregators are stabilized against the clock rather than
 -- demand sources. This makes it easy to reason about stability and

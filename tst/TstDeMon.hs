@@ -42,10 +42,9 @@ main :: IO ()
 main = runSireaApp $ allTests
 
 tstCycle :: BCX w (S P0 ()) (S P0 ())
-tstCycle = snd deMon >>> bprint show >>> bdelay 1.0 >>> bfmap addOne >>> fst deMon
-    where deMon = demandMonitor "tstCycle"
-          addOne = succ . int . foldr max 0
-          
+tstCycle = snd dm >>> bdelay 1.0 >>> bfchoke 9.0 >>> bfmap addOne >>> bprint show >>> fst dm
+     where dm = demandMonitor "tstCycle"
+           addOne lst = if (null lst) then 0 :: Int else succ (maximum lst)
 
 -- 'int' is just a type annotation to help inference
 int :: Int -> Int

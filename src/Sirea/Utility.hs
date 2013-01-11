@@ -4,6 +4,7 @@
 module Sirea.Utility
     ( bprint, bprint_
     , BUndefined(..), bundefined
+    , BFChoke(..)
     -- , BUnit(..)
     ) where
 
@@ -18,6 +19,7 @@ import Sirea.Link
 import Sirea.Signal
 
 import Sirea.Internal.Tuning (dtPrintExpire)
+import Sirea.Internal.LTypes (su_piggyback)
 import Data.Typeable
 import Data.IORef
 import Control.Monad (when, liftM)
@@ -82,22 +84,6 @@ instance Resource P0 PrintBuffer where
 
 
 
-{- Don't really know how to extract signal at `p`. Maybe a simplified
-   variation would work?
-
--- | BUnit - extract a unit signal. This is actually difficult to
--- achieve generically due to partition types and duration coupling,
--- i.e. can't just invent a unit signal, actually need to acquire it
--- and put it in the right partition. 
---
--- Trivia: Generalized Arrows (from Adam Megacz) require generic
--- ability to reduce signals to unit. Inability to express this is
--- why generalized arrows were eventually rejected for RDP.
---
--- possible interface?
-class BUnit b x where
-    bunit :: (SigInP p x) => b x (S p ())
--}
 
 -- | BUndefined - exploratory programming often involves incomplete
 -- behaviors. `bundefined` serves a similar role to `undefined` in
@@ -149,6 +135,52 @@ lnPlus :: Lnk (S p a) -> Lnk (S p a) -> Lnk (S p a)
 lnPlus LnkDead y = y
 lnPlus x LnkDead = x
 lnPlus x y = LnkSig (ln_lnkup x `ln_append` ln_lnkup y)
+
+
+-- | Developers in RDP cannot create closed loops, but they can make
+-- open feedback loops. In some cases, these might anticipate far 
+-- into the future - a waste of time and memory. Use of `bfchoke`
+-- can address this by restricting updates that are too far ahead of
+-- stability. (You can specify how far is too far.)
+--
+-- For example, a simple demonstration cycle for demand monitors is:
+--   tstCycle :: BCX w (S P0 ()) (S P0 ())
+--   tstCycle = snd dm >>> bdelay 1.0 >>> bfmap addOne >>> bprint show >>> fst dm
+--       where dm = demandMonitor "tstCycle"
+--             addOne lst = if (null lst) then (0 :: Int) else succ (maximum lst)
+-- This will print 0,1,2,... and so on, one number per second.
+--
+-- However, it also aggregates memory, computing a deep future. Use
+-- bfchoke to prevent this aggregation, e.g.:
+--   snd dm >>> bdelay 1.0 >>> bchoke 9.0 >>> bfmap addOne >>> bprint show >>> fst dm
+-- This will only compute nine seconds ahead then wait for real-time to catch up.
+--
+class BFChoke b where bfchoke :: DT -> b (S p a) (S p a)
+instance BFChoke B where bfchoke = fchokeB
+instance BFChoke (BCX w) where bfchoke = wrapBCX . const . bfchoke
+
+fchokeB :: DT -> B (S p a) (S p a)
+fchokeB dt = unsafeLinkB mkln where
+    mkln LnkDead = return LnkDead
+    mkln (LnkSig lu) = 
+        newIORef (SigUp Nothing Nothing) >>= \ rf ->
+        let touch = ln_touch lu in
+        let update su = 
+                readIORef rf >>= \ su0 ->
+                let su' = su_piggyback su0 su in
+                if deliverChoked dt su' 
+                    then writeIORef rf (SigUp Nothing Nothing) >>
+                         ln_update lu su'
+                    else let suTmp = SigUp Nothing (su_stable su') in
+                         writeIORef rf su' >>
+                         ln_update lu suTmp
+        in
+        let lu' = LnkUp { ln_touch = touch, ln_update = update } in
+        return $ LnkSig lu'
+
+deliverChoked :: DT -> SigUp z -> Bool
+deliverChoked dt (SigUp (Just (_,tu)) (Just ts)) = tu < (ts `addTime` dt)
+deliverChoked _ _ = False
 
 -- TODO:
 --   bunit :: b x (S p ()).
