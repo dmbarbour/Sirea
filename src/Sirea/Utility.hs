@@ -147,12 +147,12 @@ lnPlus x y = LnkSig (ln_lnkup x `ln_append` ln_lnkup y)
 --   tstCycle :: BCX w (S P0 ()) (S P0 ())
 --   tstCycle = snd dm >>> bdelay 1.0 >>> bfmap addOne >>> bprint show >>> fst dm
 --       where dm = demandMonitor "tstCycle"
---             addOne lst = if (null lst) then (0 :: Int) else succ (maximum lst)
--- This will print 0,1,2,... and so on, one number per second.
+--             addOne = succ . maximum . ((0::Int):)
+-- This will print 1,2,3,... and so on, one number per second.
 --
 -- However, it also aggregates memory, computing a deep future. Use
 -- bfchoke to prevent this aggregation, e.g.:
---   snd dm >>> bdelay 1.0 >>> bchoke 9.0 >>> bfmap addOne >>> bprint show >>> fst dm
+--   snd dm >>> bdelay 1.0 >>> bfchoke 9.0 >>> bfmap addOne >>> bprint show >>> fst dm
 -- This will only compute nine seconds ahead then wait for real-time to catch up.
 --
 class BFChoke b where bfchoke :: DT -> b (S p a) (S p a)
@@ -180,7 +180,7 @@ fchokeB dt = unsafeLinkB mkln where
 
 deliverChoked :: DT -> SigUp z -> Bool
 deliverChoked dt (SigUp (Just (_,tu)) (Just ts)) = tu < (ts `addTime` dt)
-deliverChoked _ _ = False
+deliverChoked _ _ = True
 
 -- TODO:
 --   bunit :: b x (S p ()).
