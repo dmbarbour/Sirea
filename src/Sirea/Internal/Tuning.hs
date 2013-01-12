@@ -8,7 +8,7 @@ module Sirea.Internal.Tuning
     , batchesInFlight
     , dtDaggrHist, dtMdistHist
     , dtFinalize
-    , dtPrintExpire
+    , dtPrintExpire    
     ) where
 
 import Sirea.Time (DT)

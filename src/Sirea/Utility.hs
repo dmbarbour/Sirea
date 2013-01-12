@@ -19,7 +19,6 @@ import Sirea.Link
 import Sirea.Signal
 
 import Sirea.Internal.Tuning (dtPrintExpire)
-import Sirea.Internal.LTypes (su_piggyback)
 import Data.Typeable
 import Data.IORef
 import Control.Monad (when, liftM)
