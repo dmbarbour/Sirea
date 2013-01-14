@@ -26,7 +26,7 @@ tstActive1 = fst amon >>> snd amon >>> assertb "tstActive1" (== True)
 tstActive2 = (fst amon &&& snd amon) >>> bsnd >>> assertb "tstActive2" (== True)
     where amon = activityMonitor "tstActive2"
 tstInactive2 = snd dmon >>> assertb "tstInactive2" (== [])
-    where dmon = demandListMonitor "L"
+    where dmon = demandMonitor "L"
           inject = bconst (0 :: Int) >>> fst dmon
 
 tstNums = bvoid $ inject >>> monitor >>> assertb "tstNums" (== [3,4,5,7])

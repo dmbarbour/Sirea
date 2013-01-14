@@ -21,7 +21,7 @@ module Sirea.Internal.BImpl
     , unsafeSigZipB
     , unsafeChangeScopeB 
     , unsafeAddStabilityB 
-    , unsafeEqShiftB, lnEqShift, wrapEqFilter
+    , unsafeEqShiftB, lnEqShift, wrapEqFilter, eqShift
 
     , unsafeFullMapB
     , phaseUpdateB

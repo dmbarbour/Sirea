@@ -1,5 +1,7 @@
 {-# LANGUAGE DeriveDataTypeable, MultiParamTypeClasses, FlexibleInstances, GADTs #-}
 
+-- (NOTE: THIS MODULE IS BEING MERGED INTO DEMAND MONITOR)
+
 -- | This module provides observable, mutable references to support 
 -- integration with effectful partitions. Two reference types are
 -- provided - effectively, one for each half of a demand monitor.
@@ -9,7 +11,7 @@
 --
 -- Corresponding behaviors can access these values. The SRefO is
 -- updated by procedure, while the SRefI causes an event to fire
--- when data is available.
+-- in the partition when data is available.
 --
 -- This module assumes partitions use a static set of SRefs, so they
 -- must be declared (using a typeclass) and accessed only by type.  
@@ -21,10 +23,13 @@
 -- of a library. Hide them as an implementation detail.
 --
 -- (this module isn't tested yet)
-module Sirea.SRef
+module Sirea.SRef 
     ( DeclareSRefO, SRefO, publishSRef, bObserveSRef
     , DeclareSRefI, SRefI, bSignalSRef, setHandlerSRef
     ) where
+
+-- IDEA: Consider developing a `BRef` that enables access to ad-hoc
+-- behaviors that initiate in the same partition.
 
 import Data.Maybe
 import Data.IORef

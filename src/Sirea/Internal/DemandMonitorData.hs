@@ -35,6 +35,7 @@
 module Sirea.Internal.DemandMonitorData
     ( DemandAggr, newDemandAggr, newDemandLnk 
     , MonitorDist, newMonitorDist, primaryMonitorLnk, newMonitorLnk
+    , PartD(..), mkPartD
     ) where
 
 -- TODO: Consider switching to hashtables for performance.

@@ -23,9 +23,8 @@
 -- gratuitously initializing monitors.
 --
 -- The weakness of demand monitors is stability. A demand set will
--- aggregate instability from every contributing demand. To mitigate
--- this, a few variations on demand monitors provide a specialized
--- view of demands.
+-- aggregate instability from every contributing demand, which can
+-- result in problems scaling if fan-in is large. 
 --
 -- This module provides concrete demand monitors for BCX, and a 
 -- generic interface via the HasDemandMonitor typeclass.
@@ -33,7 +32,15 @@
 module Sirea.DemandMonitor 
     ( DemandMonitor
     , HasDemandMonitor(..)
+    , activityMonitor   
     ) where
+
+-- TODO: partition IO access into the partition's demand monitors (SRef-like?)
+-- TODO: decide how to handle opaque non-Ord demand types
+--   option 1: via dedicated class 
+--   option 2: via dedicated BCX instance
+--   option 3: using semantic hack like StableName
+--   option 4: developing a PartialOrd class?
 
 import Control.Applicative
 import Control.Exception (assert)
@@ -54,80 +61,39 @@ import Sirea.Internal.Tuning (dtEqf)
 -- | DemandMonitor is a synonym for the (demand,monitor) facet pair 
 type DemandMonitor b p e z = (b (S p e) (S p ()), b (S p ()) (S p z))
 
--- | HasDemandMonitor is the generic interface to obtain a demand
--- monitor. Demand monitors are specific to the function and all 
--- arguments used to identify them.
-class HasDemandMonitor b p where
-    -- | The idealized demand monitor observes the set of demands,
-    -- represented here as a sorted list (low to high) without any
-    -- duplicates. Unfortunately, this requires an Ord constraint,
-    -- so is unsuitable for opaque types (e.g. functions or dynamic
-    -- behaviors).
+-- | Obtain ambient instances of demand-monitors by type and name.
+-- The output list will be sorted (ascending), without duplicates.
+class HasDemandMonitor b p where 
     demandMonitor :: (Ord e, Typeable e) => String -> DemandMonitor b p e [e]
 
-    -- | The demandListMonitor does not process the set of demands,
-    -- so may include duplication and disorder but can represent the
-    -- opaque types. Developers should treat it as a set regardless.
-    demandListMonitor :: (Typeable e) => String -> DemandMonitor b p e [e]
-
-    -- | An activityMonitor is highly specialized to report a simple
-    -- boolean value indicating whether a resource has any demand.
-    -- This can be useful to dynamically load resources (though the
-    -- AgentResource may prove more efficient for that purpose).
-    activityMonitor :: String -> DemandMonitor b p () Bool
-
-{-
-    -- | A minimax monitor is similar to a demand monitor, but will
-    -- only return the lowest and highest values in the set. This
-    -- improves stability relative to a larger set of demands, and
-    -- is useful in cases where you can't deal with many concurrent
-    -- demands anyway.
-    minimaxMonitor :: (Ord e, Typeable e) => String -> DemandMonitor b p e [e]
--}
+-- | An activityMonitor is simply a demand monitor that reports only
+-- whether any activity is present. Note that if you're always going
+-- to perform the same action when active, an AgentResource would be
+-- more appropriate.
+activityMonitor :: (HasDemandMonitor b p, BFmap b) => String -> DemandMonitor b p () Bool
+activityMonitor nm = (d,m') where
+    (d,m) = demandMonitor nm
+    m' = m >>> bfmap (not . null)
 
 instance (Partition p) => HasDemandMonitor (BCX w) p where
     demandMonitor = demandMonitorBCX
-    demandListMonitor = demandListMonitorBCX
-    activityMonitor = activityMonitorBCX
 
 demandMonitorBCX :: (Partition p, Typeable e, Ord e) => String -> DemandMonitor (BCX w) p e [e]
 demandMonitorBCX nm = fix $ \ dm ->
-    let deMon = getDeMon . findByNameInPCX nm . getP dm in
-    let de = wrapBCX $ fst . deMon in
-    let mon = wrapBCX $ snd . deMon in
-    (de,mon)
-
-demandListMonitorBCX :: (Partition p, Typeable e) => String -> DemandMonitor (BCX w) p e [e]
-demandListMonitorBCX nm = fix $ \ dm ->
-    let deMonL = getDeMonL . findByNameInPCX nm . getP dm in
-    let de = wrapBCX $ fst . deMonL in
-    let mon = wrapBCX $ snd . deMonL in
-    (de,mon)
-
-activityMonitorBCX :: (Partition p) => String -> DemandMonitor (BCX w) p () Bool
-activityMonitorBCX nm = fix $ \ dm ->
-    let aMon = getAMon . findByNameInPCX nm . getP dm in
-    let de = wrapBCX $ fst . aMon in
-    let mon = wrapBCX $ snd . aMon in
-    (de,mon)
+    let cwToDMD = getDMD . findByNameInPCX nm . getP dm in
+    let d = wrapBCX $ demandFacetB . fst . cwToDMD in
+    let m = wrapBCX $ monitorFacetB  . snd . cwToDMD in
+    (d,m)
 
 -- load PCX for correct partition (type system tricks)
 getP :: (Partition p) => DemandMonitor b p e z -> PCX w -> PCX p
 getP _ = findInPCX
 
-newtype DeMon p e = DeMon { getDeMon :: (DemandMonitor B p e [e]) } deriving (Typeable)
-newtype DeMonL p e = DeMonL { getDeMonL :: (DemandMonitor B p e [e]) } deriving (Typeable)
-newtype AMon p = AMon { getAMon :: (DemandMonitor B p () Bool) } deriving (Typeable)
+newtype DMD e z = DMD { getDMD :: (DemandAggr e z, MonitorDist z) } deriving (Typeable)
 
-instance (Partition p, Typeable e, Ord e) => Resource p (DeMon p e) where
-    locateResource _ pcx = DeMon <$> newDemandMonitor mergeSort (==) pcx
+instance (Partition p, Typeable e, Ord e) => Resource p (DMD e [e]) where
+    locateResource _ cp = DMD <$> newDMD mergeSort (==) cp
         where mergeSort = sigMergeSortSet compare
-instance (Partition p, Typeable e) => Resource p (DeMonL p e) where
-    locateResource _ pcx = DeMonL <$> newDemandMonitor sigListZip neq pcx
-        where neq [] [] = True
-              neq _ _ = False
-instance (Partition p) => Resource p (AMon p) where
-    locateResource _ pcx = AMon <$> newDemandMonitor sigAny (==) pcx
  
 -- newDMD will return a coupled DemandAggr and MonitorDist pair.
 newDMD  :: (Partition p)
@@ -141,17 +107,6 @@ newDMD zfn eqfn cp =
     newDemandAggr cp lnMon zfn >>= \ d ->
     return (d,md)
 
--- newDemandMonitor is the basis for other demand monitors.
--- developers to control the zip function and an adjacency filter.
-newDemandMonitor :: (Partition p) 
-                     => ([Sig e] -> Sig z) -- n-zip function
-                     -> (z -> z -> Bool)   -- partial equality (false if unknown)
-                     -> PCX p -- partition resources (for time
-                     -> IO (B (S p e) (S p ()), B (S p ()) (S p z)) 
-newDemandMonitor zfn eqfn cp = 
-    newDMD zfn eqfn cp >>= \ (da,md) ->
-    return (demandFacetB da, monitorFacetB md)
-
 demandFacetB :: DemandAggr e z -> B (S p e) (S p ())
 demandFacetB da = bvoid (unsafeLinkB lnDem) >>> bconst ()
     where lnDem ln = assert (ln_dead ln) $ LnkSig <$> newDemandLnk da
@@ -160,22 +115,6 @@ monitorFacetB :: MonitorDist z -> B (S p ()) (S p z)
 monitorFacetB md = unsafeLinkB lnMon
     where lnMon LnkDead = return LnkDead -- dead code elim.
           lnMon (LnkSig lu) = LnkSig <$> newMonitorLnk md lu
-
-
--- sigListZip will essentially zip a collection of signals into a
--- signal of collections. The resulting signal is always active, but 
--- has value [] when the argument contains no active signals. In RDP
--- this is used for demand monitors, where the signal is masked by 
--- the observer's demand (to ensure duration coupling).
---
--- The output at any given instant will be ordered the same as the
--- collection of signals. The input list must be finite.
-sigListZip :: [Sig a] -> Sig [a]
-sigListZip = foldr (s_full_zip jf) (s_always [])
-  where jf (Just x) (Just xs) = Just (x:xs)
-        jf _ xs = xs
-
-
 
 -- merge-sort a list of signals, eliminating duplicates as we go.
 -- My (unproven) intuition is that a merge-sort in this manner will
@@ -203,23 +142,4 @@ mergeListSet cmp xs@(x:xs') ys@(y:ys') =
         LT -> x:(mergeListSet cmp xs' ys )
         EQ -> x:(mergeListSet cmp xs' ys')
         GT -> y:(mergeListSet cmp xs  ys')
-
-
-sigAny :: [Sig a] -> Sig Bool
-sigAny sigs = s_full_map isActive sigsMerged
-    where sigsMerged = foldr (<|>) empty sigs
-          isActive Nothing  = Just False
-          isActive (Just _) = Just True
-
-{-
--- take the k minimum or maximum elements. (Min and max is much
--- more stable than taking the middle elements, which could 
--- vary based on changes at either end.)
-sigKMin :: (Ord e) => Int -> [Sig e] -> Sig [e]
-sigKMin k = fmap (take k) . (sigMergeSortSet compare)
-
-sigKMax :: (Ord e) => Int -> [Sig e] -> Sig [e]
-sigKMax k = fmap (take k) . (sigMergeSortSet (flip compare))
--}    
-
 
