@@ -1,4 +1,6 @@
-{-# LANGUAGE GADTs, DeriveDataTypeable, MultiParamTypeClasses, FlexibleInstances #-}
+{-# LANGUAGE GADTs, DeriveDataTypeable, MultiParamTypeClasses, FlexibleInstances,
+             GeneralizedNewtypeDeriving
+  #-}
 
 -- | RDP behaviors are effectful, albeit in a constrained manner. A
 -- resource's state may be influenced by the set of demands on it. A
@@ -39,7 +41,7 @@ module Sirea.DemandMonitor
 -- TODO: decide how to handle opaque non-Ord demand types
 --   option 1: via dedicated class 
 --   option 2: via dedicated BCX instance
---   option 3: using semantic hack like StableName
+--   option 3: using semantic hack like StableName (..I'd rather not..)
 --   option 4: developing a PartialOrd class?
 
 import Control.Applicative
@@ -71,9 +73,12 @@ class HasDemandMonitor b p where
 -- to perform the same action when active, an AgentResource would be
 -- more appropriate.
 activityMonitor :: (HasDemandMonitor b p, BFmap b) => String -> DemandMonitor b p () Bool
-activityMonitor nm = (d,m') where
+activityMonitor nm = (d',m') where
     (d,m) = demandMonitor nm
+    d' = bfmap AM >>> d
     m' = m >>> bfmap (not . null)
+
+newtype AM = AM () deriving (Typeable, Eq, Ord) -- to separate activityMonitor instances
 
 instance (Partition p) => HasDemandMonitor (BCX w) p where
     demandMonitor = demandMonitorBCX
@@ -89,9 +94,9 @@ demandMonitorBCX nm = fix $ \ dm ->
 getP :: (Partition p) => DemandMonitor b p e z -> PCX w -> PCX p
 getP _ = findInPCX
 
-newtype DMD e z = DMD { getDMD :: (DemandAggr e z, MonitorDist z) } deriving (Typeable)
+newtype DMD e = DMD { getDMD :: (DemandAggr e [e], MonitorDist [e]) } deriving (Typeable)
 
-instance (Partition p, Typeable e, Ord e) => Resource p (DMD e [e]) where
+instance (Partition p, Typeable e, Ord e) => Resource p (DMD e) where
     locateResource _ cp = DMD <$> newDMD mergeSort (==) cp
         where mergeSort = sigMergeSortSet compare
  

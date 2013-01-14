@@ -33,7 +33,6 @@ module Sirea.BCX
     ( BCX
     , unwrapBCX
     , wrapBCX
-    , onNextStepBCX
     ) where
 
 import Prelude hiding ((.),id)
@@ -41,7 +40,7 @@ import Data.Typeable
 import Control.Applicative
 import Control.Category
 --import Control.Arrow
-import Sirea.Internal.BCross (crossB, stepDelayB, phaseDelayB)
+import Sirea.Internal.BCross (crossB)
 import Sirea.Behavior
 import Sirea.Trans.Static 
 import Sirea.Partition
@@ -84,73 +83,5 @@ instance BDynamic (BCX w) B where
 instance BDynamic (BCX w) (BCX w) where
     beval dt = wrapBCX $ \ cw -> 
         bfirst (bfmap (`unwrapBCX` cw)) >>> beval dt
-
--- | onNextStepBCX will delay processing until the next runStepper
--- event, and processes updates as though from a remote partition.
--- This can be useful for achieving snapshot consistency relative
--- even to a thread's internal updates, or for receiving updates
--- from worker threads.
--- 
-onNextStepBCX :: (Partition p) => BCX w (S p x) (S p x)
-onNextStepBCX = wrapBCX $ \ cw -> stepDelayB cw >>> phaseDelayB cw
-
-{-
-
--- | getContextBCX will lift a partition context into an RDP signal.
--- This is probably a bad idea, since there is very little we can
--- do with most resources except via conventional IO. However, it
--- may be convenient when modeling dynamic behaviors.
---
-getContextBCX :: (Typeable p) => BCX w (S p ()) (S p (PCX p))
-getContextBCX = wrapBCX $ bconst . findInPCX
-
--- | loadResourceBCX will a partition resource into an RDP value.
--- The resource is selected by both `p` and `r`. 
---
---     loadResourceBCX = getContextBCX >>> bfmap findInPCX
---
-loadResourceBCX :: (Resource r, Typeable p) => BCX w (S p ()) (S p r)
-loadResourceBCX = wrapBCX $ bconst . findInPCX . loadPCX
-    where loadPCX :: PCX w -> PCX p
-          loadPCX = findInPCX
-
--- | getGlobalContextBCX will lift the global context into an RDP
--- signal. This is almost certainly a bad idea.
-getGlobalContextBCX :: BCX w (S p ()) (S p (PCX w))
--}
-
--- Idea: Wrap the `PCX w` into a `GCX w` for global context. 
---   Idea is (1) to associate resources only with partition contexts.
---           (2) to hinder accidental use of toplevel where PCX is desired.
--- 
-
--- TODO:
---   BDynamic
-
--- phaseDelayBCX:
---   delay an operation until the next round of inputs.
---   useful for updates provided by the partition thread.
-
-
---
--- To consider and maybe do: something like
---
---   subContext :: (Typeable p) => BCX p x y -> BCX w x y
---   subApp     :: (Partition p) => BCX p (S p ()) (S p ()) -> BCX w (S p ()) (S p ())
---   pushWorld  :: (Partition p, SigInP p x, SigInP p y) => BCX p x y -> BCX w x y
---
--- Difficulties:
---   * world-crossing signals
---   * dynamic behaviors, allowing the sub context to access the parent 
---   * doesn't make a very good sandbox due to ambient authority in Haskell
---
--- Potential variation:
---   PCX w0 -> PCX w1 -> B w0 x y -> B w1 x y
---
--- This would apply a cross-world action on every signal in x and y. However, it 
--- doesn't readily rename the partitions. Would be a very `unsafeCrossWorldsB`.
--- To refine further, might want to rename partitions.
---
--- 
 
 

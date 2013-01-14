@@ -64,6 +64,7 @@ Library
 
     Sirea.Link
     Sirea.DemandMonitor
+    Sirea.UnsafeDemandListMonitor
     -- Sirea.AgentResource
     Sirea.UnsafeOnUpdate
     Sirea.Clock
