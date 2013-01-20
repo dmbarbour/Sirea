@@ -25,7 +25,7 @@ module Sirea.Behavior
     , bdisjoinly, bdisjoinlyy, bdisjoinlz, bdisjoinlzz
     , bIfThenElse, bUnless, bWhen -- utility
     , BZip(..), bzip, bzipWith, bunzip
-    , BSplit(..), bsplitWith, bsplitOn, bunsplit, bsplitMaybe
+    , BSplit(..), bsplitWith, bsplitOn, bunsplit, bsplitMaybe, bsplitBool
     , BTemporal(..), BPeek(..)
     , BDynamic(..), bexec, bevalOrElse
     , bevalb, bexecb, bevalbOrElse
@@ -516,6 +516,13 @@ bsplitMaybe :: (BSplit b) => b (S p (Maybe x)) (S p x :|: S p ())
 bsplitMaybe = bsplitWith mb2e
     where mb2e Nothing  = Right ()
           mb2e (Just x) = Left x
+
+-- | bsplitBool will divide on a boolean. Here the left branch is
+-- true, while the right branch is false.
+bsplitBool :: (BSplit b) => b (S p Bool) (S p () :|: S p ())
+bsplitBool = bsplitWith b2e
+    where b2e False = Right ()
+          b2e True = Left ()
 
 -- | BTemporal - operations for orchestrating signals in time.
 -- (For spatial orchestration, see FRP.Sirea.Partition.)

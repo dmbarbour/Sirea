@@ -1,4 +1,4 @@
-{-# LANGUAGE EmptyDataDecls #-}
+{-# LANGUAGE EmptyDataDecls, DeriveDataTypeable #-}
 
 -- | Reactive Demand Programming (RDP) design is for open, scalable,
 -- distributed systems. Sirea is much more humble: just one Haskell
@@ -34,8 +34,6 @@
 module Sirea.Partition 
     ( Partition(..)
     , BCross(..)
-{-  , BScope(..)
-    , Scope      -}
     , Pt, P0
     , Stepper(..)
     , Stopper(..)
@@ -66,19 +64,6 @@ import GHC.Conc (labelThread)
 -- Cross from a partition to itself may optimize to identity.
 class BCross b where
     bcross :: (Partition p, Partition p') => b (S p x) (S p' x)
-
-{-
--- | Scopes are lightweight partitions, all within a single thread.
--- Scopes may have sub-scopes, simply push or pop like a stack. The
--- data plumbing between scopes should be free after compile.
---
--- Scopes may be useful to modularize resources, i.e. act as virtual
--- objects within a partition, with distinct type-based identity.
-class BScope b where
-    bpushScope :: b (S p x) (S (Scope s p) x)
-    bpopScope  :: b (S (Scope s p) x) (S p x)
-
--}
 
 -- | Partition p - indicates a toplevel partition type, and also 
 -- can override the default partition thread constructor.
@@ -160,11 +145,8 @@ getStepTime = getTCTime . findInPCX
 -- Partitions are better justified when they represent resources and
 -- various IO responsibilities.
 --   
-data Pt x 
+data Pt x deriving(Typeable)
 
-instance Typeable1 Pt where
-    typeOf1 _ = mkTyConApp tyConPt []
-        where tyConPt = mkTyCon3 "sirea-core" "Sirea.Partition" "Pt"
 instance (Typeable x) => Partition (Pt x) where
     newPartitionThread cp stepper = 
         newIORef emptyStopData >>= \ rfStop ->
@@ -180,20 +162,9 @@ getLabel = show . typeOf . getPTX
 -- | P0 is the initial or main partition for a Sirea application. It
 -- has a thread, but one controlled by the Sirea client rather than
 -- created by Sirea. See Sirea.Build for more information.
-data P0
-instance Typeable P0 where
-    typeOf _ = mkTyConApp tyConP0 []
-        where tyConP0 = mkTyCon3 "sirea-core" "Sirea.Partition" "P0"
+data P0 deriving(Typeable)
+
 instance Partition P0 where
     newPartitionThread = error "special case: main thread is not constructed"
-
-{-
--- | Scopes are a thread-local alternative to full partitions. Scope
--- may be useful to provide extra type names for resources.
-data Scope s p
-instance Typeable2 Scope where
-    typeOf2 _ = mkTyConApp tycScope []
-        where tycScope = mkTyCon3 "sirea-core" "Sirea.Partition" "Scope"
--}
 
 

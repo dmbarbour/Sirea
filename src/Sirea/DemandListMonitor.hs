@@ -7,15 +7,15 @@
 -- This is especially unfortunate since dynamic behaviors cannot be
 -- shared via stateful means (only volatile mechanisms).
 --
--- This UnsafeDemandListMonitor does not process the values before
+-- The DemandListMonitor module does not process the values before
 -- they are monitored. Unfortunately, this also means the values
 -- may have duplicates and non-deterministic ordering. Duplicates
 -- can violate RDP's idempotence invariants. Discipline is needed
 -- to safely (for RDP) use these demand-list monitors, i.e. treating
 -- lists as sets.
 --
-module Sirea.UnsafeDemandListMonitor 
-    ( HasUnsafeDemandListMonitor(..)
+module Sirea.DemandListMonitor 
+    ( HasDemandListMonitor(..)
     ) where
 
 -- TODO: partition IO access into the partition's demand monitors (SRef-like?)
@@ -35,13 +35,16 @@ import Sirea.DemandMonitor (DemandMonitor)
 import Sirea.Internal.DemandMonitorData
 
 -- | Obtain ambient instances of demand-monitors by type and name.
--- The list is unsorted and may have duplicates. Developers should
--- nonetheless attempt to treat it as a set.
-class HasUnsafeDemandListMonitor b p where 
-    unsafeDemandListMonitor :: (Typeable e) => String -> DemandMonitor b p e [e]
+--
+-- SAFETY CONCERNS: The output list has non-deterministic order and
+-- may contain duplicates. However, to support RDP's invariants it
+-- is essential to not observe those duplicates, i.e. to treat this
+-- as a set. 
+class HasDemandListMonitor b p where 
+    demandListMonitor :: (Typeable e) => String -> DemandMonitor b p e [e]
 
-instance (Partition p) => HasUnsafeDemandListMonitor (BCX w) p where
-    unsafeDemandListMonitor = demandListMonitorBCX
+instance (Partition p) => HasDemandListMonitor (BCX w) p where
+    demandListMonitor = demandListMonitorBCX
 
 demandListMonitorBCX :: (Partition p, Typeable e) => String -> DemandMonitor (BCX w) p e [e]
 demandListMonitorBCX nm = fix $ \ dm ->

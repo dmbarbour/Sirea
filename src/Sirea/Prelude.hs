@@ -8,8 +8,9 @@ module Sirea.Prelude
     , module Sirea.BCX
     , module Sirea.B
     , module Sirea.Partition
-    , module Sirea.BStruct
+    , module Sirea.BDeep
     , module Sirea.Time
+    , module Sirea.DemandMonitor
     , module Sirea.Utility
     ) where
 
@@ -19,7 +20,8 @@ import Sirea.B (B)
 import Sirea.BCX (BCX, wrapBCX)
 import Sirea.Partition (BCross(..), Stepper(..), Stopper(..)
                        ,Partition(..), Pt, P0)
-import Sirea.BStruct
+import Sirea.BDeep
 import Sirea.Time (T,DT)
+import Sirea.DemandMonitor
 import Sirea.Utility 
 

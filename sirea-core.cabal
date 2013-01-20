@@ -52,23 +52,24 @@ Library
     Sirea.Prelude
 
     Sirea.Time
-    Sirea.Signal
+    Sirea.Signal 
     Sirea.Behavior
-    Sirea.BStruct
-    Sirea.Build
-    Sirea.PCX
+    Sirea.BDeep
+    Sirea.Build 
+    Sirea.PCX  
     Sirea.Partition
 
-    Sirea.B
-    Sirea.BCX
+    Sirea.B 
+    Sirea.BCX 
 
     Sirea.Link
     Sirea.DemandMonitor
-    Sirea.UnsafeDemandListMonitor
-    -- Sirea.AgentResource
+    Sirea.DemandListMonitor
+    Sirea.AgentResource
     Sirea.UnsafeOnUpdate
     Sirea.Clock
-    -- Sirea.SRef
+    Sirea.TimeTrigger
+    Sirea.SRef
     Sirea.Utility
 
     Sirea.Trans.Pure

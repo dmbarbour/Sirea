@@ -33,8 +33,9 @@
 -- active demand source. 
 --
 module Sirea.Internal.DemandMonitorData
-    ( DemandAggr, newDemandAggr, newDemandLnk 
+    ( DemandAggr, newDemandAggr, newDemandLnk
     , MonitorDist, newMonitorDist, primaryMonitorLnk, newMonitorLnk
+    , pollDemandAggr, pollMonitorDist
     , PartD(..), mkPartD
     ) where
 
@@ -261,21 +262,27 @@ deliverDaggr da =
             ln_touch (da_link da) >>
             pd_phaseDelay (da_partd da) (ln_update (da_link da) su)
 
--- Garbage Collection of DemandAggr elements. An demand source can
--- be eliminated if it is fully stable and all its active values are
--- in the past. 
+-- Garbage Collection of DemandAggr elements. A demand source can
+-- be eliminated if it isn't active (even if unstable, since Daggr
+-- doesn't utilize input stability).
 daggrTableGC :: T -> (Key, SigSt e) -> Maybe (Key, SigSt e)
 daggrTableGC tm (k,st) =
-    let (x,sf) = s_sample (st_signal st) tm in
-    let bDone = isNothing (st_stable st) && 
-                isNothing x && s_is_final sf tm 
-    in
-    let st' = st { st_signal = sf } in
+    let st' = st_clear tm st in
+    let bDone = s_term (st_signal st') tm in
     if bDone then Nothing else Just (k, st')
 
 leastTime :: Maybe T -> Maybe T -> Maybe T
 leastTime l r = (min <$> l <*> r) <|> l <|> r
 
+-- | pollDemandAggr enables access to the current value held by a
+-- DemandAggr. There are no promises about how much may have been
+-- GC'd; polling can miss updates and lose information.
+pollDemandAggr :: DemandAggr e z -> IO (Sig z)
+pollDemandAggr da =
+    readIORef (da_data da) >>= \ dd ->
+    let lst = st_signal `fmap` M.elems (dd_table dd) in
+    let sig = da_nzip da lst in
+    return sig
 
 -- | MonitorDist supports output to multiple observers (monitors) of
 -- a resource or signal. For simplicity, the main signal is stored 
@@ -323,6 +330,12 @@ mddZero z0 = MDD
     , mdd_nextKey = 60000 -- arbitrary 
     , mdd_table   = M.empty
     }
+
+-- | Obtain the current signal held by a MonitorDist.
+pollMonitorDist :: MonitorDist z -> IO (Sig z)
+pollMonitorDist md = 
+    readIORef (md_data md) >>=
+    return . st_signal . mdd_signal
 
 -- | Each MonitorDist has one main LnkUp where it receives a primary
 -- signal, which is later distributed to observers. The primary must

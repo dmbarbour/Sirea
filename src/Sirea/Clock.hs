@@ -21,13 +21,10 @@
 -- time) then distributed agents can take coordinated, simultaneous
 -- or interleaved actions. Cron jobs and similar are also easy to 
 -- model with a clock.
--- 
--- An alternative to logical clocks is animated state models, which  
--- may change state according to logical timeouts or time debts. For
--- flexible or relative timing, use animated state. (Animated state 
--- models will be provided by another package.) I recommend animated
--- state in most cases that might use a clock; most behaviors need 
--- relative time, not universal time.
+--
+-- Alternatives to logical clocks:
+--   time based decisions (Sirea.TimeTrigger)
+--   animated state models (see the sirea-state package)
 -- 
 module Sirea.Clock
     ( ClockSpec(..)
@@ -83,11 +80,10 @@ class HasClock b where
     -- | Observe a logical clock of a given ClockSpec. 
     bclock :: ClockSpec -> b (S p ()) (S p T)
 
-instance HasClock B where
-    bclock = clockB
+-- note: clock is conceptually 'ambient' resource, so require BCX
+-- instance HasClock B where bclock = clockB
 
-instance HasClock (BCX w) where
-    bclock = wrapBCX . const . clockB
+instance HasClock (BCX w) where bclock = wrapBCX . const . clockB
 
 -- clockB will implement a clock via unsafe
 clockB :: ClockSpec -> B (S p ()) (S p T)

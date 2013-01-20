@@ -107,7 +107,6 @@ The weaknesses of Sirea RDP belong more to Sirea than to RDP.
 
 * Performance of dynamic behaviors is poor - i.e. expensive install and maintain; difficult to optimize and anticipate. RDP is designed with an assumption of at most a few 'layers' of dynamic behavior, for staged metaprogramming. Sirea can handle that much. A more dedicated RDP language might support deep optimizations across layers.
 
-
 Reactive Demand Programming (in Sirea)
 ======================================
 

@@ -45,8 +45,6 @@ import Control.Applicative
 import Control.Monad.Fix (mfix)
 import System.IO.Unsafe (unsafePerformIO, unsafeInterleaveIO)
 
--- TODO: a generic eventing system for resources? (Typeable events...)
-
 -- | PCX p - Partition Resource Context. Abstract.
 --
 -- A partition context is a vast space of resources. Conceptually, 
@@ -164,59 +162,10 @@ fromDynList nm ((x,s):xs) =
 -- given type is necessary. 
 newPCX :: String -> IO (PCX w)
 newPCX nm = 
-    let pElt = (typeOf pcxRoot, nm) in
-    let path = [pElt] in
     newIORef [] >>= \ rf ->
+    let path = [(typeOf (), nm)] in
     let pcx = PCX { pcx_ident = path, pcx_store = rf } in
     return pcx
-    where pcxRoot :: PCX ()
-          pcxRoot = undefined
 
--- NOTE: it would be trivial to extend PCX with resources accessed by Ordinal.
--- (Even via a Resource, this could be done.)
--- Might be worth doing to support rich resources with dynamic behaviors.
-
--- DECISION: combine responsibility into PCX?
---  a) simple string-based access to PCX.
---  b) add some extra mechanisms for onReset and onStop
-
--- How to model this?
---  As a typeclass or set of typeclasses: 
---    very tempting
---    could support "adding" features such as
---       resets (for types that can represent disruption)
---       splicing (hard or soft links)
---       history or versioning
---       cloning
---       merging?
---  Perhaps as a concrete structure: ResourceSpace a
---    Could not add new spatial-structures (splicing, etc.)
---    But could add `a`-dependent features.
---
--- I'd like to have ResourceSpace be a lot closer to RDP, i.e. so 
--- there isn't much work done by partitions.  
---
---  If I do typeclass, might want ability to hide the type from
---  client behind a set of interfaces? But might not be big deal.
---
---  Default state of a resource must be a function of the path to
---  that resource. It may actually be a fairly complex function of
---  said path. 
---
---  How shall I define a path to a resource?
---
---  I could use a simple sequence of strings. Or I could use a
---  sequence of flexible values. As a sequence of strings is very
---  tempting (fits well with URLs). ["Hello","World"]. But simple
---  support for integers could be nice, i.e. for cleaner ordering,
---  and it might be useful to also support set-based paths (similar
---  to Reiser FS ideas?)
--- 
---  Bah! Keep It Simple, Stupid!
---
---  For now, maybe limit to sequence of simple, case-insensitive, 
---  alphanumeric strings. It should be easier to add to this than
---  to subtract from it.
---  
 
 

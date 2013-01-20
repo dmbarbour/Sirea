@@ -97,20 +97,16 @@ getP _ = findInPCX
 newtype DMD e = DMD { getDMD :: (DemandAggr e [e], MonitorDist [e]) } deriving (Typeable)
 
 instance (Partition p, Typeable e, Ord e) => Resource p (DMD e) where
-    locateResource _ cp = DMD <$> newDMD mergeSort (==) cp
-        where mergeSort = sigMergeSortSet compare
+    locateResource _ cp = DMD <$> newDMD cp
  
 -- newDMD will return a coupled DemandAggr and MonitorDist pair.
-newDMD  :: (Partition p)
-        => ([Sig e] -> Sig z)
-        -> (z -> z -> Bool)
-        -> PCX p 
-        -> IO (DemandAggr e z, MonitorDist z)
-newDMD zfn eqfn cp =     
-    newMonitorDist cp (zfn []) >>= \ md ->
-    wrapEqFilter dtEqf eqfn (primaryMonitorLnk md) >>= \ lnMon ->
-    newDemandAggr cp lnMon zfn >>= \ d ->
+newDMD  :: (Partition p, Ord e) => PCX p -> IO (DemandAggr e [e], MonitorDist [e])
+newDMD cp =     
+    newMonitorDist cp (s_always []) >>= \ md ->
+    wrapEqFilter dtEqf (==) (primaryMonitorLnk md) >>= \ lnMon ->
+    newDemandAggr cp lnMon (sigMergeSortSet compare) >>= \ d ->
     return (d,md)
+
 
 demandFacetB :: DemandAggr e z -> B (S p e) (S p ())
 demandFacetB da = bvoid (unsafeLinkB lnDem) >>> bconst ()

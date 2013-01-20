@@ -19,7 +19,7 @@
 -- See Also:                  
 --   FRP.Sirea.Behavior       
 --                            
-module Sirea.BStruct 
+module Sirea.BDeep
     ( bxf,    bxs,    bxff,   bxfs,   bxsf,   bxss -- DEEP EXTRACTION (30)
     , bxfff,  bxffs,  bxfsf,  bxfss,  bxsff,  bxsfs,  bxssf,  bxsss
     , bxffff, bxfffs, bxffsf, bxffss, bxfsff, bxfsfs, bxfssf, bxfsss
