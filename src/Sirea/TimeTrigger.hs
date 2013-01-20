@@ -57,8 +57,8 @@ dsTimeTriggerStep0 (DSWait ds) = DSWait (dsTimeTrigger0 ds)
 dsTimeTriggerStep0 (DSNext t0 Nothing ds) =
     DSNext t0 Nothing (dsTimeTrigger0 ds)
 dsTimeTriggerStep0 (DSNext t0 (Just tx) ds) =
-    if (t0 >= tx) then DSNext t0 (Just True) (dsTimeTrigger0 ds)
-                  else DSNext t0 (Just False) (dsTimeTrigger1 tx ds)
+    if (t0 < tx) then DSNext t0 (Just False) (dsTimeTrigger1 tx ds)
+                 else DSNext t0 (Just True) (dsTimeTrigger0 ds)
 
 -- time trigger 1 has a pending trigger at a given instant
 dsTimeTrigger1 :: T -> DSeq (Maybe T) -> DSeq (Maybe Bool)
