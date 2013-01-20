@@ -1,4 +1,4 @@
-{-# LANGUAGE MultiParamTypeClasses, FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses, FlexibleInstances, DeriveDataTypeable #-}
 
 -- | A declarative resource linking mechanism for Sirea and Haskell.
 --
@@ -40,8 +40,9 @@ module Sirea.PCX
 import Data.Typeable
 import Data.Dynamic
 import Data.IORef
+import qualified Data.Map as M
+
 -- TODO: consider using Data.Map for higher performance lookups.
-import Control.Applicative
 import Control.Monad.Fix (mfix)
 import System.IO.Unsafe (unsafePerformIO, unsafeInterleaveIO)
 
@@ -62,17 +63,15 @@ import System.IO.Unsafe (unsafePerformIO, unsafeInterleaveIO)
 --
 data PCX p = PCX 
     { pcx_ident :: !(PCXPath)
-    , pcx_store :: !(IORef [(Dynamic, String)])
-    }
+    , pcx_store :: !(IORef PCXStore)
+    } deriving(Typeable)
+
+type PCXStore = M.Map (TypeRep,String) Dynamic
 
 -- | The PCX Path is a path of types and strings, ordered from leaf
 -- to root. Every resource has a unique path (from newPCX) that is
 -- accessible via locateResource.
 type PCXPath = [(TypeRep,String)]
-
-instance Typeable1 PCX where
-    typeOf1 _ = mkTyConApp tycPCX []
-        where tycPCX = mkTyCon3 "sirea-core" "Sirea.PCX" "PCX"
 
 -- | Resource - found inside a PCX. 
 --
@@ -97,7 +96,7 @@ class (Typeable r) => Resource p r where
 
 instance (Typeable p) => Resource p0 (PCX p) where
     locateResource p _ =
-        newIORef [] >>= \ store' ->
+        newIORef M.empty >>= \ store' ->
         return (PCX { pcx_ident = p, pcx_store = store' })
 
 
@@ -140,21 +139,15 @@ findByNameInPCX_IO nm pcx = mfix $ \ r ->
     atomicModifyIORef (pcx_store pcx) (loadOrAdd nm newR)
 
 
-loadOrAdd :: (Typeable r) => String -> r -> [(Dynamic,String)] -> ([(Dynamic,String)],r)
-loadOrAdd nm newR dynL =
-    case fromDynList nm dynL of
-        Just oldR -> (dynL, oldR)
-        Nothing ->
-            let dynR = toDyn newR in
-            dynTypeRep dynR `seq` -- for consistency
-            nm `seq`
-            ((dynR,nm):dynL, newR)
-
-fromDynList :: (Typeable r) => String -> [(Dynamic,String)] -> Maybe r
-fromDynList _ [] = Nothing
-fromDynList nm ((x,s):xs) = 
-    if nm == s then fromDynamic x <|> fromDynList nm xs
-               else fromDynList nm xs
+loadOrAdd :: (Typeable r) => String -> r -> PCXStore -> (PCXStore,r)
+loadOrAdd nm r tbl =
+    let k = (typeOf r, nm) in
+    let mbr = fromDynamic =<< M.lookup k tbl in
+    case mbr of 
+        Just r0 -> (tbl,r0) -- no changes
+        Nothing -> 
+            let tbl' = M.insert k (toDyn r) tbl in
+            (tbl',r)
 
 -- | newPCX - a `new` PCX space, unique and fresh.
 --
@@ -162,7 +155,7 @@ fromDynList nm ((x,s):xs) =
 -- given type is necessary. 
 newPCX :: String -> IO (PCX w)
 newPCX nm = 
-    newIORef [] >>= \ rf ->
+    newIORef M.empty >>= \ rf ->
     let path = [(typeOf (), nm)] in
     let pcx = PCX { pcx_ident = path, pcx_store = rf } in
     return pcx
