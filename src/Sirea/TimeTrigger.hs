@@ -8,7 +8,7 @@
 --   btimeTrigger :: b (S p T) (S p Bool)
 --
 -- This behavior will output True when logical time is greater than
--- or equal to the time indicated by signal. The time signal will
+-- or equal to the time indicated in signal. The time signal will
 -- usually come from stateful resources (timestamp, calendar, etc.).
 -- The logical time is from an implicit logical clock with infinite
 -- precision (thus the HasClock constraint), though implementation
@@ -16,9 +16,10 @@
 -- 
 module Sirea.TimeTrigger
     ( HasTimeTrigger(..)
+    , s_timeTrigger
     ) where
 
-import Control.Exception (assert)
+import Sirea.B
 import Sirea.BCX
 import Sirea.Time
 import Sirea.Link
@@ -33,35 +34,50 @@ import Sirea.Internal.DiscreteTimedSeq
 -- | A btimeTrigger returns True if the real time is greater than or
 -- equal to the time parameter. This can help control behaviors with
 -- queries like: "Has it been less than three seconds since foo?"
+--
+-- btimeTrigger is precise and works on discrete varying signals.
+-- 
 class (HasClock b) => HasTimeTrigger b where
     btimeTrigger :: b (S p T) (S p Bool)
 
--- TODO: BCX instance for HasTimeTrigger
+instance HasTimeTrigger (BCX w) where
+    btimeTrigger = (wrapBCX . const) timeTriggerB
 
+timeTriggerB :: B (S p T) (S p Bool)
+timeTriggerB = unsafeLinkB mkLn where
+    mkLn = return . (ln_lumap . ln_sumap . su_fmap) s_timeTrigger
 
-    
-{-
-clockSig' :: ClockSpec -> Integer -> Integer -> Sig T
-clockSig' cs nDays nNanos =
-    let periodNanos = dtToNanos (clock_period cs) in
-    let offsetNanos = dtToNanos (clock_offset cs) in
-    let nInterval = (nNanos - offsetNanos) `div` periodNanos in
-    assert (nInterval >= 0) $
-    let clockNanos = offsetNanos + (nInterval * periodNanos) in
-    assert (clockNanos < nanosInDay) $
-    let t0 = mkTime nDays clockNanos in
-    let ts = timeAfterTime cs t0 in
-    let lUpd = map (\t->(t,Just t)) ts in
-    listToSig (Just t0) lUpd
+-- time trigger 0 assumes there is no pending trigger
+dsTimeTrigger0 :: DSeq (Maybe T) -> DSeq (Maybe Bool)
+dsTimeTrigger0 ds = DSeq $ dsTimeTriggerStep0 . dstep ds
 
--- Times after a given time. 
--- The series of updates is repeated each day. 
-timeAfterTime :: ClockSpec -> T -> [T]
-timeAfterTime cs t0 = t0 `seq` (t1:timeAfterTime cs t1)
-    where t1  = let t0' = addTime t0 (clock_period cs) in
-                if (tmDay t0' > tmDay t0)
-                  then mkTime (tmDay t0') (dtToNanos (clock_offset cs))
-                  else t0'
+dsTimeTriggerStep0 :: DStep (Maybe T) -> DStep (Maybe Bool)
+dsTimeTriggerStep0 DSDone = DSDone
+dsTimeTriggerStep0 (DSWait ds) = DSWait (dsTimeTrigger0 ds)
+dsTimeTriggerStep0 (DSNext t0 Nothing ds) =
+    DSNext t0 Nothing (dsTimeTrigger0 ds)
+dsTimeTriggerStep0 (DSNext t0 (Just tx) ds) =
+    if (t0 >= tx) then DSNext t0 (Just True) (dsTimeTrigger0 ds)
+                  else DSNext t0 (Just False) (dsTimeTrigger1 tx ds)
 
--}
+-- time trigger 1 has a pending trigger at a given instant
+dsTimeTrigger1 :: T -> DSeq (Maybe T) -> DSeq (Maybe Bool)
+dsTimeTrigger1 tx ds = DSeq $ \ tq -> dsTimeTriggerStep1 tx tq (dstep ds tq)
+
+dsTimeTriggerStep1 :: T -> T -> DStep (Maybe T) -> DStep (Maybe Bool)
+dsTimeTriggerStep1 tx _ DSDone = DSNext tx (Just True) ds_done
+dsTimeTriggerStep1 tx tq (DSWait ds) =
+    if (tq < tx) then DSWait (dsTimeTrigger1 tx ds)
+                 else DSNext tx (Just True) (dsTimeTrigger0 ds)
+dsTimeTriggerStep1 tx _ step@(DSNext t0 v ds) =
+    if (tx < t0) then DSNext tx (Just True) (dsTimeTrigger0 (ds_first t0 v ds))
+                 else dsTimeTriggerStep0 step
+
+-- | Compute logical time trigger events on a signal. 
+s_timeTrigger :: Sig T -> Sig Bool
+s_timeTrigger sT = 
+    case s_head sT of
+        Nothing -> mkSig Nothing (dsTimeTrigger0 (s_tail sT))
+        Just tx -> mkSig (Just False) (dsTimeTrigger1 tx (s_tail sT))
+
 
