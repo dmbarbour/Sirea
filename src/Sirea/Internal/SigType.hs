@@ -29,6 +29,8 @@ mkSig v0 ds = Sig { s_head = v0, s_tail = ds }
 --   * trigonometric interpolation polynomial (sum of m = -n to n of c_m * e^(i*m*x))
 --   * polynomial expressions (sum of i = 0..n of A_i * t^i)
 -- Both would allow simple rep as vector of doubles for the coefficients.
+-- (But there is a challenge of performing time-shifts on them. Maybe some sort
+-- of matrix operation would be necessary.)
 --
 -- multi-dimensional curves would be desired anyway, i.e. vectors and 
 -- matrices of curvatures. Some sort of time-varying bezier surface is 

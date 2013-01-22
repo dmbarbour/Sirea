@@ -36,6 +36,7 @@ module Sirea.Signal
  , s_is_final, s_term
  , s_delay, s_peek
  , s_adjn, s_adjeqf
+ , s_tseq
  --, s_strat
  -- instances: functor, applicative, alternative
  ) where
@@ -330,6 +331,15 @@ s_adjeqf eq s0 =
     where meq Nothing Nothing = True
           meq (Just x) (Just y) = eq x y
           meq _ _ = False
+
+
+-- | Apply a sequencing operation on a signal up to a given time.
+-- This is basically an sequential evaluation option for signals.
+s_tseq :: (Maybe a -> ()) -> T -> Sig a -> ()
+s_tseq eSeq tm s0 = seqHead `seq` seqBody where
+    seqHead = eSeq (s_head s0) 
+    seqBody = foldr seq () ((eSeq . snd) `fmap` body)
+    body = ds_takeList tm (s_tail s0)
 
 -- TODO?
 -- Apply a strategy to initialize parallel evaluation of a signal 

@@ -205,28 +205,27 @@ The concrete signal type in Sirea is `Sig a`,
 
 ### Updating Signals
 
-Signal updates are not observable to the RDP developer, but are an important part of the Sirea implementation. Sirea will push signal updates through the behavior network. Each update includes the full projected future of that signal, but later updates will replace some of that future. In the degenerate case, this might mean updating one value at a time. However, it is not unusual that a rich future (e.g. the next seven values) can be correctly anticipated.
+Signal updates are not observable within an RDP expression, but are accessible when developing resource adapters and FFI bindings for Sirea. Conceptually, a newly constructed RDP behavior graph has all signals initially set to an inactive state. Subsequent updates will activate resources and control the state of the RDP system. Updates are performed through `LnkUp` structures, which are provided in the process of compiling and constructing the behavior. 
 
-        data SigUp a = SigUp 
-            { su_state  :: !(Maybe (Sig a , T)) -- signal future after given time
-            , su_stable :: !(Maybe T)           -- update stability; also heartbeat
+        data LnkUp a = LnkUp 
+            { ln_touch :: IO ()
+            , ln_update :: StableT -> T -> Sig a -> IO ()
+            , ln_idle :: StableT -> IO ()
             }
 
-The `su_stable` associated with a signal update is a promise that future update times have a lower bound set by the stability value, where `Nothing` is forever (indicating the signal has received its last update). The main role of update stability is to support garbage collection of cached signals. (Caches are necessary when signals are combined, e.g. with `bzip` or `bmerge`, since the different signals may update at different times.) A secondary role of update stability is a rough estimate of real-time for the less time-sensitive operations; it's a lot cheaper and more convenient than looking up a wall-clock time, and sets a bound for the amount of rework a system might need to perform. 
-
-The `su_state` indicates the signal has a new value starting at a given time, or `Nothing` if there was no change in the signal state (just a stability update). The task of applying a `SigUp a` to a `Sig a` is rather trivial, just an `s_switch` at the given time. It is very common for state and stability updates to piggyback. 
+The update method indicates that we're to switch to the provided signal at the given time. (The roles of stability, touch, and idle are described in a later section about implementing RDP behaviors.) In a general sense, RDP updates could be more expressive than switching the full future of a signal. (E.g. if a signal value is a set, it would be convenient to add or remove specific values from the set.) But, in interest of keeping it simple, Sirea only supports whole future updates. (Specialized behavior constructors for operating on patches might be a feasible option down the road.)
 
 Signal updates have several nice properties in addition to those of general message passing:
 
-* updates are idempotent; useful over a shoddy network connection
-* updates are composable by "piggybacking"; useful when fast source feeds slow consumer.
+* updates to a full signal are idempotent; useful for resilience on a shoddy network connection
+* sequential updates are composable by "piggybacking"; useful when fast source feeds slow consumer.
 * updates allow takebacks (limited by stability); optimistic concurrency, eventual consistency
 * updates can target future; masks variability in latency, simplifies scheduling, avoids rework
-* garbage collection is built into the signal update model; no need to estimate live references
+* resource control and GC can be built into signals by controlling activity and stability
 
 These are in addition to the many benefits associated with anticipation and speculative evaluation. 
 
-In Sirea, a behavior is compiled into a network with all signals inactive. The first signal update will activate the behavior.
+In Sirea, a behavior is compiled into a network with all signals inactive. The first signal update will activate the behavior. See more on implementing RDP behaviors in a later section.
 
 ### Continuous Signals?
 
@@ -522,18 +521,17 @@ In this graph, dependencies flow left to right along the lines. For example, `c`
 
 I do not present a worst-case ordering. The worst-case ordering is exponentially worse than the best case. If you know the dependencies, a [toplogical sort](http://en.wikipedia.org/wiki/Topological_sorting) will provide an optimal ordering. However, for RDP, the dynamic behaviors and openly shared resources (state, demand monitors) make it difficult to determine the dependencies. The *"touch"* technique used by Sirea is a simple, dynamic solution to the problem: a "touch" is a promise of a pending update. When `g` is touched by `a` and `f`, `g` knows to wait for an update from both before pushing its own update. By propagating all touches before propagating any updates, the update ordering will be optimal.
 
-The use of "touch" is reflected directly in the data type for constructing concrete behavior networks. Each link (`LnkUp`) has two IO methods: one for touch, one for the signal update: 
+The use of "touch" is reflected directly in the data type for constructing concrete behavior networks. Each concrete signal link has IO methods for propagating the updates. The first method, `ln_touch`, is used to signal than an update is coming soon. (It it is determined the touch was a false alarm, idle is called instead.)
 
         data LnkUp a = LnkUp
             { ln_touch  :: IO ()
-            , ln_update :: SigUp a -> IO ()
+            , ln_update :: StableT -> T -> Sig a -> IO ()
+            , ln_idle   :: StableT -> IO ()
             }
 
-Within each partition, this is used in the two-phase approach described earlier: all incoming signals are touched (and updates for the same signal are combined to piggyback), then all updates are propagated, achieving an optimal update ordering with only one update to any given signal during a round. Touch is used only within each partition; `bcross` will start a new set of touches in the next partition. 
+Touch is used only within a partition. Between partitions (i.e. at borders guarded by `bcross`) updates are shunted into a mailbox then delivered in batches. At the batch level, this may result in non-optimal update orderings (with some partitions doing extra rework). However, the network is smaller (fewer partitions than RDP behaviors), concurrent updates are processed together, and a slow-consumer might piggyback multiple updates from a fast producer. These mitigating factors do not guarantee optimal orderings, but they should (in most circumstances) effectively resist worst-case orderings.
 
-Between partitions, batches as a whole will often process in non-optimal orders. However, the tendency to accumulate and process multiple batches together will strongly resist the worst-case orderings. 
-
-Developers will use the `LnkUp` type directly if extending Sirea for new resources. This is achieved with `unsafeLinkB` from Sirea.Link. Behaviors in Sirea are compiled in two passes, forward then back. The forward pass tracks timing and computes `bsynch`. Developers extending Sirea hook into the reverse pass:
+Developers might use the `LnkUp` type directly if adapting Sirea to external IO resources or FFI. This is achieved with `unsafeLinkB` from Sirea.Link. A single `LnkUp` models only one concrete signal, but is a mechanism (`Lnk`) that allows modeling of complex products, sums, and possibly dead links:
 
         unsafeLinkB :: (Lnk y -> IO (Lnk x)) -> B x y
   

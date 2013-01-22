@@ -20,16 +20,13 @@ module Sirea.Internal.BImpl
     -- miscellaneous
     , unsafeSigZipB
     , unsafeChangeScopeB 
-    , unsafeAddStabilityB 
-    , unsafeEqShiftB, lnEqShift, wrapEqFilter, eqShift
+    , unsafeEqShiftB, lnEqShift, wrapEqFilter, firstDiffT
 
     , unsafeFullMapB
     , phaseUpdateB
     , undeadB
     , keepAliveB
-    , unsafeAutoSubscribeB, OnSubscribe, UnSubscribe
     , buildTshift -- for BDynamic
-    --, tchokeB, wrapTChoke
     ) where
 
 import Prelude hiding (id,(.))
@@ -41,8 +38,7 @@ import Sirea.Signal
 
 import Control.Category
 import Control.Applicative
-import Control.Monad (unless)
-import Control.Parallel.Strategies (Eval, runEval, evalList, rseq)
+import Control.Parallel.Strategies (Eval, runEval)
 import Control.Exception (assert)
 import Data.Function (on)
 import Data.IORef (newIORef, readIORef, writeIORef, IORef)
@@ -258,7 +254,7 @@ buildMerge_i tl tr (LnkSig lu) =
     let rLiv = (ldt_live . lnd_sig) tr in
     if (not lLiv) then return (LnkDead, LnkSig lu) else
     if (not rLiv) then return (LnkSig lu, LnkDead) else
-    let onEmit = ln_update lu . sm_emit (<|>) in
+    let onEmit = sm_emit (<|>) lu in
     let onTouch = ln_touch lu in
     ln_withSigM onTouch onEmit >>= \ (ul,ur) ->
     return (LnkSig ul, LnkSig ur)
@@ -395,10 +391,9 @@ buildDisjFull_sig l r =
     let lul = ln_lnkup l in
     let lur = ln_lnkup r in
     let onTouch = ln_touch lul >> ln_touch lur in
-    let onEmit sm =
-            let sul = sm_emit disjMaskLeft sm in
-            let sur = sm_emit disjMaskRight sm in
-            ln_update lul sul >> ln_update lur sur
+    let onEmit sm = 
+            sm_emit disjMaskLeft lul sm >>
+            sm_emit disjMaskRight lur sm
     in
     ln_withSigM onTouch onEmit >>= \ (a,u) ->
     return (LnkSig a, u)
@@ -429,7 +424,7 @@ buildZip :: (Sig a -> Sig b -> Sig c) -> Lnk (S p c) -> IO (Lnk (S p a :&: S p b
 buildZip _ LnkDead = return LnkDead
 buildZip fnZip (LnkSig lu) = 
     let onTouch = ln_touch lu in
-    let onEmit = ln_update lu . sm_emit fnZip in
+    let onEmit = sm_emit fnZip lu in
     ln_withSigM onTouch onEmit >>= \ (sf,sa) ->
     return (LnkProd (LnkSig sf) (LnkSig sa))
 
@@ -445,12 +440,14 @@ splitB = mkLnkB trSplit $ mkLnkPure lnkSplit
             let lul = ln_lnkup l in
             let lur = ln_lnkup r in
             let touch = ln_touch lul >> ln_touch lur in
-            let update su = 
-                    let sul = (su_fmap (s_adjn . s_full_map takeLeft)) su in
-                    let sur = (su_fmap (s_adjn . s_full_map takeRight)) su in
-                    ln_update lul sul >> ln_update lur sur
+            let idle tS = ln_idle lul tS >> ln_idle lur tS in
+            let update tS tU sig =
+                    let sigL = (s_adjn . s_full_map takeLeft) sig in
+                    let sigR = (s_adjn . s_full_map takeRight) sig in
+                    ln_update lul tS tU sigL >>
+                    ln_update lur tS tU sigR
             in
-            let lu = LnkUp { ln_touch = touch, ln_update = update } in
+            let lu = LnkUp touch update idle in
             LnkSig lu
 
 -- helper functions for split
@@ -465,29 +462,19 @@ takeRight _ = Nothing
 -- | map an arbitrary Haskell function across an input signal.
 fmapB :: (a -> b) -> B (S p a) (S p b)
 fmapB = mkLnkB tr_fwd . mkLnkPure . lnFmap
-    where lnFmap = ln_lumap . ln_sumap . su_fmap . fmap
+    where lnFmap = ln_lumap . ln_sfmap . fmap
 
 -- | map haskell function across an input signal 
 -- (unsafe! could damage duration coupling.) 
 unsafeFullMapB :: (Maybe a -> Maybe b) -> B (S p a) (S p b)
 unsafeFullMapB = mkLnkB tr_fwd . mkLnkPure . lnFullMap
-    where lnFullMap = ln_lumap . ln_sumap . su_fmap . s_full_map
+    where lnFullMap = ln_lumap . ln_sfmap . s_full_map
 
 -- | map a constant to a signal. 
 constB :: c -> B (S p a) (S p c)
 constB c = mkLnkB tr_fwd constLnk
     where constLnk = mkLnkPure $ lnConst c
-          lnConst  = ln_lumap . ln_sumap . su_fmap . (<$)
-
--- | add stability to the signal (used by forceB).
-unsafeAddStabilityB :: DT -> B (S p x) (S p x)
-unsafeAddStabilityB dt = 
-    if (0 == dt) then fwdB else 
-    mkLnkB id (mkLnkPure lnAddStability)
-    where lnAddStability = ln_lumap $ ln_sumap suAddStability
-          suAddStability su =
-            let tStable = fmap (`addTime` dt) (su_stable su) in
-            su { su_stable = tStable }
+          lnConst  = ln_lumap . ln_sfmap . s_const
 
 -- | force evaluation of signal relative to stability, up to `Just`. 
 -- This will track the signal over its lifetime in order to ensure
@@ -495,58 +482,36 @@ unsafeAddStabilityB dt =
 -- prior elements will be touched. If stability is infinite, then 
 -- nothing more is touched. 
 seqB :: DT -> B (S p x) (S p x)
-seqB dt = 
-    unsafeAddStabilityB dt >>> 
-    mkLnkB id buildSeqB >>> 
-    unsafeAddStabilityB (negate dt)
+seqB dt = mkLnkB id (buildSeqB dt)
 
--- touch up to stability
-buildSeqB :: Lnk (S p x) -> IO (Lnk (S p x))
-buildSeqB LnkDead = return LnkDead
-buildSeqB (LnkSig lu) = 
-    newIORef (s_never, Nothing) >>= \ rf ->
-    let lu' = buildSeqB' rf lu in
+-- sequence data in signal up to stability
+buildSeqB :: DT -> Lnk (S p x) -> IO (Lnk (S p x))
+buildSeqB _ LnkDead = return LnkDead
+buildSeqB dt (LnkSig lu) =
+    newIORef s_never >>= \ rf -> 
+    let lu' = buildSeqB' dt rf lu in
     return (LnkSig lu')
 
--- touch signal up to stability. 
--- stability may have been adjusted a bit just for this op, so it
--- does not make stability assumptions (and doesn't use SigSt). 
-buildSeqB' :: IORef (Sig x, Maybe T) -> LnkUp x -> LnkUp x
-buildSeqB' rf lu = 
-    LnkUp { ln_touch = (ln_touch lu), ln_update = onUpdate }
-    where onUpdate su = 
-            -- update state and cleanup
-            readIORef rf >>= \ (s0,t0) ->
-            let sf = su_apply su s0 in
-            let tf = su_stable su in
-            let scln = maybe s_never (s_trim sf) tf in
-            scln `seq`
-            writeIORef rf (scln,tf) >>
-
-            -- obtain bounds for computing signal sf.
-            let mtUpd   = fmap snd (su_state su) in
-            let mtLower = (pure min <*> t0 <*> mtUpd) <|> t0 <|> mtUpd in
-            let mtUpper = tf in
-            let mtPair  = pure (,) <*> mtLower <*> mtUpper in
-            let compute = case mtPair of
-                    Nothing -> ()
-                    Just (tLower,tUpper) -> 
-                        if(tLower < tUpper) 
-                        then forceSig tLower tUpper sf
-                        else ()
-            in
-            -- force thunks then forward the update.
-            compute `seq`
-            ln_update lu su
-
--- force signal up to Just|Nothing (simpl rseq for Maybe).
-forceSig :: T -> T -> Sig x -> ()
-forceSig tLower tUpper sig =
-    assert (tLower < tUpper) $
-    let updates = sigToList sig tLower tUpper in
-    let values = fmap snd updates in
-    runEval (evalList rseq values >> return ())
-
+-- sequence signal spine up to stability (modified by dt). This will
+-- work for all updates except the last (where stability is DoneT).
+buildSeqB' :: DT -> IORef (Sig x) -> LnkUp x -> LnkUp x
+buildSeqB' dt rf lu = LnkUp touch update idle where
+    touch = ln_touch lu
+    idle tS = process tS >> ln_idle lu tS
+    update tS tU su =
+        readIORef rf >>= \ s0 ->
+        let sf = s_switch s0 tU su in
+        writeIORef rf sf >>
+        process tS >>
+        ln_update lu tS tU su
+    process DoneT = writeIORef rf s_never
+    process (StableT tStable) =
+        let tTgt = tStable `addTime` dt in
+        readIORef rf >>= \ s0 ->
+        let seqSig = s_tseq (`seq` ()) tTgt s0 in
+        let sf = s_trim s0 tTgt in -- trim to reduce rework
+        seqSig `seq` sf `seq`
+        writeIORef rf sf
 
 -- | stratB currently evaluates based on stability, not sampling. It
 -- ensures that evaluation is initialized before the `Just y` signal
@@ -564,7 +529,7 @@ unwrapStrat (Just x) = runEval (Just <$> x)
 -- it results in far fewer values. 
 adjeqfB :: (Eq x) => B (S p x) (S p x)
 adjeqfB = mkLnkB id $ mkLnkPure lnAdjeqf
-    where lnAdjeqf = ln_lumap $ ln_sumap $ su_fmap $ s_adjeqf (==)
+    where lnAdjeqf = (ln_lumap . ln_sfmap) (s_adjeqf (==))
 
 
 -- | tshiftB achieves a declarative delay, via B_latent and B_mkLnk.
@@ -597,11 +562,22 @@ buildTshift t0 tf (LnkSig lu) =
     let dtDiff = (ldt_curr dtf) - (ldt_curr dt0) in
     assert (dtDiff >= 0) $
     if (0 == dtDiff) then LnkSig lu else
-    LnkSig (ln_sumap (su_delay dtDiff) lu)
+    LnkSig (luApplyDelay dtDiff lu)
 
+-- apply actual delay to signal
+luApplyDelay :: DT -> LnkUp x -> LnkUp x
+luApplyDelay dt lu = LnkUp touch update idle where
+    adjtS = adjStableTime (`addTime` dt)
+    touch = ln_touch lu
+    idle = ln_idle lu . adjtS
+    update tS tU su = 
+        let tS' = adjtS tS in
+        let tU' = tU `addTime` dt in
+        let su' = s_delay dt su in
+        tS' `seq` tU' `seq`
+        ln_update lu tS' tU' su'
 
-
--- | delay a signal (logically)
+-- | delay a signal (logically; delay isn't applied to signals yet)
 delayB :: DT -> B x x
 delayB = tshiftB . lnd_fmap . addDelay
     where addDelay dt ldt = ldt { ldt_goal = (dt + (ldt_goal ldt)) }
@@ -645,30 +621,38 @@ mkLnPeek dt (LnkSig lu) =
     return (LnkSig lu')
 
 -- If signal changes at tUpdate, then my anticipated value at 
--- (tUpdate - dt) must always change to match the new signal. The
--- stability is thus also reduced by dt.
+-- (tU - dt) must change to match the updated signal. Stability is
+-- therefore reduced by dt. While the signal value in the range of
+-- (tU-dt) to tU is not relevant, s_peek needs the signal activity.
+--
+-- TODO: Consider adjusting lnPeek to keep only the activity info.
+-- This could improve GC and memory costs, albeit potentially with
+-- a CPU overhead. 
 lnPeek :: DT -> IORef (Sig x) -> LnkUp (Either x ()) -> LnkUp x
-lnPeek dt rf lu = LnkUp { ln_touch = onTouch, ln_update = onUpdate }
-    where onTouch = ln_touch lu 
-          onUpdate su =
-            let tStable = (`subtractTime` dt) <$> su_stable su in
-            readIORef rf >>= \ s0 ->
-            let s' = su_apply su s0 in
-            let sCln = maybe s_never (s_trim s') tStable in
-            sCln `seq`
-            writeIORef rf sCln >>
-            case su_state su of
-                Nothing ->
-                    let su' = SigUp { su_state = Nothing, su_stable = tStable } in
-                    ln_update lu su'
-                Just (_,tUp) ->
-                    let tUp' = tUp `subtractTime` dt in
-                    let sigPk  = s_peek dt (s_trim s' tUp') in
-                    let st' = Just (sigPk, tUp') in
-                    let su' = SigUp { su_state = st', su_stable = tStable } in
-                    tUp `seq` sigPk `seq`
-                    ln_update lu su'
-    
+lnPeek dt rf lu = LnkUp touch update idle where
+    touch = ln_touch lu
+    adjTS = adjStableTime (`subtractTime` dt)
+    idle tS0 =
+        let tS = adjTS tS0 in
+        readIORef rf >>= \ s0 ->
+        let sCln = gcSig tS s0 in
+        sCln `seq` writeIORef rf sCln >>
+        ln_idle lu tS
+    update tS0 tU0 su =
+        let tS = adjTS tS0 in
+        readIORef rf >>= \ s0 ->
+        let s' = s_switch s0 tU0 su in
+        let sCln = gcSig tS s' in
+        sCln `seq` writeIORef rf sCln >>
+        let tU = tU0 `subtractTime` dt in
+        let sPk = s_peek dt (s_trim s' tU) in
+        tU `seq` sPk `seq`
+        ln_update lu tS tU sPk
+        
+-- GC a signal based on stability
+gcSig :: StableT -> Sig x -> Sig x
+gcSig DoneT _ = s_never
+gcSig (StableT tS) s = s_trim s tS
 
 -- | scopes are trivial variations on id
 unsafeChangeScopeB :: B (S p1 x) (S p2 x)
@@ -693,35 +677,39 @@ buildEqShift :: DT -> (a -> a -> Bool) -> Lnk (S p a) -> IO (Lnk (S p a))
 buildEqShift _ _ LnkDead = return LnkDead
 buildEqShift dt eq (LnkSig lu) = LnkSig <$> wrapEqFilter dt eq lu
 
-lnEqShift :: DT -> (a -> a -> Bool) -> IORef (SigSt a) -> LnkUp a -> LnkUp a
-lnEqShift dt eq rf lu = LnkUp { ln_touch = onTouch, ln_update = onUpdate }
-    where onTouch = ln_touch lu
-          onUpdate su = 
-            readIORef rf >>= \ st ->
-            let s0 = st_signal st in
-            let st' = st_sigup su st in
-            let stCln = maybe st_zero (flip st_clear st') (st_stable st') in
-            stCln `seq` 
-            writeIORef rf stCln >>
-            case su_state su of
-                Nothing -> ln_update lu su
-                Just (sf,tLower) ->
-                    -- search for change between update time and stability + dt
-                    let tUpper = maybe tLower (`addTime` dt) (su_stable su) in
-                    let shifted = eqShift eq s0 sf tLower tUpper in
-                    let su' = su { su_state = Just shifted } in
-                    ln_update lu su'
+lnEqShift :: DT -> (a -> a -> Bool) -> IORef (Sig a) -> LnkUp a -> LnkUp a
+lnEqShift dt eq rf lu = LnkUp touch update idle where
+    touch = ln_touch lu
+    idle tS = 
+        readIORef rf >>= \ s0 ->
+        let sCln = gcSig tS s0 in
+        sCln `seq` writeIORef rf sCln >>
+        ln_idle lu tS
+    update tS tU su =
+        -- need to have an upper bound for comparison, tSeek
+        let tSeek = case tS of
+                DoneT -> tU `addTime` dt
+                StableT tm -> tm `addTime` dt
+        in
+        readIORef rf >>= \ s0 -> -- old signal for comparison
+        let tU' = firstDiffT eq s0 su tU tSeek in
+        let su' = s_trim su tU' in
+        tU' `seq` su' `seq` -- shifted su and tU based on equal values
+        let s' = s_switch s0 tU' su' in 
+        let sCln = gcSig tS s' in
+        sCln `seq` writeIORef rf sCln >> -- record updated, GC'd signal
+        ln_update lu tS tU' su' -- send eqShift'd update downstream
 
--- find first difference between signals in a given range.
-eqShift :: (a -> b -> Bool) -> Sig a -> Sig b -> T -> T -> (Sig b, T)
-eqShift eq as bs tLower tUpper =
-    if (tLower >= tUpper) then (bs,tLower) else
+-- find time of first difference between two signals. 
+firstDiffT :: (a -> b -> Bool) -> Sig a -> Sig b -> T -> T -> T
+firstDiffT eq as bs tLower tUpper =
+    if (tLower >= tUpper) then tLower else
     let sigEq = s_full_zip activeWhileEq as bs in -- compare signals
     let sigEqList = sigToList sigEq tLower tUpper in 
     let cutL = L.dropWhile sampleActive sigEqList in
-    let tChanged = if (L.null cutL) then tUpper else (fst . L.head) cutL in
-    let bs' = s_trim bs tChanged in
-    (bs', tChanged)
+    case cutL of
+        [] -> tUpper
+        (x:_) -> fst x
     where activeWhileEq (Just x) (Just y) = 
                 if (eq x y) then Just () 
                             else Nothing
@@ -733,64 +721,71 @@ eqShift eq as bs tLower tUpper =
 -- intermediate cache. (Implementation is same used by badjeqf.)
 wrapEqFilter :: DT -> (z -> z -> Bool) -> LnkUp z -> IO (LnkUp z)
 wrapEqFilter dteqf zeq zlu =
-    newIORef st_zero >>= \ rfz ->
+    newIORef s_never >>= \ rfz ->
     return $ lnEqShift dteqf zeq rfz zlu
-
-
--- TODO: tchokeB
--- 
--- This behavior is aimed to help control cycles. Updates too far 
--- ahead of the current stability will be delayed.
---
--- Wrap a LnkUp with a stability delay. This involves delaying an
--- update that would occur too far ahead of stability, unless the
--- stability has also
-
 
 
 -- | phaseUpdateB 
 --
--- when a partition is receiving batch updates, it receives multiple
--- updates from multiple in-flight batches. phaseUpdateB combines
--- these into one big update. Further, most often many signals will
--- be updated at once. Systematic use of phaseUpdateB can make this
--- efficient by using the ln_touch system for every updated signal
--- before processing any of them. 
+-- phaseUpdateB is the receiver-side for `bcross`. Multiple updates
+-- may be received on runStepper, i.e. through many bcross entries
+-- and possibly through multiple in-flight messages to a single 
+-- bcross (in case of fast producer, slow consumer). 
 --
--- The (IO () -> IO ()) operation is to enqueue the phase task. It
--- should be specific to the partition. It is assumed that updates
--- and the phase queue are handled in the same thread. It is created
--- when the behavior is built, if necessary.
+-- To handle the latter case, phaseUpdateB will "piggyback" multiple 
+-- updates on a single connection, composing one larger update. The
+-- former case is handled by the ln_touch mechanism and by delaying
+-- the actual update a phase (thus the name).
+--
+-- phaseUpdateB does not have direct knowledge of how to delay one
+-- phase. Instead, that is provided through the `mkPQ` argument.
 phaseUpdateB :: IO PhaseQ -> B (S p x) (S p x)
 phaseUpdateB mkPQ = mkLnkB id lnPhase
     where lnPhase LnkDead = return LnkDead
           lnPhase (LnkSig lu) =
             mkPQ >>= \ pq ->
-            newIORef (suZero,False) >>= \ rfSu ->
+            newIORef NoUpdate >>= \ rfSu ->
             let lu' = makePhaseLU rfSu pq lu in 
             return (LnkSig lu')
 
-suZero :: SigUp a
-suZero = SigUp { su_state = Nothing, su_stable = tmAncient }
+data UpdateRecord a 
+    = NoUpdate 
+    | IdleUpdate !StableT 
+    | FullUpdate !StableT !T !(Sig a)
 
 type PhaseQ = IO () -> IO () -- receive a phase operation.
 
-makePhaseLU :: IORef (SigUp a, Bool) -> PhaseQ -> LnkUp a -> LnkUp a
-makePhaseLU rf pq lu = LnkUp { ln_touch = touch, ln_update = update }
-    where touch = return ()
-          update su =
-            readIORef rf >>= \ (su0,bPrepared) ->
-            writeIORef rf (su_piggyback su0 su, True) >>
-            unless bPrepared doPrepare
-          doPrepare = 
-            pq deliver >> -- enqueue before touch to preserve order
-            ln_touch lu
-          deliver = -- called later, by PhaseQ
-            readIORef rf >>= \ (su,bPrepared) ->
-            assert bPrepared $
-            writeIORef rf (suZero,False) >>
-            ln_update lu su
-
+makePhaseLU :: IORef (UpdateRecord a) -> PhaseQ -> LnkUp a -> LnkUp a
+makePhaseLU rf pq lu = LnkUp touch update idle where
+    touch = return ()
+    maybeSchedule NoUpdate = pq deliver >> ln_touch lu
+    maybeSchedule _ = return ()
+    deliver =
+        readIORef rf >>= \ rec ->
+        writeIORef rf NoUpdate >>
+        case rec of
+            NoUpdate -> error "unexpected update record state!"
+            IdleUpdate tS -> ln_idle lu tS
+            FullUpdate tS tU su -> ln_update lu tS tU su
+    idle tS =
+        readIORef rf >>= \ rec ->
+        maybeSchedule rec >>
+        let rec' = case rec of
+                FullUpdate _ tU su -> FullUpdate tS tU su
+                _ -> IdleUpdate tS
+        in
+        writeIORef rf rec'
+    update tS tU su =
+        readIORef rf >>= \ rec ->
+        maybeSchedule rec >>
+        let rec' = case rec of
+                FullUpdate _ tU0 su0 ->
+                    if (tU0 >= tU) 
+                        then FullUpdate tS tU su 
+                        else FullUpdate tS tU0 (s_switch su0 tU su)
+                _ -> FullUpdate tS tU su
+        in
+        writeIORef rf rec'
 
 -- | keepAliveB will keep the first element alive so long as other
 -- parts of the signal are alive. (used by unsafeOnUpdateBLN)
@@ -807,67 +802,5 @@ keepAliveB = mkLnkB id $ mkLnkPure lnkMatchLiveness
 undeadB :: B (S p x) (S p x)
 undeadB = mkLnkB id $ mkLnkPure (LnkSig . ln_lnkup)
 
-
--- | unsafeAutoSubscribeB is a simplified subscription model for a
--- behavior: subscribe whenever there is demand now or in future, 
--- and unsubscribe when signal seems to be unnecessary. Subscription
--- has a callback based on Lnk x, and is insensitive to demand. 
---
--- Note that unsafeAutoSubscribeB does not provide any signals to
--- the output link directly. It is up to the OnSubscribe x to hook
--- the Lnk x to something that provides a signal.
---
--- Note that you should probably use a barrier, forceDelayB, on the
--- input signal to unsafeAutoSubscribeB. And probably a phaseDelay
--- or delayToNextStepB on the output.
---
--- This is `unsafe` because it does not respect duration coupling;
--- indeed, you'll need to hack around it a bit to regain duration
--- coupling, perform merges or masking, ensure thread safety.
-unsafeAutoSubscribeB :: OnSubscribe x -> B (S p ()) x
-unsafeAutoSubscribeB = mkLnkB tr_unit . buildSubscriber 
-
-type OnSubscribe x = Lnk x -> IO (UnSubscribe)
-type UnSubscribe = IO ()
-
-buildSubscriber :: OnSubscribe x -> Lnk x -> IO (Lnk (S p ()))
-buildSubscriber onSub lnx = 
-    if (ln_dead lnx) then return LnkDead else
-    newIORef st_zero >>= \ rfSt ->
-    newIORef Nothing >>= \ rfUnsub ->
-    let touch = return () in
-    let update = updateSubscriber onSub lnx rfSt rfUnsub in
-    return $ LnkSig $ LnkUp { ln_touch = touch, ln_update = update }
-
-updateSubscriber :: OnSubscribe x -> Lnk x 
-                 -> IORef (SigSt ()) -> IORef (Maybe UnSubscribe)
-                 -> SigUp () -> IO ()
-updateSubscriber onSub lnx rfSt rfUnsub su =
-    readIORef rfSt >>= \ st -> 
-    let st' = st_sigup su st in
-    case st_stable st' of
-        Nothing -> writeIORef rfSt st'
-        Just t -> 
-            let stc = st_clear t st' in
-            let bTerm = s_term (st_signal st) t in
-            writeIORef rfSt stc >>
-            if bTerm then unsubscribe 
-                     else subscribe
-    where subscribe =
-            readIORef rfUnsub >>= \ ux ->
-            case ux of
-                Just _  -> return ()
-                Nothing -> onSub lnx >>=
-                           writeIORef rfUnsub . Just
-          unsubscribe =
-            readIORef rfUnsub >>= \ ux ->
-            writeIORef rfUnsub Nothing >>
-            maybe (return ()) id ux
-            
-    -- don't subscribe yet; subscribe on demand update.
-    -- will need some state to track demand signal and
-    -- to track UnSubscribe command if available. 
-
-    
 
 

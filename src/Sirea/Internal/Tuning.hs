@@ -8,10 +8,11 @@ module Sirea.Internal.Tuning
     , batchesInFlight
     , dtDaggrHist, dtMdistHist
     , dtFinalize
-    , dtPrintExpire    
+    , dtPrintExpire  
+    , tAncient  
     ) where
 
-import Sirea.Time (DT)
+import Sirea.Time (T,DT,mkTime)
 
 -- The main Sirea application has a few tuning parameters related to
 -- periodic updates, heartbeats, graceful startup and shutdown. Also
@@ -80,13 +81,16 @@ dtDaggrHist, dtMdistHist :: DT
 dtDaggrHist = dtHeartbeat -- how long to tolerate late-arriving demands
 dtMdistHist = 2 * dtHeartbeat -- how long to tolerate late-arriving observers
 
--- UnsafeOnUpdate behaviors will execute IO actions as they become
--- stable. But eventually they'll receive a final stability update.
--- At that point, the signal should become Nothing, but that might
--- be at some time well in the future of the current stability. This
--- tunes how far to search for that Nothing before aborting. 
+-- 
+-- Some behaviors depend on stability values to know how much to 
+-- compute. UnsafeOnUpdate is one example, and BDynamic has another.
+-- When these behaviors reach their 'final' stability value, it can
+-- be confusing to decide how much more to compute. Presumably, the
+-- final value should be an inactive signal. But it might be active
+-- for a few seconds before finalizing. In those cases, dtFinalize
+-- is used to ensure any remaining values are processed.
 dtFinalize :: DT
-dtFinalize = 36.0 -- pretty much guarantee completion
+dtFinalize = 60.0 -- guarantee completion in all but absurd cases
 
 
 -- For console printing, currently I use a simple expiration model
@@ -95,5 +99,15 @@ dtFinalize = 36.0 -- pretty much guarantee completion
 -- roughly models a tuple space with expirations.)
 dtPrintExpire :: DT
 dtPrintExpire = 6.0 
+
+-- In some cases, I want to initialize structures with a lower bound
+-- for Time. But I don't want to pay code and performance overheads 
+-- for a symbolic representation of this lower bound. So I'll just
+-- use tAncient to represent a long before-time.
+--
+-- I'll model the ancient sentinel time as a billion days ago. 
+tAncient :: T
+tAncient = mkTime (negate aBillionDays) 0 where
+    aBillionDays = 1000 * 1000 * 1000
 
 

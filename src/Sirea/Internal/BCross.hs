@@ -37,21 +37,19 @@
 -- 
 module Sirea.Internal.BCross 
     ( crossB
-    , stepDelayB
     , phaseDelayB
     , GobStopper(..)
     , runGobStopper
     , OutBox
 
     -- isUrgentUpdate repeats in DemandMonitorData if not exported
-    , isUrgentUpdate 
+    , urgentStability, urgentUpdate
 
     ) where
 
 import Data.Typeable
 import Data.Function (fix)
 import Data.IORef
-import Data.Maybe (isNothing)
 import Control.Applicative
 import Control.Exception (assert)
 import Control.Concurrent.MVar 
@@ -63,7 +61,8 @@ import Sirea.Internal.LTypes
 import Sirea.Internal.PTypes
 import Sirea.Internal.BImpl (phaseUpdateB)
 import Sirea.Internal.PulseSensor (initPulseListener)
-import Sirea.Internal.Tuning (dtInsigStabilityUp, dtFutureChoke, batchesInFlight)
+import Sirea.Internal.Tuning ( dtInsigStabilityUp, dtFutureChoke
+                             , batchesInFlight, tAncient)
 import Sirea.Partition
 import Sirea.PCX
 import Sirea.Behavior
@@ -112,41 +111,31 @@ mkSend _ _ _ LnkDead = return LnkDead
 mkSend cw p1 p2 (LnkSig lu) = 
     initPartition p1 cw >> -- create partition p1 (idempotent)
     initPartition p2 cw >> -- create partition p2 (idempotent)
-    newIORef Nothing >>= \ rfChoke -> -- track stability to compute urgency
+    newIORef (StableT tAncient) >>= \ rfChoke -> -- track stability to compute urgency
     let send = obSend cw p1 p2 in
-    let touch' = return () in
-    let update' su = 
-            readIORef rfChoke >>= \ t0 ->
-            let bUrgent = isUrgentUpdate t0 su in
-            let bDropUpdate = isNothing (su_state su) && not bUrgent in
-            unless bDropUpdate $
-                let tf = su_stable su in
-                tf `seq` writeIORef rfChoke tf >>
-                send bUrgent (ln_update lu su)
+    let touch = return () in
+    let idle tS = 
+            readIORef rfChoke >>= \ tS0 ->
+            let bUrgent = urgentStability tS0 tS in
+            when bUrgent $
+                writeIORef rfChoke tS >>
+                send bUrgent (ln_idle lu tS)
     in
-    let lu' = LnkUp { ln_touch = touch', ln_update = update' } in
-    return (LnkSig lu')    
+    let update tS tU su =
+            writeIORef rfChoke tS >>
+            let bUrgent = urgentUpdate tS tU in
+            send bUrgent (ln_update lu tS tU su)
+    in
+    let luSend = LnkUp touch update idle in
+    return (LnkSig luSend)    
 
--- isUrgentUpdate is a heuristics computation to decide whether
--- an update is urgent. (Note: If a pure stability update isn't
--- urgent, it may be dropped entirely.)
-isUrgentUpdate :: Maybe T -> SigUp e -> Bool
-isUrgentUpdate Nothing _ = True -- initial updates always urgent!
-isUrgentUpdate (Just t0) su =
-    let bUrgentDueToStability = 
-            -- we care most about LARGE stability updates
-            case su_stable su of
-                Nothing -> True -- final updates always urgent!
-                Just tf -> (tf > (t0 `addTime` dtInsigStabilityUp))
-    in
-    let bUrgentDueToState =
-            -- we care most about NEAR-TERM state updates
-            case su_state su of
-                Nothing -> False -- pure stability update
-                Just (_,tu) -> (tu < (t0 `addTime` dtFutureChoke))
-    in
-    bUrgentDueToStability || bUrgentDueToState
-           
+urgentStability :: StableT -> StableT -> Bool
+urgentStability (StableT t0) (StableT tf) = (tf > (t0 `addTime` dtInsigStabilityUp))
+urgentStability _ _ = True
+
+urgentUpdate :: StableT -> T -> Bool
+urgentUpdate (StableT tm) tU = (tU < (tm `addTime` dtFutureChoke))
+urgentUpdate _ _ = True
 
 -- | phaseDelayB delays updates a phase within runStepper. The idea
 -- is to touch a bunch of updates in one run before executing them 
@@ -160,33 +149,6 @@ phaseDelayB cw = fix $ \ b ->
     let tc = getTC cp in
     let doLater = addTCWork tc in
     phaseUpdateB (return doLater)
-
--- | stepDelayB is for use within a partition, but delays actions to
--- the next runStepper operation (cf. Sirea.Partition.onNextStep).
--- This should be combined with phaseDelayB in most cases.
---   i.e. stepDelayB cw >>> phaseDelayB cw
--- This composition works similar to an internal bcross.
---
--- The motivation for stepDelayB is to process updates provided
--- between steps, while ensuring the snapshot consistency within a
--- partition. Can also be used for worker threads. But it may prove
--- more useful in some cases to use `onNextStep` with phaseDelayB,
--- e.g. to ensure updates are grouped.
---
-stepDelayB :: (Partition p) => PCX w -> B (S p x) (S p x)
-stepDelayB cw = fix $ \ b ->
-    let (p,_) = getPartitions b in
-    let cp = getPCX p cw in
-    let tc = getTC cp in
-    let doSend = addTCRecv tc in
-    let mkLn = return . fnStepDelay doSend in
-    B_mkLnk tr_fwd mkLn
-
-fnStepDelay :: (IO () -> IO ()) -> Lnk (S p x) -> Lnk (S p x)
-fnStepDelay _ LnkDead = LnkDead
-fnStepDelay stepDelay (LnkSig lu) = LnkSig lu'
-    where lu' = LnkUp { ln_touch = return (), ln_update = update }
-          update = stepDelay . ln_update lu
 
 getTC :: (Partition p) => PCX p -> TC
 getTC = findInPCX 

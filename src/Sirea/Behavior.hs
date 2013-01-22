@@ -105,6 +105,10 @@ class (Category b) => BFmap b where
     -- (see FRP.Sirea.Link for more about stability). The signal is
     -- computed up to `Just x | Nothing`; x is not observed. 
     --
+    -- This is a performance annotation. Behaviors are not obligated
+    -- to implement it fully (or at all). Sirea implements it for B
+    -- and BCX, at least for regular (not final) signal updates. 
+    --
     -- This is meant for use in tandem with bstrat to lift desired
     -- computations to occur prior observing the `Just` constructor.
     bseq :: b (S p x) (S p x)

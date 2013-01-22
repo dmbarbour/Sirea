@@ -8,7 +8,7 @@ module Sirea.Internal.BDynamic
     ( evalB
     ) where
 
-import Prelude hiding(id,(.))
+import Prelude hiding(id,(.),drop)
 import Control.Category
 import Control.Monad (unless, when)
 import Control.Applicative
@@ -23,21 +23,12 @@ import Sirea.Internal.STypes
 import Sirea.Internal.LTypes
 import Sirea.Internal.BImpl 
 import Sirea.Internal.BCompile
-import Sirea.Internal.Tuning (dtCompileFuture)
+import Sirea.Internal.Tuning (dtCompileFuture, dtFinalize, tAncient)
 import Sirea.Time
 import Sirea.Signal
 
 --import Debug.Trace
-
-
 type Key = Int
-
--- TODO: there seems to be some issue with touch/update
---   I seem to be terminating many compiled values that
---   should be stable, or at least equivalent to existing
---   values (under eqf). In particular rotateFib fails.
---   
-
 
 -- Evaluate a behavior provided dynamically.
 --
@@ -146,97 +137,120 @@ evalSynched ldt =
     (ldt_maxCurr ldt == ldt_minCurr ldt) &&
     (ldt_maxGoal ldt == ldt_minCurr ldt)
 
+-- Data needed for the dynamic evaluator source
+data Evaluator x y = Evaluator 
+    { ev_data     :: !(IORef (EVD x y)) -- mutable state
+    , ev_mergeLnk :: !(Key -> Lnk y) -- remote links
+    , ev_dynX     :: !(LnkW Dyn x) -- source links
+    }
+data EVD x y = EVD 
+    { evd_signal   :: !(SigSt (B x y)) -- signal of dynamic behaviors
+    , evd_compileT :: {-# UNPACK #-} !T -- how much of the signal has been compiled?
+    , evd_nextKey  :: {-# UNPACK #-} !Key -- for new keys to merge signals at y
+    }
+
 -- buildEval prepares the evaluator to receive and process inputs.
 buildEval :: (SigMembr x) => LnkD LDT x -> Lnk y -> IO (Lnk (S p (B x y) :&: x))
 buildEval dtx lnyFinal =
     assert (evalSynched dtx) $
-    -- need to store the input signals
-    newIORef st_zero >>= \ rfBSig -> -- present and future dynamic behaviors
-    newIORef Nothing >>= \ rfTt -> -- until when has this been compiled?
-    mkFullDyn dtx >>= \ dynX -> -- store and process the `x` signals
-    let xLnk = fullDynToLnk dynX in -- Lnk x
-    -- Merge multiple `Lnk y` signals based on unique indexes.
-    let arbitraryStartingIndex = 10000 in
-    newIORef arbitraryStartingIndex >>= \ rfIdx ->
-    mkMergeLnkFactory lnyFinal >>= \ mkLny ->
-    let compile b = takeIdx rfIdx >>= compileBC1 b . mkLny in
-    let compileE (t,mb) =
-            maybe (return LnkDead) compile mb >>= \ lx ->
-            return (t,lx)
-    in  
-    -- install updates to the dynamic behavior
-    let touch = 
-            readIORef rfBSig >>= \ st ->
-            unless (st_expect st) $ -- prevents double touch
-                --traceIO "touchBSig" >>
-                let st' = st_poke st in
-                writeIORef rfBSig st' >>
-                dynBTouch dynX
-    in
-    let update su = 
-            stSigupRef rfBSig su >>= \ st' -> -- update signal & clear touch
-            let tu = fmap snd (su_state su) in
-            buildUpdateRange rfTt tu st' >>= \ range -> -- compute compilation target
-            mapM compileE range >>= \ dynLnks -> -- [(T,Lnk x)]
-            mapM_ (ln_touchAll . snd) dynLnks >> -- touch new links immediately
-            dynBUpdate (su_stable su) dynLnks dynX 
-    in
-    let luB = LnkUp { ln_touch = touch, ln_update = update } in
+    let evd0 = EVD st_zero tAncient 10000 in
+    newIORef evd0 >>= \ rfEVD ->
+    mkFullDyn dtx >>= \ dynX -> 
+    mkMergeLnkFactory lnyFinal >>= \ mergeLnkY ->
+    let ev = Evaluator rfEVD mergeLnkY dynX in
+    let luB = LnkUp (touchEV ev) (updateEV ev) (idleEV ev) in
+    let xLnk = fullDynToLnk (ev_dynX ev) in
     return (LnkProd (LnkSig luB) xLnk)
 
-takeIdx :: IORef Key -> IO Key
-takeIdx rf = 
-    readIORef rf >>= \ n0 ->
-    let n = succ n0 in
-    n `seq`
-    writeIORef rf n >>
-    return n
-    
+touchEV :: Evaluator x y -> IO ()
+touchEV ev =
+    readIORef (ev_data ev) >>= \ evd ->
+    let st = evd_signal evd in
+    unless (st_expect st) $
+        let st' = st_poke st in
+        let evd' = evd { evd_signal = st' } in
+        writeIORef (ev_data ev) evd' >>
+        dynBTouch (ev_dynX ev)
 
--- Update & GC the signal held by reference; return intermediate.
--- Currently assumes will shutdown shortly after stability goes to
--- Nothing. 
-stSigupRef :: IORef (SigSt a) -> SigUp a -> IO (SigSt a)
-stSigupRef rf su = 
-    readIORef rf >>= \ st ->
-    assert (st_expect st) $ -- touch is required before update
-    let st' = st_sigup su st in -- st' is updated; stc is GC'd
-    let stc = maybe st_zero (`st_clear` st') (su_stable su) in
-    st' `seq` stc `seq` 
-    writeIORef rf stc >>
-    return st'
+idleEV :: Evaluator x y -> StableT -> IO ()
+idleEV ev tS = 
+    readIORef (ev_data ev) >>= \ evd ->
+    let st = evd_signal evd in
+    assert (st_expect st) $
+    let st' = st_idle tS st in
+    let evd' = evd { evd_signal = st' } in
+    writeIORef (ev_data ev) evd' >>
+    updateDynamicsEV ev Nothing
 
+updateEV :: Evaluator x y -> StableT -> T -> Sig (B x y) -> IO ()
+updateEV ev tS tU su =
+    readIORef (ev_data ev) >>= \ evd ->
+    let st = evd_signal evd in
+    assert (st_expect st) $
+    let st' = st_update tS tU su st in
+    let evd' = evd { evd_signal = st' } in
+    writeIORef (ev_data ev) evd' >>
+    updateDynamicsEV ev (Just tU)
+
+-- The majority of the dynamic behavior logic is handled here, on
+-- updating the signal that contains dynamic behaviors, or on the
+-- remote end merging multiple signals that vary in time. 
 --
--- compute which elements to compile based on time and update time
--- NOTE: we might be forced to compile by an update (tu) or simply
--- by the passage of time and improving stability (since we are not
--- compiling the infinite future of dynamic signals). buildUpdateRange
--- will work in either case, using the update time (if any) to 
--- discriminate whether behavior compiled in the past must be replaced.
-buildUpdateRange :: IORef (Maybe T) -> (Maybe T) -> SigSt a -> IO [(T,Maybe a)]
-buildUpdateRange rfTt tu st =
-    readIORef rfTt >>= \ tUpperLast ->
-    let tStable = st_stable st in
-    let tLower = leastTime tUpperLast tu in -- might override prior compilations
-    let bPrimaryUpdate = (tLower == tu) in 
-    let tUpper = fmap (`addTime` dtCompileFuture) (tStable <|> tu) in
-    writeIORef rfTt tUpper >>
-    let times = (,) <$> tLower <*> tUpper in
-    let range = case times of
-            Just (tLo,tHi) ->
-                if (tLo > tHi) then [] else
-                let slR = sigToList (st_signal st) tLo tHi in -- full range
-                let slU = if bPrimaryUpdate then slR else tail slR in -- updated range
-                slU
-            Nothing -> 
-                []
-    in 
-    return range
+-- The `Maybe T` value here indicates whether there was a recent
+-- update to the signals list. If so, we might need to replaces the
+-- speculative dynamic behaviors that were already compiled and are
+-- already processing their speculative signals. If not, we still
+-- must provide updates to dynamic behaviors that become visible due
+-- to new stability updates. 
+--
+-- This operation will also perform GC of the behaviors signal.
+updateDynamicsEV :: Evaluator x y -> Maybe T -> IO ()
+updateDynamicsEV ev mbTU = updateBehaviors where
+    updateBehaviors = 
+        getBuildRangeEV ev mbTU >>= \ (tS,range) -> -- [(T,Maybe(B x y))]
+        mapM compileE range >>= \ dynLnks -> -- [(T,Lnk x)]
+        mapM_ (ln_touchAll . snd) dynLnks >> -- block premature merge
+        dynBUpdate tS dynLnks (ev_dynX ev) -- update signal sources in x
+    compileE (t,mb) =
+        maybe (return LnkDead) compile mb >>= \ lnx ->
+        return (t,lnx)
+    compile b = newKey >>= compileBC1 b . (ev_mergeLnk ev)
+    newKey = -- get a unique key for merging signals (at Lnk y)
+        readIORef (ev_data ev) >>= \ evd ->
+        let k = succ (evd_nextKey evd) in
+        let evd' = evd { evd_nextKey = k } in
+        k `seq` evd' `seq`
+        writeIORef (ev_data ev) evd' >>
+        return k
 
--- filter x membrane for liveness of input source.
--- (It is possible that some inputs are dead, due to
--- binl/binr, though this should be rare for dynamic
--- behaviors.)
+-- this operation will compute which behaviors need to be compiled
+-- and installed. This set can be adjusted due to stability or to
+-- an update. Will also perform GC and report stability, to reduce
+-- state mutations
+getBuildRangeEV :: Evaluator x y -> Maybe T -> IO (StableT,[(T,Maybe (B x y))])
+getBuildRangeEV ev mbTU =
+    readIORef (ev_data ev) >>= \ evd ->
+    let st = evd_signal evd in
+    let tS = st_stable st in 
+    let stCln = st_clear tS st in
+    let tU0 = evd_compileT evd in
+    let tLo = maybe tU0 (min tU0) mbTU in
+    let bRebuildFirst = maybe False (== tLo) mbTU in
+    let tHi = case tS of 
+            DoneT -> tLo `addTime` dtFinalize 
+            StableT tm -> tm `addTime` dtCompileFuture
+    in
+    assert (tHi >= tLo) $
+    let evd' = evd { evd_signal = stCln, evd_compileT = tHi } in
+    let slR = sigToList (st_signal st) tLo tHi in
+    assert ((not . null) slR) $
+    let range = if bRebuildFirst then slR else tail slR in
+    evd' `seq` writeIORef (ev_data ev) evd' >>
+    return (tS,range)
+  
+-- filter x membrane for liveness of input source. (It is possible
+-- that some inputs are dead, due to binl/binr upstream, though this
+-- should be rare for dynamic behaviors.)
 filterLS :: LnkD LDT x -> LnkW dd x -> LnkW dd x
 filterLS (LnkDProd dt1 dt2) xy =
     let x' = filterLS dt1 $ ln_fst xy in
@@ -261,8 +275,10 @@ fullDynToLnk (LnkSum x y) = LnkSum (fullDynToLnk x) (fullDynToLnk y)
 fullDynToLnk (LnkSig x) = LnkSig (dynToLnkUp x)
 
 dynToLnkUp :: Dyn x -> LnkUp x
-dynToLnkUp dyn = LnkUp { ln_touch  = dynSigTouch dyn 
-                       , ln_update = dynSigUpdate dyn }
+dynToLnkUp dyn = LnkUp touch update idle where
+    touch = dynSigTouch dyn
+    update = dynSigUpdate dyn
+    idle = dynSigIdle dyn
 
 -- Dyn and DynSt are internal structures used for dynamic behaviors.
 -- Each Dyn will join the input signal `x` with the active dynamic
@@ -273,17 +289,17 @@ dynToLnkUp dyn = LnkUp { ln_touch  = dynSigTouch dyn
 newtype Dyn a = Dyn (IORef (DynSt a))
 data DynSt a = DynSt 
     { dyn_signal :: !(SigSt a)   -- concrete input signal
-    , dyn_tmup   :: !(Maybe T)   -- earliest update time between signal and behaviors
+    , dyn_tmup   :: !(Maybe T)   -- earliest update time (signal or behavior)
     , dyn_blink  :: ![(T,LnkUp a)] -- links prepared to receive signals.
-    , dyn_bstable:: !(Maybe T)   -- current stability of dynamic behaviors
+    , dyn_bstable:: !StableT     -- stability of dynamic behavior
     , dyn_btouch :: !Bool        -- still expecting update to active links?
     }
 
 dyn_zero :: DynSt a
-dyn_zero = DynSt { dyn_signal   = st_zero { st_stable = tmAncient }
+dyn_zero = DynSt { dyn_signal   = st_zero 
                  , dyn_tmup     = Nothing
                  , dyn_blink    = []
-                 , dyn_bstable  = tmAncient
+                 , dyn_bstable  = StableT tAncient
                  , dyn_btouch   = False 
                  }
 newDyn :: IO (Dyn a)
@@ -320,28 +336,32 @@ dynSigTouch (Dyn rf) =
 touchBL :: [(T,LnkUp a)] -> IO ()
 touchBL bl = mapM_ (ln_touch . snd) bl
 
-dynSigUpdate :: Dyn a -> SigUp a -> IO ()
-dynSigUpdate (Dyn rf) su =
+dynSigIdle :: Dyn a -> StableT -> IO ()
+dynSigIdle (Dyn rf) tS =
     readIORef rf >>= \ dyn ->
     let st = dyn_signal dyn in
     assert (st_expect st) $
-    let st' = st_sigup su st in
-    let tmup' = leastTime (dyn_tmup dyn) (snd `fmap` su_state su) in
-    let dyn' = dyn { dyn_tmup = tmup', dyn_signal = st' } in
+    let st' = st_idle tS st in
+    let dyn' = dyn { dyn_signal = st' } in
+    writeIORef rf dyn' >>
+    dynMaybeEmit rf
+
+dynSigUpdate :: Dyn a -> StableT -> T -> Sig a -> IO ()
+dynSigUpdate (Dyn rf) tS tU su =
+    readIORef rf >>= \ dyn ->
+    let st = dyn_signal dyn in
+    assert (st_expect st) $
+    let st' = st_update tS tU su st in
+    let tmup' = Just $! maybe tU (min tU) (dyn_tmup dyn) in
+    let dyn' = dyn { dyn_signal = st', dyn_tmup = tmup' } in
     writeIORef rf dyn' >>
     dynMaybeEmit rf
 
 -- update the dynamic behaviors. The links specific to each
 -- concrete underlying signal are stored with that signal. 
--- Arguments:
---   tm - stability
---   bl - input links to a time-varying behavior.
---     This list is always finite, and runs up to dtCompileFuture
---     into the future of the signal.
-dynBUpdate :: (Maybe T) -> [(T,Lnk x)] -> LnkW Dyn x -> IO ()
-dynBUpdate _ bl LnkDead = 
-    --traceIO "freezing dead dynamic links" >>
-    mapM_ (ln_freeze . snd) bl 
+-- The important argument is [(T,Lnk x)] - a list of compiled
+-- links with the times they are supposed to receive information.
+dynBUpdate :: StableT -> [(T,Lnk x)] -> LnkW Dyn x -> IO ()
 dynBUpdate tm bl (LnkProd dynX dynY) =
     let blX = map (second ln_fst) bl in
     let blY = map (second ln_snd) bl in
@@ -356,162 +376,120 @@ dynBUpdate tm bl (LnkSig (Dyn rf)) =
     let blu = map (second ln_lnkup) bl in
     dynUpdateLinks rf tm blu >>
     dynMaybeEmit rf
+dynBUpdate _ bl LnkDead =
+    -- we've touched these but won't update them; freeze them! 
+    mapM_ (ln_freeze . snd) bl 
 
 -- when we update the links associated with a behavior, we may need
 -- to kill prior links associated with this behavior. 
-dynUpdateLinks :: IORef (DynSt a) -> Maybe T -> [(T,LnkUp a)] -> IO ()
-dynUpdateLinks rf tStable [] =
+dynUpdateLinks :: IORef (DynSt a) -> StableT -> [(T,LnkUp a)] -> IO ()
+dynUpdateLinks rf tS [] =
     readIORef rf >>= \ dyn ->
     assert (dyn_btouch dyn) $
-    let dyn' = dyn { dyn_bstable = tStable, dyn_btouch = False } in
+    let dyn' = dyn { dyn_bstable = tS, dyn_btouch = False } in
     writeIORef rf dyn'
-dynUpdateLinks rf tStable blu@(b:_) =
+dynUpdateLinks rf tS blu@(b:_) =
     readIORef rf >>= \ dyn ->
     assert (dyn_btouch dyn) $
     --traceIO ("dynUpdateLinks: " ++ show (map fst blu)) >>
-    let tmB = fst b in
-    let tmup' = leastTime (dyn_tmup dyn) (Just tmB) in
-    let (blKeep,blKill) = span ((< tmB) . fst) (dyn_blink dyn) in
+    let tU = fst b in
+    let tmup' = Just $! maybe tU (min tU) (dyn_tmup dyn) in
+    let (blKeep,blKill) = span ((< tU) . fst) (dyn_blink dyn) in
     let blink' = blKeep ++ blu in
-    let dyn' = dyn { dyn_bstable = tStable
-                   , dyn_blink   = blink'
-                   , dyn_tmup    = tmup'
-                   , dyn_btouch  = False   } 
+    let dyn' = dyn { dyn_bstable = tS, dyn_btouch = False
+                   , dyn_blink = blink', dyn_tmup = tmup' } 
     in
-    dyn' `seq` writeIORef rf dyn' >>
-    dynCutDeadLinks tmB blKill
-
--- on dynUpdateLinks, we'll potentially replace existing dynamic
--- behaviors with new dynamic behaviors. In these cases, we may
--- need to retroactively kill a broad range of values.
-dynCutDeadLinks :: T -> [(T,LnkUp a)] -> IO ()
-dynCutDeadLinks _ [] = return ()
-dynCutDeadLinks tCut bl =
-    assert (all (>= tCut) (map fst bl)) $
-    -- traceIO ("Terminating @ " ++ show tCut ++ " : " ++ show (map fst bl)) >>
-    mapM_ (terminate tCut . snd) bl
+    writeIORef rf dyn' >>
+    mapM_ (terminate tU . snd) blKill -- destroy replaced behaviors
 
 -- when we switch to a new dynamic behavor, we kill behaviors that
 -- are no longer relevant. This recants signals starting at time tm.
 terminate :: T -> LnkUp a -> IO ()
-terminate tCut lu = ln_update lu su
-    where su = SigUp { su_state = Just (s_never, tCut), su_stable = Nothing }
+terminate tCut lu = ln_update lu DoneT tCut s_never
 
--- need to process signal updates, then garbage-collect any data
--- that is not necessary for future updates. Most of the update
--- logic is delayed to this point (resulting in the large DynSt).
+-- decision point for processing updates. The actual updates are not
+-- trivial, mostly due to the finalization semantics for old links.
 dynMaybeEmit :: IORef (DynSt a) -> IO ()
 dynMaybeEmit rf = 
     readIORef rf >>= \ dyn ->
     unless (dynExpect dyn) $
-        case dyn_tmup dyn of
-            Nothing -> emitStable rf
-            Just tu -> emitUpdate rf tu
+        let tS    = dynStable dyn in
+        let bl0   = dyn_blink dyn in
+        let sig   = (st_signal . dyn_signal) dyn in
+        let blUpd = case dyn_tmup dyn of
+                Nothing -> loadStable tS bl0
+                Just tU -> loadUpdate tS tU sig bl0
+        in
+        let stCln = st_clear tS (dyn_signal dyn) in
+        let blCln = cleanBl blUpd in
+        let dyn' = dyn { dyn_signal = stCln, dyn_blink = blCln
+                       , dyn_tmup = Nothing }
+        in
+        dyn' `seq` writeIORef rf dyn' >>
+        mapM_ bl_task blUpd
 
 dynExpect :: DynSt a -> Bool
 dynExpect dyn = dyn_btouch dyn || st_expect (dyn_signal dyn)
 
--- final send operations.
-emitUpdateE :: ((t,LnkUp a),SigUp a) -> IO ()
-emitUpdateE ((_,lu),su) = ln_update lu su
+dynStable :: DynSt a -> StableT
+dynStable dyn = min (dyn_bstable dyn) ((st_stable . dyn_signal) dyn)
 
--- innerStability accounts for an upper limit when stability 
--- surpasses the cutoff point for a dynamic signal.
-innerStability :: Maybe T -> T -> Maybe T
-innerStability Nothing _ = Nothing
-innerStability tStable@(Just tS) tHi =
-    if (tS >= tHi) then Nothing
-                   else tStable
-
-cleanSt :: SigSt a -> Maybe T -> SigSt a
-cleanSt st = maybe st_zero (`st_clear` st)
-
--- 
-dynStable :: DynSt a -> Maybe T
-dynStable dyn = leastTime (dyn_bstable dyn) (st_stable (dyn_signal dyn))
+data BLUP x = BLUP 
+    { bl_link :: !(T,LnkUp x) 
+    , bl_drop :: !Bool
+    , bl_task :: (IO ())
+    }
 
 -- GC the blUpd list
-cleanBl :: [(x,SigUp a)] -> [x]
-cleanBl = map fst . dropWhile (isNothing . su_stable . snd)
-
--- emitStable is for a stability-only update. This is the
--- most common update. Might even deserve its optimized form.
-emitStable :: IORef (DynSt a) -> IO ()
-emitStable rf =
-    --traceIO "emitStable" >>
-    readIORef rf >>= \ dyn ->
-    assert ((isNothing . dyn_tmup) dyn) $
-    assert ((not . dynExpect) dyn) $
-    let tStable = dynStable dyn in
-    let blUpd = loadStable tStable (dyn_blink dyn) in
-    let st'  = cleanSt (dyn_signal dyn) tStable in
-    let blink' = cleanBl blUpd in
-    let dyn' = dyn { dyn_signal = st', dyn_blink = blink'
-                   , dyn_tmup = Nothing } 
-    in
-    dyn' `seq` writeIORef rf dyn' >>
-    mapM_ emitUpdateE blUpd
+cleanBl :: [BLUP x] -> [(T,LnkUp x)]
+cleanBl = map bl_link . dropWhile bl_drop
 
 -- Stability isn't entirely trivial, mostly because some elements 
 -- become "permanently" stable once stability surpasses the start
 -- of the next element's term. (I.e. they become inactive forever.)
-loadStable :: Maybe T -> [(T,lu)] -> [((T,lu),SigUp a)]
-loadStable Nothing = map allN 
-    where allN x = (x,suN)
-          suN  = SigUp { su_state = Nothing, su_stable = Nothing } 
-loadStable tStable@(Just tS) = fn
+loadStable :: StableT -> [(T,LnkUp x)] -> [BLUP x]
+loadStable DoneT = map drop 
+    where drop x = BLUP x True (ln_idle (snd x) DoneT)
+loadStable tS@(StableT tm) = fn
     where fn [] = []
-          fn (x:[]) = (x,suT):[]
+          fn (x:[]) = (keep x):[]
           fn (lo:hi:xs) = 
             let more = fn (hi:xs) in
-            if (tS >= fst hi) then (lo,suN):more
-                              else (lo,suT):more
-          suN = SigUp { su_state = Nothing, su_stable = Nothing }
-          suT = SigUp { su_state = Nothing, su_stable = tStable }
+            if (tm >= fst hi) then (drop lo):more
+                              else (keep lo):more
+          keep x = BLUP x False (ln_idle (snd x) tS)
+          drop x = BLUP x True (ln_idle (snd x) DoneT)
 
--- emitUpdate is applied if we need to process the signals. The given
--- time is the earliest update time (for 
-emitUpdate :: IORef (DynSt a) -> T -> IO ()
-emitUpdate rf tu =
-    --traceIO ("emitUpdate @ " ++ show tu) >>
-    readIORef rf >>= \ dyn ->
-    assert ((Just tu) == dyn_tmup dyn) $
-    assert ((not . dynExpect) dyn) $ 
-    let tStable = dynStable dyn in
-    let sig = (st_signal . dyn_signal) dyn in
-    let blUpd = loadUpdates tStable tu sig (dyn_blink dyn) in
-    let st' = cleanSt (dyn_signal dyn) tStable in
-    let blink' = cleanBl blUpd in
-    let dyn' = dyn { dyn_signal = st', dyn_blink = blink'
-                   , dyn_tmup = Nothing } 
-    in
-    dyn' `seq` writeIORef rf dyn' >>
-    mapM_ emitUpdateE blUpd
 
 -- compute the signal updates for elements in a list. As a special
 -- case, we'll send a cutoff signal if the update occurs on a change
 -- in behavior. This is necessary in case of changes in B.
-loadUpdates :: Maybe T -> T -> Sig a -> [(T,lu)] -> [((T,lu),SigUp a)]
-loadUpdates _ _ _ [] = []
-loadUpdates tStable tu sf (x:[]) = 
+loadUpdate :: StableT -> T -> Sig x -> [(T,LnkUp x)] -> [BLUP x]
+loadUpdate _ _ _ [] = []
+loadUpdate tS tu sf (x:[]) = 
     let tt  = max tu (fst x) in
-    let su  = SigUp { su_state = Just (sf, tt)
-                    , su_stable = tStable } in
-    ((x,su):[])
-loadUpdates tStable tu sk (lo:hi:xs) =
-    let tStableK = innerStability tStable (fst hi) in
-    let sklo  = s_trim sk (fst lo) in
-    let skhi  = s_switch sklo (fst hi) s_never in
-    let tt = max tu (fst lo) in
-    let update =
-            case compare tu (fst hi) of
-                GT -> Nothing            -- stability update
-                EQ -> Just (s_never, tu) -- cutoff update 
-                LT -> Just (skhi, tt)    -- signal update
+    let bDrop = case tS of { DoneT -> True; _ -> False } in
+    let blup = BLUP x bDrop (ln_update (snd x) tS tt sf) in
+    (blup:[])
+loadUpdate tS tu s0 (lo:hi:xs) =
+    let bDrop = case tS of
+            DoneT -> True
+            StableT tm -> (tm >= fst hi)
     in
-    let su = SigUp { su_state = update, su_stable = tStableK } in
-    let more = loadUpdates tStable tu sklo (hi:xs) in
-    ((lo,su):more)
+    let tSK = if bDrop then DoneT else tS in
+    let sf = s_trim s0 (fst lo) in
+    let lu = snd lo in
+    let task = case compare tu (fst hi) of
+            GT -> ln_idle lu tSK -- stability update
+            EQ -> ln_update lu tSK tu s_never -- cutoff update
+            LT -> 
+                let tuK = max tu (fst lo) in -- effective update time
+                let sK = s_switch sf (fst hi) s_never in -- segment
+                ln_update lu tSK tuK sK
+    in
+    let blup = BLUP lo bDrop task in
+    let more = loadUpdate tS tu sf (hi:xs) in
+    (blup:more)
 
 -- RESULTS LINK FACTORY.
 --   Call factory for each dynamic behavior.
@@ -582,38 +560,26 @@ mld_touch mld k =
     let st' = st_poke st in
     let tbl' = M.insert k st' (mld_table mld) in
     let tc' = succ (mld_touchCt mld) in
-    --trace ("mld_touch @ " ++ show k ++ ", tc= " ++ show tc') $
     mld { mld_touchCt = tc', mld_table = tbl' }
 
--- touch, and return whether this is the first touch
-mln_touch :: MergeLnk a -> Key -> IO Bool
-mln_touch mln k =
-    readIORef (mln_data mln) >>= \ mld ->
-    let bFirstTouch = (0 == mld_touchCt mld) in 
-    let mld' = mld_touch mld k in
-    mld' `seq` writeIORef (mln_data mln) mld' >>
-    (return $! bFirstTouch) 
-    
-mld_update :: MLD a -> Key -> SigUp a -> MLD a
-mld_update mld k su =
-    let st  = mld_getSt mld k in
-    assert (st_expect st) $ -- touch is required
-    let st'   = st_sigup su st in
-    let tbl'  = M.insert k st' (mld_table mld) in
-    let tmup' = leastTime (mld_tmup mld) (snd `fmap` su_state su) in
-    let tc    = mld_touchCt mld in
-    let tc'   = if (st_expect st) then pred tc else tc in
-    --trace ("mld_update @ " ++ show k ++ ", tc = " ++ show tc') $
-    mld { mld_touchCt = tc', mld_table = tbl', mld_tmup = tmup' }
+mld_idle :: MLD a -> Key -> StableT -> MLD a
+mld_idle mld k tS =
+    let st = mld_getSt mld k in
+    assert (st_expect st) $
+    let st' = st_idle tS st in
+    let tbl' = M.insert k st' (mld_table mld) in
+    let tc' = pred (mld_touchCt mld) in
+    mld { mld_touchCt = tc', mld_table = tbl' }
 
--- update, and return whether this is a last expected update
-mln_update :: MergeLnk a -> Key -> SigUp a -> IO Bool
-mln_update mln k su =
-    readIORef (mln_data mln) >>= \ mld ->
-    let mld' = mld_update mld k su in
-    let bLastExpected = (0 == mld_touchCt mld') in
-    mld' `seq` writeIORef (mln_data mln) mld' >>
-    (return $! bLastExpected)
+mld_update :: MLD a -> Key -> StableT -> T -> Sig a -> MLD a
+mld_update mld k tS tU su =
+    let st = mld_getSt mld k in
+    assert (st_expect st) $
+    let st' = st_update tS tU su st in
+    let tbl' = M.insert k st' (mld_table mld) in
+    let tc' = pred (mld_touchCt mld) in
+    let tmup' = Just $! maybe tU (min tU) (mld_tmup mld) in
+    mld { mld_touchCt = tc', mld_table = tbl', mld_tmup = tmup' }
 
 -- merge signals from present and future dynamic behaviors
 -- 
@@ -631,55 +597,71 @@ mln_update mln k su =
 -- behavior.
 --
 fnMergeEval :: MergeLnk a -> LnkUp a -> Key -> LnkUp a
-fnMergeEval mln lu k = LnkUp { ln_touch = touch, ln_update = update }
-    where touch = 
-            mln_touch mln k >>= \ bFirstTouch ->
-            when bFirstTouch (ln_touch lu)
-          update su = 
-            mln_update mln k su >>= \ bLastExpectedUpdate ->
-            when bLastExpectedUpdate (emitMergedSignal mln lu)
+fnMergeEval mln lu k = LnkUp touch update idle where
+    touch = 
+        readIORef (mln_data mln) >>= \ mld ->
+        let bFirstTouch = (0 == mld_touchCt mld) in 
+        let mld' = mld_touch mld k in
+        writeIORef (mln_data mln) mld' >>
+        when bFirstTouch (ln_touch lu)
+    idle tS =
+        readIORef (mln_data mln) >>= \ mld ->
+        let mld' = mld_idle mld k tS in
+        let bLastUpdate = (0 == mld_touchCt mld') in
+        writeIORef (mln_data mln) mld' >>
+        when bLastUpdate emit
+    update tS tU su = 
+        readIORef (mln_data mln) >>= \ mld ->
+        let mld' = mld_update mld k tS tU su in
+        let bLastUpdate = (0 == mld_touchCt mld') in
+        writeIORef (mln_data mln) mld' >>
+        when bLastUpdate emit
+    emit = emitMergedSignal mln lu
 
 -- Compute and emit the collective signal merged from consecutive
 -- dynamic behaviors. The merge here favors the highest index to
 -- heuristically favor the newest dynamic sources, but it wouldn't 
 -- be an error to merge in a random order.
+--
+-- TODO: POTENTIAL BUG! Might report `DoneT` when a short-route
+-- dynamic behavior is replaced by a long-route behavior across
+-- partitions. No easy fix; partitions block most hacks.
 emitMergedSignal :: MergeLnk a -> LnkUp a -> IO ()
 emitMergedSignal mln lu =
     readIORef (mln_data mln) >>= \ mld ->
     assert (0 == mld_touchCt mld) $
     let lst  = M.toAscList (mld_table mld) in
-    let tStable = foldl' leastTime Nothing $ map (st_stable . snd) lst in
-    let lst' = mapMaybe (mergeEvalGC tStable) lst in
+    let tS = foldl' min DoneT $ map (st_stable . snd) lst in
+    let lst' = mapMaybe (mergeEvalGC tS) lst in
     -- trace ("emitMerged @(" ++ show tStable ++ ") count=" ++ show (length lst)) $ 
-    let tbl' = M.fromAscList lst' in -- GC the table!
-    let su   = case (mld_tmup mld) of 
-                Nothing -> SigUp { su_state = Nothing, su_stable = tStable } 
-                Just tu ->
-                    let lSigsTrimmed = map ((`s_trim` tu) . st_signal . snd) lst in
-                    let sigMerged    = foldr (flip s_merge) s_never lSigsTrimmed in
-                    SigUp { su_state = Just (sigMerged, tu), su_stable = tStable }
+    let tbl' = M.fromAscList lst' in -- GC'd table
+    let performUpdateAction = case (mld_tmup mld) of 
+            Nothing -> ln_idle lu tS
+            Just tU -> 
+                let lSigs = map ((`s_trim` tU) . st_signal . snd) lst in
+                let sMrg = foldr (flip s_merge) s_never lSigs in
+                ln_update lu tS tU sMrg 
     in
     let mld' = MLD { mld_table = tbl', mld_touchCt = 0, mld_tmup = Nothing } in
     mld' `seq` writeIORef (mln_data mln) mld' >>
-    ln_update lu su
+    performUpdateAction
    
 -- need to GC the table. An element can be removed once it no longer
 -- contributes to the result
-mergeEvalGC :: Maybe T -> (Key,SigSt a) -> Maybe (Key, SigSt a)
-mergeEvalGC Nothing _ = Nothing
-mergeEvalGC (Just tm) (k,st) = 
+mergeEvalGC :: StableT -> (Key,SigSt a) -> Maybe (Key, SigSt a)
+mergeEvalGC DoneT _ = Nothing
+mergeEvalGC (StableT tm) (k,st) = 
     assert ((not . st_expect) st) $
     let (x,sf) = s_sample (st_signal st) tm in
-    let bDone = isNothing (st_stable st) &&
+    let bDone = isDone (st_stable st) &&
                 isNothing x && s_is_final sf tm
     in
     let st' = st { st_signal = sf } in
     if bDone then Nothing 
-             else Just (k, st')
+             else st' `seq` Just (k, st')
 
--- leastTime where `Nothing` is forever (upper bound)
-leastTime :: Maybe T -> Maybe T -> Maybe T
-leastTime l r = (min <$> l <*> r) <|> l <|> r
-
+isDone :: StableT -> Bool
+isDone DoneT = True
+isDone _ = False
 
 
