@@ -32,12 +32,13 @@ module Sirea.PCX
 
 import Data.Typeable
 import Data.Dynamic
-import Control.Concurrent.MVar
-import qualified Data.Map.Strict as M
+--import Control.Concurrent.MVar
+import Data.IORef
+import qualified Data.Map as M
 
 -- TODO: consider using Data.Map for higher performance lookups.
 import Control.Monad.Fix (mfix)
-import System.IO.Unsafe (unsafePerformIO)
+import System.IO.Unsafe (unsafeDupablePerformIO, unsafeInterleaveIO)
 
 -- | PCX p - Partition Resource Context. Abstract.
 --
@@ -56,7 +57,7 @@ import System.IO.Unsafe (unsafePerformIO)
 --
 data PCX p = PCX 
     { pcx_ident :: !(PCXPath)
-    , pcx_store :: !(MVar PCXStore)
+    , pcx_store :: !(IORef PCXStore)
     } deriving(Typeable)
 
 type PCXStore = M.Map (TypeRep,String) Dynamic
@@ -89,7 +90,7 @@ class (Typeable r) => Resource p r where
 
 instance (Typeable p) => Resource p0 (PCX p) where
     locateResource p _ =
-        newMVar M.empty >>= \ store' ->
+        newIORef M.empty >>= \ store' ->
         return (PCX { pcx_ident = p, pcx_store = store' })
 
 
@@ -121,24 +122,11 @@ findInPCX = findByNameInPCX ""
 -- but should be used with caution. There is no way to GC old names.
 --
 findByNameInPCX :: (Resource p r) => String -> PCX p -> r
-findByNameInPCX nm pcx = unsafePerformIO (findByNameInPCX_IO nm pcx)
+findByNameInPCX nm pcx = unsafeDupablePerformIO (findByNameInPCX_IO nm pcx)
 
 findByNameInPCX_IO :: (Resource p r) => String -> PCX p -> IO r 
 findByNameInPCX_IO nm pcx = mfix $ \ rForType ->
-    let key = (typeOf rForType, nm) in
-    modifyMVar (pcx_store pcx) $ \ tbl ->
-        case fromDynamic =<< M.lookup key tbl of
-             Just r -> return (tbl,r)
-             Nothing ->
-                let path = key:(pcx_ident pcx) in
-                locateResource path pcx >>= \ r ->
-                let tbl' = M.insert key (toDyn r) tbl in
-                tbl' `seq` r `seq` 
-                return (tbl',r)
-
-{-  -- older, lazier variation... not sure about duplicate exec
-    -- with unsafe interleave IO, concurrency and black holes
-    let pElt = (typeOf r, nm) in
+    let pElt = (typeOf rForType, nm) in
     let path = pElt : pcx_ident pcx in
     unsafeInterleaveIO (locateResource path pcx) >>= \ newR ->
     atomicModifyIORef (pcx_store pcx) (loadOrAdd nm newR)
@@ -152,7 +140,6 @@ loadOrAdd nm r tbl =
         Nothing -> 
             let tbl' = M.insert k (toDyn r) tbl in
             (tbl',r)
--}
 
 
 -- | newPCX - a `new` PCX space, unique and fresh.
@@ -161,7 +148,7 @@ loadOrAdd nm r tbl =
 -- given type is necessary. 
 newPCX :: String -> IO (PCX w)
 newPCX nm = 
-    newMVar M.empty >>= \ rf ->
+    newIORef M.empty >>= \ rf ->
     let path = [(typeOf (), nm)] in
     let pcx = PCX { pcx_ident = path, pcx_store = rf } in
     return pcx
