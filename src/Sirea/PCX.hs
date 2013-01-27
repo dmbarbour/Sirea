@@ -5,7 +5,9 @@
 -- RDP has a conservative notion of resources: nothing is created,
 -- nothing is destroyed. That is, there is no equivalent notion to
 -- `new` or `delete`, nor even `newIORef`. Instead, resources are
--- external, and developers use discovery and reset idioms.
+-- external; developers use discovery idioms and reset operations.
+--
+-- Resources represent services, state, sensors, actuators, or FFI.
 --
 -- Many resources are "abundant" and may be discovered in quantities
 -- as needed by providing unique names or paths. For example, files
@@ -13,21 +15,12 @@
 -- partitioning and generation of names, a dynamic set of abundant 
 -- resources can be represented. Secure, modular partitioning can be
 -- achieved by eliminating ambient authority and `..` reverse paths.
---
--- Resources represent services, state, sensors, actuators, or FFI.
--- Abundant resources, such as state, should be deterministically
--- named - e.g. using a client name for dynamic resources. Stateful
--- resources are generally persistent for RDP unless they have some
--- natural explanation for their volatility. External resources are
--- eternal resources, thus need no initialization or finalization.
--- But some state resources might be `reset` to a pristine state to
--- recover storage costs.  
 -- 
--- Sirea supports RDP's conservative notion of resources with PCX, a
--- generic context object capable of representing ad-hoc resources.
--- PCX supports volatile resources. Persistent resources are modeled
--- with a volatile proxy, which may provide cache or adapters. PCX
--- resources are uniquely identified by paths of types and strings.
+-- By nature, PCX carries only volatile resources. However, it can
+-- carry volatile proxies to persistent resources. In RDP and Sirea,
+-- it is expected that all stateful resources are persistent unless
+-- they have some natural explanation for being volatile (e.g. short
+-- expirations; disruption semantics; regenerable caches).
 --
 module Sirea.PCX
     ( PCX       -- abstract
@@ -39,12 +32,12 @@ module Sirea.PCX
 
 import Data.Typeable
 import Data.Dynamic
-import Data.IORef
-import qualified Data.Map as M
+import Control.Concurrent.MVar
+import qualified Data.Map.Strict as M
 
 -- TODO: consider using Data.Map for higher performance lookups.
 import Control.Monad.Fix (mfix)
-import System.IO.Unsafe (unsafePerformIO, unsafeInterleaveIO)
+import System.IO.Unsafe (unsafePerformIO)
 
 -- | PCX p - Partition Resource Context. Abstract.
 --
@@ -63,7 +56,7 @@ import System.IO.Unsafe (unsafePerformIO, unsafeInterleaveIO)
 --
 data PCX p = PCX 
     { pcx_ident :: !(PCXPath)
-    , pcx_store :: !(IORef PCXStore)
+    , pcx_store :: !(MVar PCXStore)
     } deriving(Typeable)
 
 type PCXStore = M.Map (TypeRep,String) Dynamic
@@ -96,7 +89,7 @@ class (Typeable r) => Resource p r where
 
 instance (Typeable p) => Resource p0 (PCX p) where
     locateResource p _ =
-        newIORef M.empty >>= \ store' ->
+        newMVar M.empty >>= \ store' ->
         return (PCX { pcx_ident = p, pcx_store = store' })
 
 
@@ -117,13 +110,12 @@ findInPCX = findByNameInPCX ""
 -- This provides a pure interface to represent that the resource
 -- already exists (according to the abstraction) and we're just
 -- searching for it. Resources are initialized lazily. Since 
--- lookups are idempotent, there are no issues of unsafe IO being
--- duplicated.
+-- lookups are idempotent, most issues with unsafe IO are gone.
 --
 -- Assume finding resources in PCX is moderately expensive. Rather
 -- than looking for the resources you need each time you need them,
--- try to apply PCX and obtain resources up front for partial so the
--- lookup costs are paid only once.
+-- try to apply PCX and obtain resources just once, up front. PCX
+-- is designed expecting a low load for lookups.
 --
 -- Use of names can support dynamic behaviors and metaprogramming,
 -- but should be used with caution. There is no way to GC old names.
@@ -132,12 +124,24 @@ findByNameInPCX :: (Resource p r) => String -> PCX p -> r
 findByNameInPCX nm pcx = unsafePerformIO (findByNameInPCX_IO nm pcx)
 
 findByNameInPCX_IO :: (Resource p r) => String -> PCX p -> IO r 
-findByNameInPCX_IO nm pcx = mfix $ \ r -> 
+findByNameInPCX_IO nm pcx = mfix $ \ rForType ->
+    let key = (typeOf rForType, nm) in
+    modifyMVar (pcx_store pcx) $ \ tbl ->
+        case M.lookup k tbl of
+             Just r -> (tbl,r)
+             Nothing ->
+                let path = key:(pcx_ident pcx) in
+                locateResource path pcx >>= \ r ->
+                let tbl' = M.insert k r tbl in
+                tbl' `seq` r `seq` (tbl',r)
+
+{-  -- older, lazier variation... not sure about duplicate exec
+    -- with unsafe interleave IO, concurrency and black holes
     let pElt = (typeOf r, nm) in
     let path = pElt : pcx_ident pcx in
     unsafeInterleaveIO (locateResource path pcx) >>= \ newR ->
     atomicModifyIORef (pcx_store pcx) (loadOrAdd nm newR)
-
+-}
 
 loadOrAdd :: (Typeable r) => String -> r -> PCXStore -> (PCXStore,r)
 loadOrAdd nm r tbl =
@@ -155,7 +159,7 @@ loadOrAdd nm r tbl =
 -- given type is necessary. 
 newPCX :: String -> IO (PCX w)
 newPCX nm = 
-    newIORef M.empty >>= \ rf ->
+    newMVar M.empty >>= \ rf ->
     let path = [(typeOf (), nm)] in
     let pcx = PCX { pcx_ident = path, pcx_store = rf } in
     return pcx
