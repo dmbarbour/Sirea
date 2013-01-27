@@ -127,13 +127,14 @@ findByNameInPCX_IO :: (Resource p r) => String -> PCX p -> IO r
 findByNameInPCX_IO nm pcx = mfix $ \ rForType ->
     let key = (typeOf rForType, nm) in
     modifyMVar (pcx_store pcx) $ \ tbl ->
-        case M.lookup k tbl of
-             Just r -> (tbl,r)
+        case fromDynamic =<< M.lookup key tbl of
+             Just r -> return (tbl,r)
              Nothing ->
                 let path = key:(pcx_ident pcx) in
                 locateResource path pcx >>= \ r ->
-                let tbl' = M.insert k r tbl in
-                tbl' `seq` r `seq` (tbl',r)
+                let tbl' = M.insert key (toDyn r) tbl in
+                tbl' `seq` r `seq` 
+                return (tbl',r)
 
 {-  -- older, lazier variation... not sure about duplicate exec
     -- with unsafe interleave IO, concurrency and black holes
@@ -141,7 +142,6 @@ findByNameInPCX_IO nm pcx = mfix $ \ rForType ->
     let path = pElt : pcx_ident pcx in
     unsafeInterleaveIO (locateResource path pcx) >>= \ newR ->
     atomicModifyIORef (pcx_store pcx) (loadOrAdd nm newR)
--}
 
 loadOrAdd :: (Typeable r) => String -> r -> PCXStore -> (PCXStore,r)
 loadOrAdd nm r tbl =
@@ -152,6 +152,8 @@ loadOrAdd nm r tbl =
         Nothing -> 
             let tbl' = M.insert k (toDyn r) tbl in
             (tbl',r)
+-}
+
 
 -- | newPCX - a `new` PCX space, unique and fresh.
 --
