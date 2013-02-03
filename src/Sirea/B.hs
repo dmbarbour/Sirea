@@ -19,8 +19,8 @@ import Sirea.Behavior
 -- import Sirea.Partition
 import Sirea.Internal.BTypes
 import Sirea.Internal.BImpl
-import Sirea.Internal.BDynamic
 import Sirea.Internal.Tuning (dtEqf, dtSeq)
+import Sirea.Internal.BDynamic
 import Data.Typeable
 
 instance Typeable2 B where
@@ -66,22 +66,14 @@ instance BPeek B where
     bpeek    = peekB
 instance Behavior B 
 
+-- Unfortunately, we can't have dynamic behaviors for type B
+-- due to update scheduling issues. evalB without scheduler 
+-- access must perform touches in the update phase, which is
+-- a problem (since it can lead to premature updates).
+--
 instance BDynamic B B where
     beval dt = evalB dt >>> bright bfst
 
-
--- TODO: Consider a behavior that slows the heartbeat.
---   Or maybe this could be done at `badjeqf` when we
---   realize a signal is constant for a while?
-
--- note: B does not support `bcross`, since B cannot 
--- track which partitions are in use. Need BCX for
--- bcross.
-{-
-instance BScope (B w) where
-    bpushScope = unsafeChangeScopeB
-    bpopScope  = unsafeChangeScopeB
--}
 
 
 

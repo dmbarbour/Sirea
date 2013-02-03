@@ -1,14 +1,16 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving, MultiParamTypeClasses #-}
 
 
--- | Behavior with Context.
+-- | Behaviors with IO.
 --
 -- BCX distributes a value representing an application's resource
 -- context, a `PCX`, to every behavior component that needs it. The
--- resource context is for volatile resources: threads, connections, 
--- caches, demand monitors, stateless stability models. Persistent 
--- resources often need volatile proxies. (Application state should
--- be backed by external, persistent resources.)
+-- resource context models volatile resources (threads, connections,
+-- cache, demand monitors) and proxies to persistent resources.
+--
+-- Conceptually, BCX is behavior with ambient authority to external
+-- resources and FFI, whereas type B should never be used for direct
+-- access to a resource. (Type B is for computation only.)
 --
 -- Using PCX rather than Haskell global space is convenient via BCX,
 -- and robust for multiple instances and plugins.

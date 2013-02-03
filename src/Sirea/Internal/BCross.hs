@@ -42,7 +42,6 @@ module Sirea.Internal.BCross
     , runGobStopper
     , OutBox
 
-    -- isUrgentUpdate repeats in DemandMonitorData if not exported
     , urgentStability, urgentUpdate
 
     ) where

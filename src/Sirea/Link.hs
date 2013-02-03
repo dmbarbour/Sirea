@@ -11,10 +11,9 @@ module Sirea.Link
     ( unsafeLinkB
     , unsafeLinkBCX
     -- the following are re-exported from LTypes
-    , MkLnk, Lnk, LnkW(..), SigUp(..), LnkUp(..)
+    , MkLnk, Lnk, LnkW(..), LnkUp(..), StableT(..)
     , ln_zero, ln_lnkup, ln_fst, ln_snd, ln_left, ln_right, ln_dead
-    , ln_sumap, ln_lumap, ln_append
-    , su_fmap, su_apply, su_piggyback
+    , ln_sfmap, ln_lumap, ln_append
     ) where
 
 import Sirea.Internal.LTypes -- includes MkLnk, etc.

@@ -79,7 +79,7 @@ batchesInFlight = 6
 -- demand sources aspect impacts stability, so is more limited. 
 dtDaggrHist, dtMdistHist :: DT
 dtDaggrHist = dtHeartbeat -- how long to tolerate late-arriving demands
-dtMdistHist = 2 * dtHeartbeat -- how long to tolerate late-arriving observers
+dtMdistHist = dtHeartbeat -- how long to tolerate late-arriving observers
 
 -- 
 -- Some behaviors depend on stability values to know how much to 

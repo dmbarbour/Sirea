@@ -705,8 +705,13 @@ bevalbOrElse = bevalOrElse
 --  large collections processing if we use intermediate state to 
 --  index and restructure big data into a stable tree. I.e. then we
 --  only need to rebuild small sections of that tree. 
-
-
+--
+-- NOTES:
+--  Potentially, the vector type could work if it had a maximum static
+--  size, i.e. such that we operate on 'up to' K elements, for some 
+--  small K. This might be worth pursuing, as it could actually be 
+--  useful in a wide range of applications (~ SIMD parallelism, music,
+--  animation, real-time systems, probabilistic RDP).
 
 
 {-# RULES

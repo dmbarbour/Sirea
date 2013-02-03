@@ -7,7 +7,6 @@ module Sirea.Internal.LTypes
     , ln_left, ln_right, ln_fst, ln_snd, ln_dead
     , ln_zero, ln_lnkup, ln_append
     , ln_lumap, ln_sfmap
-    -- , SigUp(..), su_signal, su_time, su_fmap, su_delay, su_apply, su_piggyback
     , SigSt(..), st_zero, st_poke, st_clear, st_update, st_idle
     , monotonicStability, respectsStability
     , SigM(..), sm_zero
@@ -87,23 +86,70 @@ data LnkW s a where
 --
 --   ln_idle: update signal's stability only, indicating there was
 --      no significant change in value. 
--- 
+--
 data LnkUp a = LnkUp
     { ln_touch  :: !(IO ())
     , ln_update :: !(StableT -> T -> Sig a -> IO ())
     , ln_idle   :: !(StableT -> IO ())
+    --, ln_cycle  :: !((Set Int) -> IO ())
     } deriving (Typeable)
 
 instance Monoid (LnkUp a) where
     mempty  = ln_zero
     mappend = ln_append
 
+--  (under consideration):
+--
+--   ln_cycle: supports a test to determine whether a given resource
+--      is part of a partition-local feedback cycle. The participant
+--      adds its identifier, and if the set comes back around with
+--      the participant's own identifier, the participant must break
+--      the cycle, i.e. by delaying update to a future round.
+--
+--      IF THIS WORKS:
+--    
+--      While computing cycles does introduce small overhead, it can
+--      improve update order, reduce rework, eliminate extra sends,
+--      better compose resources, ultimately save a lot.
+--
+--      I think the savings will almost always be greater than the 
+--      overhead. I.e. if there is no chain of operations, the cost
+--      should nearly be zero. 
+--
+--      WILL IT WORK?
+--
+--      Not sure. Mostly, BDynamic seems to cause issue, since I
+--      don't always know who will receive behavior updates internal
+--      to new behaviors. Maybe I could make BDynamic work by delay
+--      of touch/update for new BDynamic values by a step, i.e. such
+--      that they always respect 'touch first phase, update second'.
+--
+--      Maybe try to fix BDynamic first, so I don't need to treat
+--      it as a special case. (But to fix BDynamic, I'll need access
+--      to the scheduling mechanisms. Does that mean BDynamic will
+--      have only a BCX implementation?)
+--
+--      Another potential issue is the MonitorDist, i.e. that we 
+--      won't always find monitors prior to the cycle tests. Maybe
+--      this can be addressed by keeping a record of cycle IDs 
+--      that reach a MonitorDist, then propagating these to new
+--      observers when they attach.
+--
+--      If we're cut, we'll delay the real update to the next round
+--      but maybe perform touch and stability update this round.
+--
+--      Notes: This could be a *conservative* estimate, e.g. using a
+--      hash of an ID or even a stableName. Or per partition value?
+--
+-- TODO: make this (global) change after finishing the current one.
+
+
 
 -- | StableT describes a stability value for a signal. This is a
 -- concrete time, or 'DoneT' if fully finished. DoneT means the
 -- signal will not update again, except in a few special cases
 -- (notably, DemandAggr) where they might indicate that no more
--- updates are known to be on their way.
+-- updates are known to be on their way. 
 --
 data StableT = StableT {-# UNPACK #-} !T
              | DoneT

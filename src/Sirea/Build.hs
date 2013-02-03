@@ -153,31 +153,13 @@ buildSireaAppN name app =
     let bcx = (wrapBCX phaseDelayB) >>> (unwrapSireaApp app) in
     let b   = unwrapBCX bcx cw in
     -- compile behavior, dropping response
-    let dt0 = LnkDUnit ldt_zero in
-    let (_, mkLn) = compileB b dt0 LnkDead in
+    let (_, mkLn) = compileB b (LnkDUnit ldt_zero) LnkDead in
     mkLn >>= \ lnk0 ->
-    case lnk0 of 
-        LnkDead     -> return $ zeroObject cw
-        (LnkSig lu) -> buildSireaBLU cw lu
-
--- zeroStepper and zeroStopper are used if the dead-code
--- elimination happens to kill the whole application.
-zeroStepper :: Stepper
-zeroStepper = Stepper 
-    { runStepper = return ()
-    , addStepperEvent = const $ return ()
-    }
-zeroStopper :: Stopper
-zeroStopper = Stopper
-    { runStopper = return ()
-    , addStopperEvent = id -- run stopper event immediately
-    } 
-zeroObject :: PCX w -> SireaAppObject
-zeroObject cw = 
-    SireaAppObject { sireaStepper = zeroStepper
-                   , sireaStopper = zeroStopper
-                   , sireaContext = findInPCX cw
-                   }
+    let bDead = ln_dead lnk0 in
+    let lu = ln_lnkup lnk0 in
+    buildSireaBLU cw lu >>= \ sireaAppObj ->
+    when bDead ((runStopper . sireaStopper) sireaAppObj) >> 
+    return sireaAppObj
   
 -- Build from a LnkUp, meaning there is something listening to the
 -- signal. This doesn't actually initialize the signal, but does set
@@ -222,12 +204,8 @@ beginApp cw rfSD lu =
     getTime >>= \ tNow ->
     let tStart = tNow `addTime` dtGrace in
     let tStable = tNow `addTime` dtStability in
-    let su = SigUp { su_state = Just (s_always (), tStart)
-                   , su_stable = Just tStable } in
     let nextStep = maintainApp apw tStable in
-    --tStart `seq`
-    --setStartTime cp0 tStart >>
-    ln_update lu su >> -- activation!
+    ln_update lu (StableT tStable) tStart (s_always ()) >> -- activation!
     pulse >> -- first heartbeat
     schedule dtHeartbeat (addTCRecv tc0 nextStep)
 
@@ -243,44 +221,35 @@ schedule dt op = assert (usec > 0) $ void $
 -- At any given time, one maintenance operation is either queued in
 -- the main thread or delayed by a 'schedule' thread.
 maintainApp :: AppPeriodic w -> T -> IO ()
-maintainApp apw tStable =
-    ap_pulse apw >> -- heartbeat
-    readIORef (ap_sd apw) >>= \ sd ->
-    let tc0 = ap_tc0 apw in
-    if shouldStop sd 
-      then -- SHUTDOWN APPLICATION
-           let su = SigUp { su_state = Just (s_never, tStable)
-                          , su_stable = Nothing } in
-           let tFinal = tStable `addTime` dtGrace in
-           let nextStep = haltingApp apw tFinal in
-           ln_update (ap_luMain apw) su >> -- indicate signal inactive in future.
-           schedule dtHeartbeat (addTCRecv tc0 nextStep)
-      else getTCTime tc0 >>= \ tNow -> 
-           --traceIO ("heartbeat @ " ++ show tNow) >>
-           if (tNow > (tStable `addTime` dtRestart))
-                then -- RESTART APPLICATION (halt then restore activity)
-                    let tRestart = tNow `addTime` dtHeartbeat in
-                    let tStable' = tNow `addTime` dtStability in
-                    let sig = s_switch s_never tRestart (s_always ()) in
-                    let su = SigUp { su_state = Just (sig, tStable)
-                                   , su_stable = Just tStable' } in
-                    let nextStep = maintainApp apw tStable' in
-                    -- Restarts happen due to sleeps, stops, or falling behind real-time
-                    let restartMsg = "SIREA APP RESTART @ " ++ show tStable ++ 
-                                     "  -->  " ++ show tRestart
-                    in 
-                    traceIO restartMsg >>
-                    -- tRestart `seq` 
-                    -- setStartTime (findInPCX (ap_cw apw)) tRestart >>
-                    schedule dtHeartbeat (addTCRecv tc0 nextStep) >>
-                    ln_update (ap_luMain apw) su
-                else -- NORMAL MAINTENANCE 
-                    let tStable' = tNow `addTime` dtStability in
-                    assert (tStable' > tStable) $ -- can't handle clock running backwards
-                    let su = SigUp { su_state = Nothing, su_stable = Just tStable' } in
-                    let nextStep = maintainApp apw tStable' in
-                    schedule dtHeartbeat (addTCRecv tc0 nextStep) >>
-                    ln_update (ap_luMain apw) su
+maintainApp apw tS0 = beginPulse where
+    lu = ap_luMain apw 
+    tc0 = ap_tc0 apw
+    beginPulse =
+        ap_pulse apw >> -- heartbeat
+        readIORef (ap_sd apw) >>= \ sd ->
+        if shouldStop sd then beginHalt else
+        getTCTime tc0 >>= \ tNow ->
+        let bNeedRestart = (tNow > (tS0 `addTime` dtRestart)) in
+        if bNeedRestart then beginReset tNow else continueIdle tNow
+    later = schedule dtHeartbeat . addTCRecv tc0
+    continueIdle tNow =
+        let tS = tNow `addTime` dtStability in
+        assert (tS >= tS0) $ -- the clock runs forwards, right?
+        later (maintainApp apw tS) >>
+        ln_idle lu (StableT tS) 
+    resetMessage = "*** SIREA APP RESET ***"
+    beginReset tNow =
+        let tRestart = tNow `addTime` dtHeartbeat in
+        let tS = tNow `addTime` dtStability in
+        let sigRestart = s_switch s_never tRestart (s_always ()) in
+        assert (tS >= tS0) $
+        traceIO resetMessage >>
+        later (maintainApp apw tS) >>
+        ln_update lu (StableT tS) tS0 sigRestart
+    beginHalt =
+        let tFinal = tS0 `addTime` dtGrace in
+        later (haltingApp apw tFinal) >>
+        ln_update lu DoneT tFinal s_never 
 
 -- After we set the main signal to inactive, we must still wait for
 -- real-time to catch up, and should run a final few heartbeats to
@@ -288,16 +257,15 @@ maintainApp apw tStable =
 haltingApp :: AppPeriodic w -> T -> IO ()
 haltingApp apw tFinal = 
     ap_pulse apw >> -- heartbeat
-    let tc0 = ap_tc0 apw in
     getTCTime tc0 >>= \ tNow ->
     if (tNow > tFinal) -- wait for real time to catch up to stability
         then let onStop = ap_pulse apw >> finiStopData (ap_sd apw) in
              let gs = ap_gs apw in
              runGobStopper gs (addTCRecv tc0 onStop) >>
-             let nextStep = finalizingApp apw in
-             schedule dtHeartbeat (addTCRecv tc0 nextStep) 
-        else let nextStep = haltingApp apw tFinal in
-             schedule dtHeartbeat (addTCRecv tc0 nextStep)
+             later (finalizingApp apw) 
+        else later (haltingApp apw tFinal)
+    where later = schedule dtHeartbeat . addTCRecv tc0
+          tc0 = ap_tc0 apw
 
 -- at this point we've run the all-stop for all other threads,
 -- so we're just biding time until threads report completion.
@@ -357,7 +325,7 @@ basicSireaAppLoop rfContinue stepper =
 
 -- | bUnsafeExit - used with runSireaApp or beginSireaApp; effect is
 -- killThread on the main thread when first activated, initiating a
--- graceful shutdown. 
+-- graceful shutdown.
 --
 -- The behavior of bUnsafeExit is not precise and not composable. If
 -- developers wish to model precise shutdown behavior, they should
@@ -382,56 +350,5 @@ bUnsafeExit = unsafeOnUpdateBCX $ \ cw ->
 newtype ExitR = ExitR { inExitR :: IORef Bool } deriving (Typeable)
 instance Resource P0 ExitR where
     locateResource _ _ = liftM ExitR $ newIORef False
-
-
-{- TODO: Switch to a more generic volatile timestamp utility.
-
--- | bStartTime - obtain logical start time of the application, more
--- precisely for current period of activity (since last restart).
---
--- Use cases for start time: naming log files, special handling of 
--- continuity-sensitive resources (e.g. volatile state).
---
--- Bad Idea: scheduling relative to application startup. Just don't.
--- Always favor a design that is robust to pausing or restarting the
--- application, which means scheduling based on state or Clock.
---
-bStartTime :: BCX w (S P0 ()) (S P0 T)
-bStartTime = unsafeLinkBCX $ \ cw -> 
-    let cp0 = findInPCX cw :: PCX P0 in
-    let rfST = rfStartTime $ findInPCX cp0 in
-    return . naivelyReportValue rfST
-
--- naivelyReportValue will simply report the value held by an
--- IORef whenever a signal update is received. This technique
--- is unsafe in most cases, but is okay for tStart/tStop due to
--- the guaranteed update (brief period of inactivity whenever
--- tStart changes). TODO: make this more precise, perhaps by
--- keeping a history of restart times. 
-naivelyReportValue :: IORef v ->  Lnk (S p v) -> Lnk (S p ())
-naivelyReportValue _ LnkDead = LnkDead
-naivelyReportValue rf (LnkSig lu) = (LnkSig lu')
-    where lu' = LnkUp { ln_touch = touch', ln_update = update' }
-          touch' = ln_touch lu
-          update' su = 
-            readIORef rf >>= \ v ->
-            let su' = su_fmap (s_const v) su in
-            ln_update lu su'
-
-newtype StartTime = StartTime { rfStartTime :: IORef T }
-instance Typeable StartTime where
-    typeOf _ = mkTyConApp tycStartTime []
-        where tycStartTime = mkTyCon3 "sirea-core" "Sirea.Build.Internal" "StartTime"
-instance Resource StartTime where
-    locateResource _ = liftM StartTime trf
-        where trf = newIORef t0
-              t0  = timeFromDays 0
-
--- sets the start time for one SireaApp.
-setStartTime :: PCX P0 -> T -> IO () 
-setStartTime cp0 t = writeIORef (rfStartTime $ findInPCX cp0) t
-
--}
-
 
 

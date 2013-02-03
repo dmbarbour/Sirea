@@ -34,8 +34,8 @@ module Sirea.UnsafeOnUpdate
 
 import Data.IORef
 import Data.Typeable
-import Control.Applicative
-import Control.Monad (unless, when)
+import Control.Monad (unless)
+import Control.Exception (assert)
 import Sirea.Link
 import Sirea.Signal
 import Sirea.Time
@@ -44,9 +44,7 @@ import Sirea.B
 import Sirea.BCX
 import Sirea.PCX
 import Sirea.Internal.BImpl (undeadB, keepAliveB)
-import Sirea.Internal.Tuning (dtFinalize)
-
-import Control.Exception (assert)
+import Sirea.Internal.Tuning (dtFinalize, tAncient)
 
 --import Debug.Trace
 
@@ -66,46 +64,57 @@ unsafeOnUpdateBL mkOp = unsafeLinkB build
     where build LnkDead = return LnkDead
           build (LnkSig lu) = 
             mkOp >>= \ op ->
-            newIORef (s_never,Nothing) >>= \ rfSig ->
+            newIORef (s_never, tAncient) >>= \ rfSig ->
             newIORef Nothing >>= \ rfA ->
-            let update su =
-                    runToStability rfSig rfA op su >>
-                    ln_update lu su                  
-            in
-            return (LnkSig $ lu { ln_update = update })
+            let lu' = luOnUpdate op rfSig rfA lu in
+            return (LnkSig lu')
 
-runToStability :: (Eq a) => IORef (Sig a, Maybe T) -> IORef (Maybe a) 
-               -> (T -> Maybe a -> IO ()) -> SigUp a -> IO ()
-runToStability rfSig rfA op su =
-    -- update the stored signal so we don't miss any updates.
-    readIORef rfSig >>= \ (s0,t0) -> 
-    let tf  = su_stable su in 
-    let sf  = maybe s0 (\(s,t) -> s_switch s0 t s) (su_state su) in
-    let sfc = maybe s_never (s_trim sf) tf in -- cleaned up signal.
-    sfc `seq` writeIORef rfSig (sfc,tf) >>
-    
-    -- now for effects. For simplicity, I just keep an IORef that
-    -- tracks the last operation performed. Only signal values in
-    -- range of (t0 <= t < tf) may be executed, 
-    let tUpd   = snd <$> su_state su in
-    let tLower = t0 <|> tUpd in
-    let tUpper = tf <|> ((`addTime` dtFinalize) <$> (tUpd <|> t0)) in
+gcSig :: StableT -> Sig x -> Sig x
+gcSig DoneT _ = s_never
+gcSig (StableT tm) s0 = s_trim s0 tm
 
-    --traceIO ("UnsafeOnUpdate @ " ++ show tLower ++ " - " ++ show tUpper) >>
-    case (,) <$> tLower <*> tUpper of
-        Just (tL,tU) ->
-            when (tL < tU) $
-                let lsigs = sigToList sf tL tU in
-                let action (t,a) =
-                        unless (t == tU) $ 
-                            assert ((tL <= t) && (t < tU)) $
-                            readIORef rfA >>= \ a0 ->
-                            unless (a == a0) $
-                                writeIORef rfA a >> 
-                                op t a
-                in 
-                mapM_ action lsigs
-        Nothing -> return ()
+luOnUpdate  :: (Eq a) 
+            => (T -> Maybe a -> IO ()) -- operation to execute
+            -> IORef (Sig a, T) -- recorded signal; reported time
+            -> IORef (Maybe a)  -- last reported value
+            -> LnkUp a -- output sink (just forward input, but AFTER running)
+            -> LnkUp a -- input source
+luOnUpdate op rfSig rfA lu = LnkUp touch update idle where
+    touch = ln_touch lu
+    idle tS =
+        readIORef rfSig >>= \ (s0,tLo) ->
+        let sCln = gcSig tS s0 in
+        let tHi = case tS of
+                DoneT -> tLo `addTime` dtFinalize
+                StableT tm -> tm
+        in
+        assert (tHi >= tLo) $
+        sCln `seq` tHi `seq` 
+        writeIORef rfSig (sCln,tHi) >>
+        runUpdates tLo tHi s0 >>
+        ln_idle lu tS 
+    update tS tU su =
+        readIORef rfSig >>= \ (s0,tLo) ->
+        let sf = s_switch s0 tU su in
+        let sCln = gcSig tS sf in
+        let tHi = case tS of
+                DoneT -> (max tLo tU) `addTime` dtFinalize
+                StableT tm -> tm
+        in
+        assert (tHi >= tLo) $
+        sCln `seq` tHi `seq` 
+        writeIORef rfSig (sCln,tHi) >>
+        runUpdates tLo tHi sf >>
+        ln_update lu tS tU su
+    runUpdates tLo tHi sig =
+        let xs = sigToList sig tLo tHi in
+        let xsSettled = filter ((< tHi) . fst) xs in
+        mapM_ runOp xsSettled
+    runOp (t,a) =
+        readIORef rfA >>= \ a0 ->
+        unless (a0 == a) $
+            writeIORef rfA a >>
+            op t a
 
 -- | unsafeOnUpdateBLN - perform IO effects if any of many signals
 -- are used later in the pipeline. A Goldilocks solution:

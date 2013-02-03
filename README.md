@@ -103,9 +103,7 @@ The weaknesses of Sirea RDP belong more to Sirea than to RDP.
 
 * Sirea is sensitive to the OS clock. RDP requires robust, synchronized, monotonic clocks to work effectively, but is designed to tolerate a few milliseconds drift. Sirea is robust to small shifts in OS clock, but large sudden shift may cause problematic behavior. It is best to use Sirea in conjunction with robust time services for the OS.
 
-* Sirea provides no static analysis for cyclic feedback, stability, real-time implementation. 
-
-* Performance of dynamic behaviors is poor - i.e. expensive install and maintain; difficult to optimize and anticipate. RDP is designed with an assumption of at most a few 'layers' of dynamic behavior, for staged metaprogramming. Sirea can handle that much. A more dedicated RDP language might support deep optimizations across layers.
+* Performance of dynamic behaviors is poor - i.e. expensive install and maintain; difficult to optimize and anticipate. RDP is designed with an assumption of having very few, relatively stable 'layers' of dynamic behavior, e.g. for staged metaprogramming. Sirea can handle that much. More will probably take a dedicated RDP language or EDSL that can perform partial evaluations, tracing, or other cross-layer optimizations.
 
 Reactive Demand Programming (in Sirea)
 ======================================

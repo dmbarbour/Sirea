@@ -5,22 +5,31 @@
 -- RDP has a conservative notion of resources: nothing is created,
 -- nothing is destroyed. That is, there is no equivalent notion to
 -- `new` or `delete`, nor even `newIORef`. Instead, resources are
--- external; developers use discovery idioms and reset operations.
+-- external; developers use discovery idioms. In applications that
+-- need dynamic resources, discovery is directed by domain values,
+-- e.g. using client identifiers to specify unique files or tables
+-- in a database. 
 --
 -- Resources represent services, state, sensors, actuators, or FFI.
 --
--- Many resources are "abundant" and may be discovered in quantities
--- as needed by providing unique names or paths. For example, files
--- and directories in a filesystem are abundant resources. By clever
--- partitioning and generation of names, a dynamic set of abundant 
--- resources can be represented. Secure, modular partitioning can be
--- achieved by eliminating ambient authority and `..` reverse paths.
--- 
--- By nature, PCX carries only volatile resources. However, it can
--- carry volatile proxies to persistent resources. In RDP and Sirea,
--- it is expected that all stateful resources are persistent unless
--- they have some natural explanation for being volatile (e.g. short
--- expirations; disruption semantics; regenerable caches).
+-- State resources tend to be "abundant" such that developers can
+-- discover however many they need (e.g. one for each client, or for
+-- each form or widget). The conservative resource philosophy works
+-- very well with orthogonal persistence of state, and in Sirea (or
+-- any RDP implementation) state resources ought to be persistent 
+-- unless they have a good, natural excuse to be otherwise (such as
+-- windowed history, or tuple spaces with short expirations). When 
+-- clean state is necessary, using explicit resets independent from
+-- application restarts is a good idea for live programming.
+--
+-- State resources can still be modular and secure via partitioning
+-- schemes, providing different partitions to different subprograms.
+--
+-- The PCX type supports this conservative notion of resources in
+-- Sirea. By nature, PCX carries only volatile resources, but that
+-- includes volatile proxies to persistent resources (maintained in
+-- a database or filesystem). PCX is mostly used behind the scenes,
+-- when adapting new resources to Sirea's BCX behavior model. 
 --
 module Sirea.PCX
     ( PCX       -- abstract
@@ -43,17 +52,28 @@ import System.IO.Unsafe (unsafeDupablePerformIO, unsafeInterleaveIO)
 -- | PCX p - Partition Resource Context. Abstract.
 --
 -- A partition context is a vast space of resources. Conceptually, 
--- it already holds the resources, and we locate them on demand. The
--- implementation is technically lazy IO to initialize resources as
--- needed, but this is hidden from the users if the Resources meet
--- their contract.
+-- it already holds the resources, but we locate them as needed. In
+-- practice, the resource is created on the first lookup and further
+-- lookups will return the same resource.
+--
+-- Resources may be uniquely identified by type and string. However,
+-- there currently is no mechanism in PCX to GC resources without 
+-- collecting the whole PCX. Developers should be careful to use the
+-- resources they need, or perhaps especially model the cases where 
+-- some extra GC is appropriate. 
+--
+-- At the moment, PCX serializes all lookup operations, and lookups
+-- will be performed in the IO monad. (The original design modeled a
+-- pure lookup, but in practice the IO monad is always available
+-- when searching a PCX so I've decided to avoid the unsafe IO.) 
 --
 -- NOTE: `PCX w` has connotations that `w` is the full world, i.e.
 -- the root partition created by `newPCX`. It is also used in type
 -- matching to provide a little extra protection against accidental
 -- connections between SireaApp applications. `PCX p` refers to a
 -- child PCX for a specific thread or partition. Partition resources
--- should be manipulated only by that partition thread.
+-- should be manipulated only by that partition thread. The PCX type
+-- is an instance of resource.
 --
 data PCX p = PCX 
     { pcx_ident :: !(PCXPath)

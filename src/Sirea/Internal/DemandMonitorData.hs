@@ -52,8 +52,8 @@ import Sirea.Time
 import Sirea.Link
 import Sirea.Partition
 import Sirea.PCX
-import Sirea.Internal.BCross (isUrgentUpdate) -- to avoid duplication of code
-import Sirea.Internal.Tuning (dtDaggrHist, dtMdistHist)
+import Sirea.Internal.Tuning (dtDaggrHist, dtMdistHist
+                             ,dtFutureChoke, tAncient)
 import Sirea.Internal.LTypes -- for convenient SigSt, et. al.
 
 --import Debug.Trace (traceIO)
@@ -78,12 +78,18 @@ mkPartD cp = PartD
     }     
 
 -- | DemandAggr: aggregates and processes many concurrent demands.
+--
 -- For now, DemandAggr will use a conservative mechanism for cycles:
+-- updates in one step are always reported in a later step. This has
+-- some unfortunate consequences for performance, resulting rework.
 --
---   Demand updates in each phase are delivered on the next phase.
+-- DemandAggr currently always reports stability = DoneT. This means 
+-- they never need to perform an idling update, and observers assume
+-- a stability relative to partition time (- dtDaggrHist).
 --
--- Unfortunately, this has a very high performance cost if there
--- is deep composition of many demand monitors.
+-- Right now, GC is simply performed periodically while there are
+-- links remaining in the pool. 
+--
 data DemandAggr e z = DemandAggr 
     { da_data       :: !(IORef (DemandData e z)) -- mutable state 
     , da_nzip       :: !([Sig e] -> Sig z)       -- compute the result signal
@@ -92,15 +98,13 @@ data DemandAggr e z = DemandAggr
     }
 
 data DemandData e z = DemandData
-    { dd_active     :: !Bool                     -- updates to maybe deliver?
-    , dd_flush      :: !Bool                     -- GC flush requested?
-    , dd_flushSched :: !Bool                     -- is GC flush scheduled?
+    { dd_flush      :: !Bool                     -- is hearbeat flush scheduled?
     , dd_tmup       :: !(Maybe T)                -- time of earliest demand update
-    , dd_stable     :: !(Maybe T)                -- time of reported stability
     , dd_nextKey    :: {-# UNPACK #-} !Key       -- next key for the table
-    , dd_table      :: !(M.Map Key (SigSt e))    -- track active demands
-    , dd_pending    :: !(Maybe (SigUp z))        -- potential pending update
+    , dd_table      :: !(M.Map Key (Sig e))      -- track active demand signals
     }
+-- NOTE: Will later need to restore touch support if I want compositional
+-- performance (using ln_cycle)
 
 
 -- | Create a demand aggregator, given the output target.
@@ -118,158 +122,147 @@ newDemandAggr cp zlu zpf = DemandAggr
 
 ddZero :: DemandData e z
 ddZero = DemandData
-    { dd_active     = False
-    , dd_flush      = False
-    , dd_flushSched = False
+    { dd_flush      = False
     , dd_tmup       = Nothing
-    , dd_stable     = Nothing
     , dd_nextKey    = 80000 -- arbitrary
     , dd_table      = M.empty 
-    , dd_pending    = Nothing
     }
 
 
 -- | Create a new link to an existing demand aggregator.
 newDemandLnk :: DemandAggr e z -> IO (LnkUp e)
-newDemandLnk da =
-    newIORef Nothing >>= \ rfK -> -- acquire Key later, in Demand Monitor's partition
-    let getKey = loadDaggrKey da rfK in
-    let touch = return () in -- no touch here, since update next phase
-    let update su = getKey >>= \ k -> updateDaggr da k su in
-    let lu = LnkUp { ln_touch = touch, ln_update = update } in
-    return lu
+newDemandLnk da = 
+    newIORef Nothing >>= \ rfK -> 
+    return (mkDemandLnk rfK da)
+
+mkDemandLnk :: DemandAggr e z -> IORef (Maybe Key) -> LnkUp e
+mkDemandLnk da rfK = LnkUp touch update idle where
+    touch = return () 
+    idle _ = return ()
+    update _ tU su = 
+        loadDaggrKey da rfK >>= \ k -> 
+        updateDaggr da k tU su
 
 -- keys are computed with explicitly lazy IO, via an IORef
 -- (this helps assure me of which thread it runs in)
 loadDaggrKey :: DemandAggr e z -> IORef (Maybe Key) -> IO Key
-loadDaggrKey da rfK =
-    readIORef rfK >>= \ mk ->
-    case mk of
-        Just k -> return k
-        Nothing ->
-            readIORef (da_data da) >>= \ dd ->
-            let k = succ (dd_nextKey dd) in
-            let dd' = dd { dd_nextKey = k } in
-            k `seq` dd' `seq` 
-            writeIORef (da_data da) dd' >>
-            writeIORef rfK (Just k) >>
-            return k
+loadDaggrKey da rfK = oldOrNew where
+    oldOrNew = readIORef rfK >>= maybe newKey return
+    newKey = 
+        readIORef (da_data da) >>= \ dd ->
+        let k = succ (dd_nextKey dd) in
+        let dd' = dd { dd_nextKey = k } in
+        k `seq` dd' `seq` 
+        writeIORef (da_data da) dd' >>
+        writeIORef rfK (Just k) >>
+        return k
 
--- update the DemandAggr and process it (if last update)
-updateDaggr :: DemandAggr e z -> Key -> SigUp e -> IO ()
-updateDaggr da k su = 
+-- update the DemandAggr. For now, we're always processing DemandAggr
+-- in the next step, so schedule the next-step operation. 
+updateDaggr :: DemandAggr e z -> Key -> T -> Sig e -> IO ()
+updateDaggr da k tU su = 
     readIORef (da_data da) >>= \ dd ->
-    let bDoActivate = not (dd_active dd) in
+    let bDoActivate = isNothing (dd_tmup dd) in
     let dd' = updateDD k su dd in
     dd' `seq` writeIORef (da_data da) dd' >>
-    when bDoActivate (pd_endOfStep (da_partd da) (schedDelivery da))
+    when bDoActivate (pd_endOfStep (da_partd da) (scheduleDaggr da))
+
     
-updateDD :: Key -> SigUp e -> DemandData e z -> DemandData e z
-updateDD k su dd = dd'
-    where tbl  = dd_table dd
-          st   = fromMaybe st_zero $ M.lookup k tbl
-          st'  = st_sigup su st 
-          tbl' = M.insert k st' tbl
-          tu   = snd `fmap` su_state su
-          tmup'= leastTime (dd_tmup dd) tu
-          dd'  = dd { dd_active = True, dd_tmup = tmup', dd_table = tbl' }
+updateDD :: Key -> T -> Sig e -> DemandData e z -> DemandData e z
+updateDD k tU su dd = dd' where
+    tbl = dd_table dd
+    sf = case M.lookup k tbl of
+            Nothing -> su
+            Just s0 -> s_switch s0 tU su 
+    tbl' = M.insert k sf
+    tmup' = Just $! maybe tU (min tU) (dd_tmup dd)
+    dd' = dd { dd_tmup = tmup', dd_table = tbl' }
 
--- schedDelivery runs at the end of any step in which the DemandAggr
--- was updated. The updates are processed. Updates might not deliver
--- immediately if either not very urgent or not significant. (That
--- enables cycles to choke if they're running too far ahead of real
--- time.)
-schedDelivery :: DemandAggr e z -> IO ()
-schedDelivery da =
+-- runs at end of step; prepares Daggr for eventual delivery.
+-- mostly, I need to make a decision for whether to process the
+-- update next step or to delay on heartbeat. Heartbeat actions
+-- will run on flush.
+scheduleDaggr :: DemandAggr e z -> IO ()
+scheduleDaggr da = 
+    let pd = da_partd da in
+    pd_time pd >>= \ tNow ->
     readIORef (da_data da) >>= \ dd ->
-    pd_time (da_partd da) >>= \ tClock ->
-    assert (dd_active dd) $
-
-    let tTgt = tClock `subtractTime` dtDaggrHist in -- target stability
-    let tRec = dd_stable dd <|> Just tTgt in -- effective recorded stability
-
-    -- Obtain data and perform some GC over demand sources
-    let tbl  = dd_table dd in
-    let lst  = M.toAscList tbl in
-    let lst' = mapMaybe (daggrTableGC tTgt) lst in -- GC of demand sources
-    let tbl' = M.fromAscList lst' in
-
-    -- We might also need to perform more GC in future.
-    let done = null lst' in
-    let bInactive = all (isNothing . st_stable . snd) lst' in
-    let bNeedCleanup = bInactive && not done in
-
-    -- Compute the update, possibly piggybacking old non-urgent updates
-    let tStable = if done then Nothing else Just tTgt in
-    let tUp = max <$> tRec <*> dd_tmup dd in -- chop any straggling updates.
-    let suNew = case tUp of
-            Nothing -> SigUp { su_state = Nothing, su_stable = tStable } 
-            Just tu -> let eSigs = ((`s_trim` tu) . st_signal . snd) `fmap` lst in
-                       let zSig  = da_nzip da eSigs in
-                       zSig `seq`
-                       SigUp { su_state = Just (zSig,tu), su_stable = tStable }
+    assert ((not . isNothing . dd_tmup) dd) $
+    let bUrgent = case dd_tmup dd of
+            Nothing -> False
+            Just tU -> (tU < addTime tNow dtFutureChoke)
     in
-    let su = maybe suNew (`su_piggyback` suNew) (dd_pending dd) in
+    if bUrgent then pd_stepDelay pd (deliverDaggr da) else
+    unless (dd_flush dd) $
+        let dd' = dd { dd_flush = True } in
+        writeIORef (da_data da) dd' >>
+        pd_eventually pd (flushDaggr da)
 
-    -- Decide how to process the resulting update.
-    let bUrgent = isUrgentUpdate (dd_stable dd) su in
-    let bMustDeliver = not (isNothing (su_state su)) in
-    let bDeliverLazily = bMustDeliver && not bUrgent in 
-    --traceIO ("update @ " ++ show tClock ++ " ( " ++ show tStable ++ " ) " ++ 
-    --                     " applies to " ++ show tUp ++ " urgent=" ++ show bUrgent) >>
- 
-    -- We may flush for cleanup or flush for lazy delivery.
-    let bNeedFlush = bNeedCleanup || bDeliverLazily  in
-    let bSchedFlush = bNeedFlush && not (dd_flushSched dd) in
-    let bFlushSched = bNeedFlush || dd_flushSched dd in
-    let dd' = DemandData
-            { dd_active = False
-            , dd_flush = bNeedFlush
-            , dd_flushSched = bFlushSched
-            , dd_tmup = Nothing
-            , dd_stable = (dd_stable dd) -- no change until deliverDaggr
-            , dd_nextKey = (dd_nextKey dd) -- no change here
-            , dd_table = tbl'
-            , dd_pending = Just su
-            }
-    in 
-    su `seq` dd' `seq` writeIORef (da_data da) dd' >>
-    when bSchedFlush (pd_eventually (da_partd da) (flushDaggr da)) >>
-    when bUrgent (pd_stepDelay (da_partd da) (deliverDaggr da))
-
--- flushDaggr will cause it to activate as if an update was received
+-- at the moment, flushDaggr is simply a GC operation unless there
+-- is a pending update, in which case it will deliver the update.
 flushDaggr :: DemandAggr e z -> IO ()
-flushDaggr da =
-    readIORef (da_data da) >>= \ dd ->
-    assert (dd_flushSched dd) $
-    let bActive = dd_flush dd || dd_active dd in
-    let dd' = dd { dd_active = bActive, dd_flushSched = False } in
-    let bDoFlush = (dd_active dd') && not (dd_active dd) in
-    dd' `seq` writeIORef (da_data da) dd' >>
-    when bDoFlush (pd_endOfStep (da_partd da) (schedDelivery da))
+flushDaggr da = initFlush where
+    initFlush = 
+        readIORef (da_data da) >>= \ dd ->
+        assert (dd_flush dd) $
+        let bDeliver = (not . isNothing . dd_tmup) dd in
+        if bDeliver then deliver dd else flush dd
+    deliver dd =
+        let dd' = dd { dd_flush = False } in
+        writeIORef (da_data da) dd' >>
+        deliverDaggr da
+    flush dd =
+        pd_time (da_partd da) >>= \ tNow ->
+        let tGC = tNow `subtractTime` dtDaggrHist in
+        let lst = M.toAscList (dd_table dd) in
+        let lst' = mapMaybe (daggrTableGC tGC) lst in
+        let tbl' = M.fromAscList lst' in
+        let bFlushAgain = (not . null) lst' in
+        let dd' = dd { dd_table = tbl', dd_flush = bFlushAgain } in
+        dd' `seq` writeIORef (da_data da) dd' >>
+        when bFlushAgain (pd_eventually (da_partd da) (flushDaggr da))
 
--- deliverDaggr is called at the beginning of a step, and will
--- deliver a pending update (and clear it). This can operate
--- concurrently with new updates being applied to future steps.
+-- called at beginning of new round. Possibly called twice, once via
+-- flush and once via normal update mechanisms. So it is idempotent.
 deliverDaggr :: DemandAggr e z -> IO ()
-deliverDaggr da = 
-    readIORef (da_data da) >>= \ dd ->
-    case (dd_pending dd) of
-        Nothing -> return ()
-        Just su ->
-            let dd' = dd { dd_pending = Nothing, dd_stable = (su_stable su) } in
-            dd' `seq` writeIORef (da_data da) dd' >>
-            ln_touch (da_link da) >>
-            pd_phaseDelay (da_partd da) (ln_update (da_link da) su)
+deliverDaggr da = maybeDeliver where
+    maybeDeliver =
+        readIORef (da_data da) >>= \ dd ->
+        case dd_tmup dd of
+            Nothing -> return ()
+            Just tU -> doDeliver dd tU 
+    doDeliver dd tU0 =
+        pd_time (da_partd da) >>= \ tNow ->
+        let tTgt = tNow `subtractTime` dtDaggrHist in
+        let tU = max tU0 tTgt in -- cut old updates
+        let lst = M.toAscList (dd_table dd) in
+        let lst' = mapMaybe (daggrTableGC tTgt) lst in
+        let tbl' = M.fromAscList lst' in
+        let su = da_nzip da $ (`s_trim` tU) `fmap` lst in
+        let bNeedFlush = not (null lst') in
+        let bInitFlush = bNeedFlush && not (dd_flush dd) in
+        let bFlushSched = dd_flush dd || bNeedFlush in
+        let dd' = DemandData 
+                { dd_flush = bFlushSched 
+                , dd_table = tbl'
+                , dd_tmup  = Nothing
+                , dd_nextKey = (dd_nextKey dd)
+                }
+        in
+        tU `seq` su `seq` dd' `seq`
+        writeIORef (da_data da) dd' >>
+        when bInitFlush (pd_eventually (da_partd da) (flushDaggr da)) >>
+        pd_phaseDelay (da_partd da) (ln_update (da_link da) DoneT tU su) >>
+        ln_touch (da_link da)
 
 -- Garbage Collection of DemandAggr elements. A demand source can
 -- be eliminated if it isn't active (even if unstable, since Daggr
 -- doesn't utilize input stability).
-daggrTableGC :: T -> (Key, SigSt e) -> Maybe (Key, SigSt e)
-daggrTableGC tm (k,st) =
-    let st' = st_clear tm st in
-    let bDone = s_term (st_signal st') tm in
-    if bDone then Nothing else Just (k, st')
+daggrTableGC :: T -> (k, Sig e) -> Maybe (k, Sig e)
+daggrTableGC tGC (k,s) =
+    let s' = s_trim s tGC in
+    let bDone = s_term s' tGC in
+    if bDone then Nothing else Just (k, s')
 
 leastTime :: Maybe T -> Maybe T -> Maybe T
 leastTime l r = (min <$> l <*> r) <|> l <|> r
@@ -299,16 +292,18 @@ data MonitorDist z = MonitorDist
 
 -- mutable data for the full MonitorDist
 data MDD z = MDD
-    { mdd_signal    :: !(SigSt z)           -- track current signal
+    { mdd_signal    :: !(SigSt z)           -- track primary signal
     , mdd_flush     :: !Bool                -- scheduled heartbeat GC flush?
     , mdd_cleanup   :: !Bool                -- scheduled cleanup this step?
-    , mdd_tmup      :: !(Maybe T)           -- time of recent update
-    , mdd_nextKey   :: {-# UNPACK #-} !Key  -- next key for table!   
+    , mdd_tmup      :: !(Maybe T)           -- time of recent update (*)
+    , mdd_nextKey   :: {-# UNPACK #-} !Key  -- next key for table   
     , mdd_table     :: !(M.Map Key (MLN z)) -- set of active observers
     }
+-- (*) mdd_tmup is needed by observers that are waiting for their 
+--       observer-signal updates. It is cleared on next touch.
 
 data MLN z = MLN 
-    { mln_lzout     :: !(LnkUp z)           -- final output (after mask!)
+    { mln_link      :: !(LnkUp z)           -- observer update callbacks
     , mln_signal    :: !(SigSt ())          -- observer query (the mask)
     , mln_tmup      :: !(Maybe T)           -- tracks observed update time
     }
@@ -321,9 +316,7 @@ newMonitorDist cp z0 = MonitorDist
 
 mddZero :: Sig z -> MDD z
 mddZero z0 = MDD
-    { mdd_signal  = SigSt { st_signal = z0
-                          , st_stable = Nothing
-                          , st_expect = False } 
+    { mdd_signal  = st_zero { st_signal = z0 }
     , mdd_tmup    = Nothing
     , mdd_flush   = False
     , mdd_cleanup = False
@@ -344,40 +337,47 @@ pollMonitorDist md =
 -- signal value is stored for late-arriving observers or observers 
 -- that otherwise cannot immediately process the update. 
 --
+-- A cleanup of the MonitorDist is performed every step it activates
+-- or possibly also on a flush.
+--
 primaryMonitorLnk :: MonitorDist z -> LnkUp z
-primaryMonitorLnk md = LnkUp { ln_touch = touch, ln_update = update }
-    where touch = 
-            readIORef (md_data md) >>= \ mdd ->
-            let st = mdd_signal mdd in
-            unless (st_expect st) $
-                -- traceIO "touchPrimaryMD" >>
-                let st' = st_poke st in
-                let mdd' = mdd { mdd_signal = st' } in
-                writeIORef (md_data md) mdd' >> -- record touch
-                -- touch each observer link (where needed).
-                let lst = filter (not . st_expect . mln_signal) (M.elems (mdd_table mdd')) in
-                mapM_ (ln_touch . mln_lzout) lst
-          update su =
-            -- record update
-            -- traceIO "updatePrimaryMD" >>
-            readIORef (md_data md) >>= \ mdd ->
-            let st = mdd_signal mdd in
-            assert (st_expect st) $
-            let st' = st_sigup su st in -- updated signal, not yet GC'd
-            let tu = leastTime (mdd_tmup mdd) (fmap snd (su_state su)) in -- time of update
+primaryMonitorLnk md = LnkUp touch update idle where
+    touch = 
+        readIORef (md_data md) >>= \ mdd ->
+        let st = mdd_signal mdd in
+        unless (st_expect st) $
+            -- traceIO "touchPrimaryMD" >>
+            let st' = st_poke st in
             let bSchedCleanup = not (mdd_cleanup mdd) in
-            let mdd' = mdd { mdd_signal = st', mdd_tmup = tu
-                           , mdd_cleanup = True } 
-            in
-            mdd' `seq` writeIORef (md_data md) mdd' >>
-            -- must perform cleanup at end of step (i.e. to clear mdd_tmup)
-            when bSchedCleanup (schedCleanupMD md) >>
-            -- deliver updates to ready observers.
-            let lst = filter (not . st_expect . mln_signal) 
-                             (M.elems (mdd_table mdd')) 
-            in
-            pd_time (md_partd md) >>= \ tNow ->
-            mapM_ (deliverUpdateMD tNow mdd') lst
+            let mdd' = mdd { mdd_signal = st', mdd_cleanup = True } in
+            writeIORef (md_data md) mdd' >> -- record touch
+            when bSchedCleanup (schedCleanupMD md) >> -- schedule cleanup
+            -- touch each observer link (where needed).
+            let lst = filter (not . st_expect . mln_signal) (M.elems (mdd_table mdd')) in
+            mapM_ (ln_touch . mln_link) lst
+    idle tS = 
+        readIORef (md_data md) >>= \ mdd ->
+        let st = mdd_signal mdd in
+        assert (st_expect st) $
+        let st' = st_idle tS st in
+        let mdd' = mdd { mdd_signal = st' } in
+        processUpdates mdd'
+    update tS tU su =
+        readIORef (md_data md) >>= \ mdd ->
+        let st = mdd_signal mdd in
+        assert (st_expect st) $
+        let st' = st_update tS tU su st in
+        let tmup' = Just $! maybe tU (min tU) (mdd_tmup mdd) in
+        let mdd' = mdd { mdd_signal = st', mdd_tmup = tmup' } in
+        processUpdates mdd'
+    processUpdates mdd' =
+        assert (mdd_cleanup mdd') $
+        mdd' `seq` writeIORef (md_data md) mdd' >>
+        let lObservers = filter (not . st_expect . mln_signal)
+                                (M.elemens (mdd_table mdd'))
+        in
+        pd_time (md_partd md) >>= \ tNow ->
+        mapM_ (deliverUpdateMD tNow mdd') lObservers
 
 -- deliverUpdateMD will deliver the actual update to the observer,
 -- providing a masked signal update if necessary or just a stability
@@ -388,18 +388,19 @@ primaryMonitorLnk md = LnkUp { ln_touch = touch, ln_update = update }
 -- be fully cleared. 
 deliverUpdateMD :: T -> MDD z -> MLN z -> IO ()
 deliverUpdateMD tNow mdd mln = assert bReady $ deliver where
-    deliver = su `seq` ln_update (mln_lzout mln) su
-    su = SigUp { su_state = suState, su_stable = suStable }
     bReady = bReadyMDD && bReadyMLN
     bReadyMDD = (not . st_expect . mdd_signal) mdd
     bReadyMLN = (not . st_expect . mln_signal) mln
-    suState = case tu of
-        Nothing -> Nothing
-        Just tm -> let sigZ = s_trim ((st_signal . mdd_signal) mdd) tm in
-                   let sigM = s_trim ((st_signal . mln_signal) mln) tm in
-                   Just (s_mask sigZ sigM, tm)
-    tu = leastTime (mdd_tmup mdd) (mln_tmup mln)
-    suStable = if bDone then Nothing else Just tStableAbs
+    tmup = leastTime (mdd_tmup mdd) (mln_tmup mln)
+    maskSig tU =
+        let sigZ = s_trim ((st_signal . mdd_signal) mdd) tU in
+        let sigM = s_trim ((st_signal . mln_signal) mln) tU in
+        s_mask sigZ sigM
+    deliver =
+        case tmup of
+            Nothing -> ln_idle (mln_link mln) tS
+            Just tU -> ln_update (mln_link mln) tS tU (maskSig tU)
+    tS = if bDone then DoneT else StableT tStableAbs
     bDone = isNothing ((st_stable . mln_signal) mln) &&
             s_term ((st_signal . mln_signal) mln) tStableZ
     tStableAbs = maybe tStableZ (min tStableZ) (st_stable (mln_signal mln))
@@ -474,7 +475,7 @@ schedCleanupMD md = schedCleanup where
         let bDone = s_term (st_signal st') tStableZ in
         let mln' = MLN { mln_signal = st'
                        , mln_tmup = Nothing
-                       , mln_lzout = (mln_lzout mln) }
+                       , mln_link = (mln_link mln) }
         in
         mln' `seq`
         if bDone then Nothing else Just (k,mln')
@@ -492,13 +493,14 @@ schedCleanupMD md = schedCleanup where
 -- demand stability as a simple function of the partition's time.
 --
 newMonitorLnk :: MonitorDist z -> LnkUp z -> IO (LnkUp ())
-newMonitorLnk md lzo = 
-    newIORef Nothing >>= \ rfK ->
-    let getKey = loadMDKey md rfK in
-    let touch = getKey >>= touchMLN md lzo in
-    let update su = getKey >>= \ k -> updateMLN md k su in
-    let lu = LnkUp { ln_touch = touch, ln_update = update } in
-    return lu
+newMonitorLnk md lzo = newMonitorLnk' md lzo <$> newIORef Nothing
+
+newMonitorLnk' :: MonitorDist z -> LnkUp z -> IORef (Maybe Key) -> LnkUp ()
+newMonitorLnk' md lzo rfK = LnkUp touch update idle where
+    touch = getKey >>= touchMLN md lzo 
+    update tS tU su = getKey >>= \ k -> updateMLN md k tS tU su 
+    idle tS = getKey >>= \ k -> idleMLN md k tS
+    getKey = loadMDKey md rfK
 
 loadMDKey :: MonitorDist z -> IORef (Maybe Key) -> IO Key
 loadMDKey md rfK =
@@ -528,11 +530,11 @@ touchMLN md lu k =
         let tbl' = M.insert k mln' (mdd_table mdd) in
         let mdd' = mdd { mdd_table = tbl' } in
         mln' `seq` mdd' `seq` writeIORef (md_data md) mdd' >>
-        when bNeedTouch (ln_touch (mln_lzout mln'))
+        when bNeedTouch (ln_touch (mln_link mln'))
 
 mlnZero :: LnkUp z -> MLN z 
 mlnZero lzOut = 
-    MLN { mln_lzout = lzOut
+    MLN { mln_link = lzOut
         , mln_signal = st_zero
         , mln_tmup = Nothing }
 
