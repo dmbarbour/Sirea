@@ -17,8 +17,8 @@
 --
 module Sirea.Internal.PulseSensor
     ( initPulseListener
-    , addPulseAction
-    , runPulseActions
+    , getPulseScheduler
+    , getPulseRunner
     ) where
 
 import Control.Applicative
@@ -29,6 +29,10 @@ import Data.Typeable
 import Sirea.PCX
 import Sirea.Internal.PTypes
 
+-- TODO: Support exponential-backoff via layers of batches.
+--   I.e. at heartbeat, 2*heartbeat, 4*heartbeat, etc.
+-- This will make it easier to prevent future computations from
+-- running too far ahead, support more robust looping.
 
 -- | We're building a PulseReq list. This list is not intended for
 -- heavy use, and so pays the expense for atomic updates.
@@ -41,18 +45,21 @@ instance Resource p PulseReq where
     locateResource _ _ = PulseReq <$> newIORef (return (), [])
 
 runPulse :: PulseReq -> IO ()
-runPulse (PulseReq rf) = atomicModifyIORef rf takeWork >>= sequence_ . reverse
+runPulse (PulseReq rf) = 
+    atomicModifyIORef rf takeWork >>= sequence_ . reverse
     where takeWork (onW,ls) = ((onW,[]),ls)
 
 -- add work to pulse, maybe call the work available signal 
 addWorkToPulse :: PulseReq -> Work -> IO ()
-addWorkToPulse (PulseReq rf) w = join (atomicModifyIORef rf putWork)
+addWorkToPulse (PulseReq rf) w = 
+    join (atomicModifyIORef rf putWork)
     where putWork (onW,[]) = ((onW,w:[]),onW)
           putWork (onW,ls) = ((onW,w:ls),return ())
 
 -- note: setWorkAvailableSignal will call immediately if work is available
 setWorkAvailableSignal :: PulseReq -> OnWork -> IO ()
-setWorkAvailableSignal (PulseReq rf) onW = join (atomicModifyIORef rf setSig)
+setWorkAvailableSignal (PulseReq rf) onW = 
+    join (atomicModifyIORef rf setSig)
     where setSig (_,[]) = ((onW,[]),return ())
           setSig (_,ls) = ((onW,ls),onW)
 
@@ -64,16 +71,21 @@ setWorkAvailableSignal (PulseReq rf) onW = join (atomicModifyIORef rf setSig)
 -- mechanism.
 initPulseListener :: PCX p0 -> PCX p -> IO ()
 initPulseListener cp0 cp = 
-    let pr0 = findInPCX cp0 in
-    let prp = findInPCX cp in
-    let runW = addTCRecv (findInPCX cp) (runPulse prp) in -- callback via onNextStep
-    let onW = addWorkToPulse pr0 runW in       -- add one-time callback to P0's pulse 
+    findInPCX cp0 >>= \ pr0 ->
+    findInPCX cp >>= \ prp ->
+    findInPCX cp >>= \ tc ->
+    let runW = addTCRecv tc (runPulse prp) in -- callback via onNextStep
+    let onW = addWorkToPulse pr0 runW in      -- add one-time callback to P0's pulse 
     setWorkAvailableSignal prp onW
-    
-addPulseAction :: PCX p -> IO () -> IO ()
-addPulseAction = addWorkToPulse . findInPCX
 
-runPulseActions :: PCX p -> IO ()
-runPulseActions = runPulse . findInPCX
+
+type PulseScheduler = Work -> IO ()
+getPulseScheduler :: PCX p -> IO PulseScheduler
+getPulseScheduler cp = addWorkToPulse <$> findInPCX cp
+
+-- PulseRunner for a given partition.
+type PulseRunner = IO ()
+getPulseRunner :: PCX p -> IO PulseRunner
+getPulseRunner cp = runPulse <$> findInPCX cp
 
 

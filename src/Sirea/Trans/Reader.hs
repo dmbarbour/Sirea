@@ -48,6 +48,7 @@ instance (BZip b) => BZip (ReaderB r b) where
 instance (BProd b, BTemporal b) => BTemporal (ReaderB r b) where
     bdelay  = liftReader . bdelay
     bsynch  = liftReader bsynch
+    bfchoke = liftReader bfchoke
 instance (BProd b, BPeek b) => BPeek (ReaderB r b) where
     bpeek   = liftReader . bpeek
 

@@ -4,7 +4,6 @@
 module Sirea.Utility
     ( bprint, bprint_
     , BUndefined(..), bundefined
-    , BFChoke(..)
     -- , BUnit(..)
     ) where
 
@@ -39,7 +38,7 @@ bprint showFn = bvoid $ bfmap showFn >>> bprint_
   -- for console printing
 bprint_ :: BCX w (S P0 String) (S P0 ())
 bprint_ = unsafeOnUpdateBCX mkPrinter >>> bconst ()
-    where mkPrinter = return . mbPrint . pb_list . findInPCX
+    where mkPrinter cw = findInPCX cw >>= return . mbPrint . pb_list
           mbPrint _ _ Nothing = return ()
           mbPrint pbL t (Just msg) = addToPrinter pbL t msg
 
@@ -124,61 +123,5 @@ lnPlus :: Lnk (S p a) -> Lnk (S p a) -> Lnk (S p a)
 lnPlus LnkDead y = y
 lnPlus x LnkDead = x
 lnPlus x y = LnkSig (ln_lnkup x `ln_append` ln_lnkup y)
-
-
--- | Developers in RDP cannot create closed loops, but they can make
--- open feedback loops. In some cases, these might anticipate far 
--- into the future - a waste of time and memory. Use of `bfchoke`
--- can address this by restricting updates that are too far ahead of
--- stability. (You can specify how far is too far.)
---
--- For example, a simple demonstration cycle for demand monitors is:
---   tstCycle :: BCX w (S P0 ()) (S P0 ())
---   tstCycle = snd dm >>> bdelay 1.0 >>> bfmap addOne >>> bprint show >>> fst dm
---       where dm = demandMonitor "tstCycle"
---             addOne = succ . maximum . ((0::Int):)
--- This will print 1,2,3,... and so on, one number per second.
---
--- However, it also aggregates memory, computing a deep future. Use
--- bfchoke to prevent this aggregation, e.g.:
---   snd dm >>> bdelay 1.0 >>> bfchoke 9.0 >>> bfmap addOne >>> bprint show >>> fst dm
--- This will only compute nine seconds ahead then wait for real-time to catch up.
---
-class BFChoke b where bfchoke :: DT -> b (S p a) (S p a)
-instance BFChoke B where bfchoke = fchokeB
-instance BFChoke (BCX w) where bfchoke = wrapBCX . const . bfchoke
-
-
-fchokeB :: DT -> B (S p a) (S p a)
-fchokeB dt = unsafeLinkB mkln where
-    mkln LnkDead = return LnkDead
-    mkln (LnkSig lu) = 
-        newIORef Nothing >>= \ rf ->
-        return (LnkSig (lnFChoke rf dt lu))
-
-lnFChoke :: IORef (Maybe (T,Sig a)) -> DT -> LnkUp a -> LnkUp a
-lnFChoke rf dt lu = LnkUp touch update idle where
-    touch = ln_touch lu
-    update tS tU su =
-        readIORef rf >>= \ mbS ->
-        case mbS of
-            Nothing -> maybeDeliver tS tU su
-            Just (tU0,su0) ->
-                if (tU0 >= tU) then maybeDeliver tS tU su
-                else maybeDeliver tS tU0 (s_switch su0 tU su)
-    maybeDeliver tS tU su =
-        let bDeliver = case tS of
-                DoneT -> True
-                StableT tm -> (tU < tm `addTime` dt)
-        in
-        if bDeliver then writeIORef rf Nothing >>
-                         ln_update lu tS tU su
-                    else writeIORef rf (Just (tU,su)) >>
-                         ln_idle lu tS
-    idle tS =
-        readIORef rf >>= \ mbS ->
-        case mbS of
-            Nothing -> ln_idle lu tS 
-            Just (tU0,su0) -> maybeDeliver tS tU0 su0    
 
 

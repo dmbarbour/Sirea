@@ -147,8 +147,8 @@ unsafeOnUpdateBCXLN :: (Eq a, Typeable p) => (PCX p -> IO (T -> Maybe a -> IO ()
                                           -> BCX w (S p a :&: x) (S p a :&: x)
 
 --unsafeOnUpdateBCX mkOp = wrapBCX $ \ cw -> unsafeOnUpdateB (mkOp (findInPCX cw))
-unsafeOnUpdateBCX mkOp = wrapBCX $ unsafeOnUpdateB . mkOp . findInPCX
-unsafeOnUpdateBCXL mkOp = wrapBCX $ unsafeOnUpdateBL . mkOp . findInPCX
-unsafeOnUpdateBCXLN mkOp = wrapBCX $ unsafeOnUpdateBLN . mkOp . findInPCX
+unsafeOnUpdateBCX mkOp = wrapBCX $ \ cw -> unsafeOnUpdateB (findInPCX cw >>= mkOp)
+unsafeOnUpdateBCXL mkOp = wrapBCX $ \ cw -> unsafeOnUpdateBL (findInPCX cw >>= mkOp)
+unsafeOnUpdateBCXLN mkOp = wrapBCX $ \ cw -> unsafeOnUpdateBLN (findInPCX cw >>= mkOp)
 
 

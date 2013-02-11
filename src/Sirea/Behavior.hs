@@ -559,6 +559,24 @@ class (Category b) => BTemporal b where
     -- simultaneous actions with products. Idempotent.
     bsynch :: b x x
 
+    -- | When interacting with resources, especially in combination
+    -- with bdelay, one can model 'temporal recursive' behaviors in
+    -- RDP, e.g. `monitor >>> bfmap fn >>> bdelay 0.1 >>> demand` 
+    -- could continuously update a demand monitor relative to past
+    -- values. This sort of behavior is discouraged where feasible,
+    -- but cannot be avoided entirely in open systems. The problem
+    -- is that the computation might run too far ahead - seconds and
+    -- eventually minutes, consuming a growing amount of memory and
+    -- burning CPU, and increasing risk of rework.
+    --
+    -- The bfchoke behavior will help regulate update cycles, cause
+    -- them to backoff once they've run too far ahead of stability.
+    -- The cost is a potential loss of snapshot consistency for a
+    -- behavior's distant future values. bfchoke is an annotation or
+    -- suggestion; it has the same semantic meaning as bfwd. But it
+    -- is essential in cases of temporal recursion.
+    bfchoke :: b x x
+
 
 -- | BPeek - anticipate a signal by studying its projected future.
 -- RDP does not provide any support for prediction, but any future

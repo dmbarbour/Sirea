@@ -1,7 +1,8 @@
 {-# LANGUAGE GADTs, TypeOperators #-}
 
-
 -- | New behavior primitives for Sirea.
+--
+-- NOTE: I'll probably be deprecating use of unsafeLinkB
 --
 -- These shouldn't be necessary often, since it will only take a few
 -- common abstractions to support most new ideas and resources. But 

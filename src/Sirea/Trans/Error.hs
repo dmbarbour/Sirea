@@ -83,6 +83,7 @@ instance (BSplit b) => BSplit (ErrorB e b) where
 instance (BTemporal b, BSum b) => BTemporal (ErrorB e b) where
     bdelay  = liftError . bdelay
     bsynch  = liftError bsynch
+    bfchoke = liftError bfchoke
 instance (BPeek b, BSum b) => BPeek (ErrorB e b) where
     bpeek   = liftError . bpeek
 

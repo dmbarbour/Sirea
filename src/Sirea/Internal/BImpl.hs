@@ -15,7 +15,7 @@ module Sirea.Internal.BImpl
     , s0iB, s0eB, vacuousB, leftB, mirrorB, assoclsB, mergeB, splitB -- BSum
     , disjoinB
     , fmapB, constB, seqB, stratB, adjeqfB -- BFmap
-    , tshiftB, tshiftB', delayB, synchB, forceDelayB, peekB -- temporal
+    , tshiftB, tshiftB', delayB, synchB, fchokeB, forceDelayB, peekB -- temporal
 
     -- miscellaneous
     , unsafeSigZipB
@@ -57,10 +57,10 @@ firstB = B_first
 leftB :: B x x' -> B (x :|: y) (x' :|: y)
 leftB = B_left
 
-mkLnkPure :: (Lnk y -> Lnk x) -> MkLnk x y
+mkLnkPure :: (Lnk y -> Lnk x) -> (Lnk y -> IO (Lnk x)) 
 mkLnkPure = (return .)
 
-mkLnkB :: TR x y -> MkLnk x y -> B x y
+mkLnkB :: TR x y -> (Lnk y -> IO (Lnk x)) -> B x y
 mkLnkB = B_mkLnk
 
 -- fwdB is the simplest behavior...
@@ -597,6 +597,78 @@ synchB = tshiftB doSynch
             if (ldt_live ldt) then (ldt_goal ldt) else def
           applyGoal dtg ldt = 
             if (ldt_live ldt) then ldt { ldt_goal = dtg } else ldt
+
+-- | choke a signal so updates won't run too far ahead of stability.
+-- This is modeled by translating some updates into idles until the
+-- stability catches up. Rather than an absolute choke, this uses a
+-- backoff algorithm: update rate will diminish with the distance to
+-- the next update (past a given dt cutoff).
+fchokeB :: DT -> B x x
+fchokeB = mkLnkB id . mkLnChoke where
+
+mkLnChoke :: DT -> Lnk x -> IO (Lnk x)
+mkLnChoke _ LnkDead = return LnkDead
+mkLnChoke dt (LnkProd x y) = 
+    mkLnChoke dt x >>= \ x' ->
+    mkLnChoke dt y >>= \ y' ->
+    return (LnkProd x' y')
+mkLnChoke dt (LnkSum x y) =
+    mkLnChoke dt x >>= \ x' ->
+    mkLnChoke dt y >>= \ y' ->
+    return (LnkSum x' y')
+mkLnChoke dt (LnkSig lu) =
+    newIORef Nothing >>= \ rf ->
+    return (LnkSig (luChoke rf dt lu))
+
+-- choke data
+data CK z = CK 
+    { ck_sendby :: {-# UNPACK #-} !T
+    , _ck_tmup   :: {-# UNPACK #-} !T
+    , _ck_signal :: !(Sig z)
+    }
+
+luChoke :: IORef (Maybe (CK z)) -> DT -> LnkUp z -> LnkUp z
+luChoke rf dt lu = LnkUp touch update idle where
+    touch = ln_touch lu
+    idle tS =
+        readIORef rf >>= \ mbck ->
+        case mbck of
+            Nothing -> ln_idle lu tS
+            Just (CK tDeliver tU0 s0) ->
+                let bDeliver = maybeStableT True (>= tDeliver) tS in
+                if bDeliver
+                    then writeIORef rf Nothing >>
+                         ln_update lu tS tU0 s0
+                    else ln_idle lu tS
+    update tS@DoneT tU su = 
+        readIORef rf >>= \ mbck ->
+        deliverCK mbck tS tU su
+    update tS@(StableT tNow) tU su =
+        readIORef rf >>= \ mbck ->
+        let tCut = tU `subtractTime` dt in
+        let tSendBy = maybe tCut (min tCut) (ck_sendby <$> mbck) in
+        if (tNow >= tSendBy)
+            then deliverCK mbck tS tU su
+            else let ck' = delayCK mbck (chokeT tNow tCut) tU su in
+                 ck' `seq` writeIORef rf (Just ck') >>
+                 ln_idle lu tS
+    deliverCK mbck tS tU su = 
+        writeIORef rf Nothing >>
+        case mbck of
+            Nothing -> ln_update lu tS tU su
+            Just (CK _ tU0 s0) ->
+                if (tU > tU0)
+                    then ln_update lu tS tU0 (s_switch s0 tU su)
+                    else ln_update lu tS tU su
+    delayCK Nothing tChoke tU su = CK tChoke tU su
+    delayCK (Just (CK tChoke0 tU0 s0)) tChoke tU su =
+        let tChoke' = min tChoke0 tChoke in
+        if (tU > tU0) then CK tChoke' tU0 (s_switch s0 tU su)
+                      else CK tChoke' tU su
+    chokeT tNow tDeadline =
+        assert (tDeadline > tNow) $
+        let dtMaxDelay = tDeadline `diffTime` tNow in
+        tNow `addTime` (dtMaxDelay * 0.25)
 
 -- | force aggregated lazy delays to apply at this location.
 -- This ensures the signal values are consistent with the delays.

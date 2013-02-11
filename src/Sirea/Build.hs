@@ -22,7 +22,7 @@
 --
 module Sirea.Build
     ( buildSireaApp, buildSireaAppN
-    , runSireaApp
+    , runSireaApp, pulseSireaApp
     , beginSireaApp
     , SireaApp
     , SireaAppObject(..)
@@ -32,6 +32,7 @@ module Sirea.Build
 import Prelude hiding (catch)
 import Data.IORef
 import Data.Typeable
+import Control.Applicative
 import Control.Concurrent.MVar
 import Control.Monad (unless, when, void, liftM)
 import Control.Exception (catch, assert, AsyncException)
@@ -42,7 +43,7 @@ import Sirea.Internal.BCompile(compileB)
 import Sirea.Internal.PTypes
 import Sirea.Internal.BCross
 import Sirea.Internal.Thread
-import Sirea.Internal.PulseSensor (runPulseActions)
+import Sirea.Internal.PulseSensor (getPulseRunner)
 import Sirea.Internal.Tuning (dtRestart, dtStability, dtHeartbeat, dtGrace)
 import Sirea.Behavior
 import Sirea.Partition
@@ -90,17 +91,11 @@ unwrapSireaApp app = app
 -- These types are defined in the Partition and PCX modules. The P0
 -- partition is thus similar to other partitions, excepting Stopper
 -- is provided to halt the whole app. Stopper is not instantaneous;
--- continue to runStepper until Stopper event is called.
---
--- If runStopper before runStepper, the app will activate for the
--- minimum amount of time that Sirea supports, currently a quarter
--- of a second. I'll preserve this behavior, as it seems useful for
--- unit-testing.
+-- continue to runStepper until Stopper event is executed.
 --
 -- (*) It is not recommended to actually use sireaContext, since any
--- explicit use is difficult to reproduce in another application. P0
--- can have resources, but it's preferable that they're provided by 
--- typeclass and BCX types and don't require explicit integration.
+-- explicit use is difficult to abstract and reuse. It is included 
+-- not for utility, but for completeness, matching other partitions.
 data SireaAppObject = SireaAppObject 
     { sireaStepper :: Stepper
     , sireaStopper :: Stopper
@@ -144,9 +139,8 @@ buildSireaAppN :: String -> SireaApp -> IO SireaAppObject
 buildSireaAppN name app = 
     -- new generic context; fresh global space for the app
     newPCX name >>= \ cw -> 
-    -- special initialization for P0 thread
-    let cp0 = findInPCX cw :: PCX P0 in
-    let tc0 = findInPCX cp0 :: TC in
+    getPCX0 cw >>= \ cp0 ->
+    findInPCX cp0 >>= \ tc0 ->
     writeIORef (tc_init tc0) True >>
     -- compute behavior in the new context
     -- add a phase delay for consistency with bcross updates
@@ -160,6 +154,9 @@ buildSireaAppN name app =
     buildSireaBLU cw lu >>= \ sireaAppObj ->
     when bDead ((runStopper . sireaStopper) sireaAppObj) >> 
     return sireaAppObj
+
+getPCX0 :: PCX w -> IO (PCX P0)
+getPCX0 = findInPCX
   
 -- Build from a LnkUp, meaning there is something listening to the
 -- signal. This doesn't actually initialize the signal, but does set
@@ -167,14 +164,14 @@ buildSireaAppN name app =
 buildSireaBLU :: PCX w -> LnkUp () -> IO SireaAppObject
 buildSireaBLU cw lu =
     newIORef emptyStopData >>= \ rfSD ->
-    let cp0     = findInPCX cw :: PCX P0 in
-    let tc0     = findInPCX cp0 in
+    getPCX0 cw >>= \ cp0 ->
+    findInPCX cp0 >>= \ tc0 ->
     addTCRecv tc0 (beginApp cw rfSD lu) >> -- add kickstart
     let stepper = tcToStepper tc0 in
     let stopper = makeStopper rfSD in
     return $ SireaAppObject { sireaStepper = stepper
                             , sireaStopper = stopper
-                            , sireaContext = findInPCX cw }
+                            , sireaContext = cp0  }
           
 -- task to initialize application (performed on first runStepper)
 -- a slight delay is introduced before everything really starts.
@@ -187,12 +184,15 @@ buildSireaBLU cw lu =
 -- startup (to pre-load resources, files, etc.). After halting, the
 -- system runs an additional dtGrace for final shutdown. 
 --
+-- pulseSireaApp depends on stop condition remaining unchecked until
+-- maintenance phases, so beginApp will always activate the app.
+--
 beginApp :: PCX w -> IORef StopData -> LnkUp () -> IO ()
 beginApp cw rfSD lu = 
-    let gs  = findInPCX cw in
-    let cp0 = findInPCX cw :: PCX P0 in
-    let tc0 = findInPCX cp0 in
-    let pulse = runPulseActions cp0 in
+    findInPCX cw >>= \ gs ->
+    getPCX0 cw >>= \ cp0 ->
+    findInPCX cp0 >>= \ tc0 ->
+    getPulseRunner cp0 >>= \ pulse ->    
     let apw = AppPeriodic 
                 { ap_cw = cw
                 , ap_tc0 = tc0
@@ -237,7 +237,7 @@ maintainApp apw tS0 = beginPulse where
         assert (tS >= tS0) $ -- the clock runs forwards, right?
         later (maintainApp apw tS) >>
         ln_idle lu (StableT tS) 
-    resetMessage = "*** SIREA APP RESET ***"
+    resetMessage = "*** SIREA APP RESET (Stopped for a few seconds) ***"
     beginReset tNow =
         let tRestart = tNow `addTime` dtHeartbeat in
         let tS = tNow `addTime` dtStability in
@@ -293,6 +293,18 @@ finalizingApp apw =
 runSireaApp :: SireaApp -> IO ()
 runSireaApp app = buildSireaApp app >>= beginSireaApp
 
+-- | pulseSireaApp will simply runSireaApp very briefly, a small
+-- fraction of a second. This is intended to be useful for testing,
+-- as it allows working with an RDP application in a manner similar
+-- to a command or procedure call.
+pulseSireaApp :: SireaApp -> IO ()
+pulseSireaApp app = 
+    -- stop condition isn't checked until maintenance phases, so we
+    -- can stop before we start to get a small activity cycle.
+    buildSireaApp app >>= \ so ->
+    (runStopper . sireaStopper) so >>
+    beginSireaApp so
+
 -- | beginSireaApp activates a forever loop to process the SireaApp.
 -- Stopped by asynchronous exception, such as killThread or ctrl+c 
 -- user interrupt. (note: a double-kill will abort graceful kill)
@@ -334,8 +346,8 @@ basicSireaAppLoop rfContinue stepper =
 --
 bUnsafeExit :: BCX w (S P0 ()) (S P0 ())
 bUnsafeExit = unsafeOnUpdateBCX $ \ cw -> 
-    let cp0 = findInPCX cw :: PCX P0 in
-    let rfKilled = inExitR $ findInPCX cp0 in
+    getPCX0 cw >>= \ cp0 ->
+    inExitR <$> findInPCX cp0 >>= \ rfKilled ->
     let kill = readIORef rfKilled >>= \ bBlooded ->
                unless bBlooded $ void $ 
                    writeIORef rfKilled True >>

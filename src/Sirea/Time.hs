@@ -134,7 +134,7 @@ instance Num DT where
         where na = dtToNanos a
               nb = dtToNanos b
               (q,r) = (na * nb) `divMod` nanosInSec
-              c = if (2 * r > nanosInSec) then 1 else 0
+              c = if (r > (nanosInSec `div` 2)) then 1 else 0
     negate (DT a) = 
         if (_tmNanos a == 0) 
             then DT (T (negate (_tmDay a)) 0) 
@@ -163,7 +163,7 @@ instance Fractional DT where
 -- show fixpoint days and seconds
 instance Show T where
     show tm = showFrac 14 days -- 14 places for 86400s * 1000000000 ns
-      where days = (fromInteger (tmDay tm) * nanosInDay + tmNanos tm) % nanosInDay
+      where days = (tmDay tm * nanosInDay + tmNanos tm) % nanosInDay
 
 instance Show DT where
     show dt = showFrac 9 (dtToNanos dt % nanosInSec)

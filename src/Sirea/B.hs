@@ -19,7 +19,7 @@ import Sirea.Behavior
 -- import Sirea.Partition
 import Sirea.Internal.BTypes
 import Sirea.Internal.BImpl
-import Sirea.Internal.Tuning (dtEqf, dtSeq)
+import Sirea.Internal.Tuning (dtEqf, dtSeq, dtFutureChoke)
 import Sirea.Internal.BDynamic
 import Data.Typeable
 
@@ -62,6 +62,7 @@ instance BDisjoin B where
 instance BTemporal B where
     bdelay   = delayB
     bsynch   = synchB
+    bfchoke  = fchokeB dtFutureChoke
 instance BPeek B where
     bpeek    = peekB
 instance Behavior B 

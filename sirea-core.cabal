@@ -46,7 +46,6 @@ Library
     ,parallel (>= 3.0)
     ,time (>= 1.4)
     ,containers (>= 0.5)
-    --,hashtables (>= 1.0)
 
   Exposed-Modules:
     Sirea.Prelude
@@ -56,8 +55,8 @@ Library
     Sirea.Behavior
     Sirea.BDeep
     Sirea.Build 
-    Sirea.PCaps
     Sirea.PCX  
+    Sirea.PSched
     Sirea.Partition
 
     Sirea.B 
@@ -91,7 +90,6 @@ Library
     Sirea.Internal.Thread
     Sirea.Internal.BDynamic
     Sirea.Internal.PulseSensor
-
     Sirea.Internal.Tuning
     
 

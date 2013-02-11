@@ -65,11 +65,11 @@ class (Partition p, Typeable duty) => AgentBehavior p duty where
 --  NOTE: AgentResource is modeled as a global resource, since the
 --  agentBehavior may cross into multiple partitions. However, the
 --  AgentResource is still identified by its starting partition.
-data AgentResource p duty = AgentResource
-    { ar_daggr :: !(DemandAggr () ())       -- track invocations
-    , ar_make  :: !(IO (LnkUp ()))          -- how to instantiate agent
-    , ar_data  :: !(IORef ARD)              -- state and instance tracking 
-    , ar_pd    :: !PartD                    -- to schedule cleanup
+data AR p duty = AR
+    { ar_daggr  :: !(DemandAggr () ())      -- track invocations
+    , ar_make   :: !(IO (LnkUp ()))         -- how to instantiate agent
+    , ar_data   :: !(IORef ARD)             -- state and instance tracking 
+    , ar_psched :: !PSched                  -- to schedule cleanup
     } deriving (Typeable)
 
 data ARD = ARD 
@@ -82,34 +82,35 @@ data ARD = ARD
 ardZero :: ARD
 ardZero = ARD st_zero Nothing False False
 
-instance (AgentBehavior p duty) => Resource w (AgentResource p duty) where
-    locateResource _ = newAgentResource
+instance (AgentBehavior p duty) => Resource w (AR p duty) where
+    locateResource _ = newAR
 
-newAgentResource :: (AgentBehavior p duty) => PCX w -> IO (AgentResource p duty)
-newAgentResource cw = fix $ \ mkar ->
+newAR :: (AgentBehavior p duty) => PCX w -> IO (AR p duty)
+newAR cw = fix $ \ mkar ->
+    getPCX mkar cw >>= \ cp ->
+    getPSched cp >>= \ pd ->
+    newIORef ardZero >>= \ rf ->
     let b = unwrapBCX (getABS mkar) cw in -- behavior
     let make = ln_lnkup <$> snd (compileB b (LnkDUnit ldt_zero) LnkDead) in 
-    let cp = getPCX mkar cw in
-    let pd = mkPartD cp in
-    newIORef ardZero >>= \ rf ->
-    let lnAgent = LnkUp { ln_touch = touchAR make rf
-                        , ln_update = updateAR pd rf } 
-    in
+    let touch = touchAR make rf in
+    let update = updateAR pd rf in
+    let idle = idleAR pd rf in
+    let lnAgent = LnkUp touch update idle in
     wrapEqFilter dtEqf (==) lnAgent >>= \ lu ->
     newDemandAggr cp lu sigActive >>= \ da ->
-    let ar = AgentResource { ar_daggr = da, ar_data = rf
-                           , ar_make = make, ar_pd = pd }
+    let ar = AR { ar_daggr = da, ar_data = rf
+                , ar_make = make, ar_psched = pd }
     in
     ar `seq` return ar
     
 -- functions getABS, getDuty, getPCX mostly for type wrangling
-getABS :: (AgentBehavior p duty) => IO (AgentResource p duty) -> BCX w (S p ()) (S p ())
+getABS :: (AgentBehavior p duty) => IO (AR p duty) -> BCX w (S p ()) (S p ())
 getABS = agentBehaviorSpec . getDuty
 
-getDuty :: (AgentBehavior p duty) => IO (AgentResource p duty) -> duty
+getDuty :: (AgentBehavior p duty) => IO (AR p duty) -> duty
 getDuty _ = undefined
 
-getPCX :: (AgentBehavior p duty) => IO (AgentResource p duty) -> PCX w -> PCX p 
+getPCX :: (AgentBehavior p duty) => IO (AR p duty) -> PCX w -> IO (PCX p) 
 getPCX _ = findInPCX
     
 -- simple merge of activity signals
@@ -127,23 +128,30 @@ touchAR make rf =
         let st' = st_poke st in
         maybe make return (ard_link ard) >>= \ lu ->
         let bTouchedForFlush = touchedByFlushARD ard in
-        let ard' = ard { ard_signal = st', ard_link = Just lu
+        let ard' = ard { ard_signal = st'
+                       , ard_link = Just lu
                        , ard_flush = False } 
         in
         writeIORef rf ard' >> -- record agent and touched signal
         unless bTouchedForFlush (ln_touch lu) -- forward touch to agent
 
-deliverUpdateARD :: ARD -> SigUp () -> IO ()
+idleAR :: PSched -> IORef ARD -> StableT -> IO ()
+idleAR pd rf tS = 
+    readIORef rf >>= \ ard ->
+    assert ((st_expect . ard_signal) ard) $
+    
+
+deliverUpdateARD :: ARD -> StableT -> IO ()
 deliverUpdateARD ard = 
     assert ((not . isNothing . ard_link) ard) $
     maybe ignore ln_update (ard_link ard)
     where ignore _ = return ()
-    
+  
 -- handle update of collective demand for the agent, and possibly
 -- schedule a flush to ensure the agent is cleared. This operation
 -- will not actually clear the agent.
-updateAR :: PartD -> IORef ARD -> SigUp () -> IO ()
-updateAR pd rf su = 
+updateAR :: PSched -> IORef ARD -> StableT -> T -> Sig () -> IO ()
+updateAR pd rf tS tU su = 
     readIORef rf >>= \ ard ->
     assert ((st_expect . ard_signal) ard) $ -- we have a signal
     maybe getTStable pure (su_stable su) >>= \ tStable ->    
@@ -155,7 +163,7 @@ updateAR pd rf su =
                    , ard_flushSched = bFlushSched } 
     in
     ard' `seq` writeIORef rf ard' >>
-    when bSchedFlush (pd_eventually pd (flushAR pd rf)) >>
+    when bSchedFlush (p_eventually pd (flushAR pd rf)) >>
     let su' = su { su_stable = Just tStable } in 
     deliverUpdateARD ard' su'
     where getTStable = (`subtractTime` dtDaggrHist) <$> pd_time pd
@@ -217,16 +225,17 @@ touchedByFlushARD ard = ard_flush ard && (not . ard_flushSched) ard
 --
 invokeAgent :: (AgentBehavior p duty) => duty -> BCX w (S p ()) (S p ())
 invokeAgent duty = fix $ \ b -> wrapBCX $ \ cw ->
-    let ar = getAR duty b cw in
+    getAR duty b cw >>= \ ar ->
     invokeDutyAR ar
 
-invokeDutyAR :: AgentResource p duty -> B (S p ()) (S p ())
+invokeDutyAR :: AR p duty -> B (S p ()) (S p ())
 invokeDutyAR ar = bvoid (unsafeLinkB lnInvoke) where
     lnInvoke ln = assert (ln_dead ln) $ 
         LnkSig <$> newDemandLnk (ar_daggr ar)
 
-getAR :: (AgentBehavior p duty) => duty -> BCX w (S p ()) (S p ()) 
-      -> PCX w -> AgentResource p duty
+getAR :: (AgentBehavior p duty) 
+      => duty -> BCX w (S p ()) (S p ()) 
+      -> PCX w -> IO (AR p duty)
 getAR _ _ = findInPCX
 
 

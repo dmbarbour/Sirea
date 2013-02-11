@@ -33,61 +33,55 @@
 --
 module Sirea.PCX
     ( PCX       -- abstract
-    , PCXPath
+    , RPath     -- path type
     , newPCX    -- a new toplevel
     , findInPCX, findByNameInPCX -- the lookup functions
     , Resource(..)
     ) where
 
+
 import Data.Typeable
 import Data.Dynamic
---import Control.Concurrent.MVar
-import Data.IORef
+import Control.Concurrent.MVar
 import qualified Data.Map as M
-
--- TODO: consider using Data.Map for higher performance lookups.
 import Control.Monad.Fix (mfix)
-import System.IO.Unsafe (unsafeDupablePerformIO, unsafeInterleaveIO)
+
+-- TODO: consider changing toplevel `PCX w` to `PCX W`
 
 -- | PCX p - Partition Resource Context. Abstract.
 --
 -- A partition context is a vast space of resources. Conceptually, 
 -- it already holds the resources, but we locate them as needed. In
 -- practice, the resource is created on the first lookup and further
--- lookups will return the same resource.
+-- lookups will return the same resource. Resources are uniquely 
+-- identified (located) based on type (via Typeable) and string. 
 --
--- Resources may be uniquely identified by type and string. However,
--- there currently is no mechanism in PCX to GC resources without 
--- collecting the whole PCX. Developers should be careful to use the
--- resources they need, or perhaps especially model the cases where 
--- some extra GC is appropriate. 
+-- A weakness of PCX is that there is no mechanism to GC resources
+-- without collecting the whole space. Consequently, developers must
+-- use a relatively stable set of resources to avoid growing the
+-- memory overheads. If more dynamism is required, it is necessary
+-- to create resource types that handle the dynamism internally.
 --
--- At the moment, PCX serializes all lookup operations, and lookups
--- will be performed in the IO monad. (The original design modeled a
--- pure lookup, but in practice the IO monad is always available
--- when searching a PCX so I've decided to avoid the unsafe IO.) 
---
--- NOTE: `PCX w` has connotations that `w` is the full world, i.e.
--- the root partition created by `newPCX`. It is also used in type
--- matching to provide a little extra protection against accidental
--- connections between SireaApp applications. `PCX p` refers to a
--- child PCX for a specific thread or partition. Partition resources
--- should be manipulated only by that partition thread. The PCX type
--- is an instance of resource.
+-- A PCX is MT-safe and will serialize all lookup operations. Lookup
+-- should be considered moderately expensive, so the result should
+-- be remembered if the resource will be needed often. Since PCX is
+-- idempotent and lookups are commutative, it is safe to use PCX via
+-- unsafePerformIO (or even unsafeDupablePerformIO). But this will
+-- not be the default.
 --
 data PCX p = PCX 
-    { pcx_ident :: !(PCXPath)
-    , pcx_store :: !(IORef PCXStore)
+    { pcx_path :: !(RPath)
+    , pcx_store :: !(MVar Store)
     } deriving(Typeable)
 
-type PCXStore = M.Map (TypeRep,String) Dynamic
+type Store = M.Map (TypeRep,String) Dynamic
 
 -- | The PCX Path is a path of types and strings, ordered from leaf
 -- to root. Every resource has a unique path (from newPCX) that is
 -- accessible via locateResource.
-type PCXPath = [(TypeRep,String)]
+type RPath = [(TypeRep,String)]
 
--- | Resource - found inside a PCX. 
+-- | Resource - can be found inside a PCX. 
 --
 -- Resources are constructed in IO, but developers should protect an
 -- illusion that resources existed prior the locator operation, i.e.
@@ -97,80 +91,61 @@ type PCXPath = [(TypeRep,String)]
 --   * no observable effects for mere existence of resource
 --   * not sensitive to thread in which construction occurs
 --
--- That is, we shouldn't see anything unless we agitate resources by
+-- We shouldn't see anything unless we interact with resources with
 -- further IO operations. If we create a resource but don't ever use
--- it, there should be no significant effects.
+-- it, there should be no significant effects. The most common IO
+-- action for creating resources will probably be newIORef.
 --
--- Every resource has a unique path in an instance of a SireaApp.
--- This path is provided to the constructor because it may be useful
--- for persistence or generation of a pseudo-random default state.
+-- For safety, the idiom is hide the resource type inside a module
+-- and wrap the find operation. This can provide some constraints on
+-- the lookup operations.
+--
+-- Every resource has a unique path relative to a root PCX. The path
+-- supports persistence or generation of default states. This path
+-- will be stable across program executions.
 --
 class (Typeable r) => Resource p r where
-    locateResource :: PCXPath -> PCX p -> IO r
+    locateResource :: RPath -> PCX p -> IO r
 
 instance (Typeable p) => Resource p0 (PCX p) where
     locateResource p _ =
-        newIORef M.empty >>= \ store' ->
-        return (PCX { pcx_ident = p, pcx_store = store' })
-
+        newMVar M.empty >>= \ s ->
+        return (PCX { pcx_path = p, pcx_store = s })
 
 -- | Find a resource in the partition context based on its type.
 --
 --     findInPCX = findByNameInPCX ""
 --
-findInPCX :: (Resource p r) => PCX p -> r
+findInPCX :: (Resource p r) => PCX p -> IO r
 findInPCX = findByNameInPCX ""
 
 -- | Find a resource in a partition based on both name and type.
 --
 -- Notionally, the resource already exists, we aren't creating it.
--- In practice, the resource is lazily initialized, which may prove
--- unsafe if the resource doesn't obey the rules (e.g. no observable
--- effects at initialization). 
+-- In practice, the resource is created on the first lookup, and all
+-- subsequent lookups (with the same string and type) will return
+-- the same resource. To protect notional existence, resources are
+-- not to have observable side-effects until we interact with them.
 --
--- This provides a pure interface to represent that the resource
--- already exists (according to the abstraction) and we're just
--- searching for it. Resources are initialized lazily. Since 
--- lookups are idempotent, most issues with unsafe IO are gone.
---
--- Assume finding resources in PCX is moderately expensive. Rather
--- than looking for the resources you need each time you need them,
--- try to apply PCX and obtain resources just once, up front. PCX
--- is designed expecting a low load for lookups.
---
--- Use of names can support dynamic behaviors and metaprogramming,
--- but should be used with caution. There is no way to GC old names.
---
-findByNameInPCX :: (Resource p r) => String -> PCX p -> r
-findByNameInPCX nm pcx = unsafeDupablePerformIO (findByNameInPCX_IO nm pcx)
+findByNameInPCX :: (Resource p r) => String -> PCX p -> IO r
+findByNameInPCX nm pcx = mfix $ \ rForType ->
+    let k = (typeOf rForType, nm) in
+    modifyMVar (pcx_store pcx) $ \ tbl ->
+        let elt = fromDynamic =<< M.lookup k tbl in
+        case elt of
+            Just r -> return (tbl,r)
+            Nothing ->
+                locateResource (k:pcx_path pcx) pcx >>= \ r ->
+                let tbl' = M.insert k (toDyn r) tbl in
+                r `seq` tbl' `seq`
+                return (tbl',r)
 
-findByNameInPCX_IO :: (Resource p r) => String -> PCX p -> IO r 
-findByNameInPCX_IO nm pcx = mfix $ \ rForType ->
-    let pElt = (typeOf rForType, nm) in
-    let path = pElt : pcx_ident pcx in
-    unsafeInterleaveIO (locateResource path pcx) >>= \ newR ->
-    atomicModifyIORef (pcx_store pcx) (loadOrAdd nm newR)
-
-loadOrAdd :: (Typeable r) => String -> r -> PCXStore -> (PCXStore,r)
-loadOrAdd nm r tbl =
-    let k = (typeOf r, nm) in
-    let mbr = fromDynamic =<< M.lookup k tbl in
-    case mbr of 
-        Just r0 -> (tbl,r0) -- no changes
-        Nothing -> 
-            let tbl' = M.insert k (toDyn r) tbl in
-            (tbl',r)
-
-
--- | newPCX - a `new` PCX space, unique and fresh.
---
--- You can find child PCX spaces if more than one resource of a
--- given type is necessary. 
+-- | newPCX - a `new` toplevel PCX
 newPCX :: String -> IO (PCX w)
 newPCX nm = 
-    newIORef M.empty >>= \ rf ->
-    let path = [(typeOf (), nm)] in
-    let pcx = PCX { pcx_ident = path, pcx_store = rf } in
+    newMVar M.empty >>= \ s ->
+    let p = (typeOf (), nm):[] in
+    let pcx = PCX { pcx_path = p, pcx_store = s } in
     return pcx
 
 

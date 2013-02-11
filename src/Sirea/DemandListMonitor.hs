@@ -48,14 +48,14 @@ instance (Partition p) => HasDemandListMonitor (BCX w) p where
 
 demandListMonitorBCX :: (Partition p, Typeable e) => String -> DemandMonitor (BCX w) p e [e]
 demandListMonitorBCX nm = fix $ \ dm ->
-    let cwToDMD = getDMD . findByNameInPCX nm . getP dm in
-    let d = wrapBCX $ demandFacetB . fst . cwToDMD in
-    let m = wrapBCX $ monitorFacetB  . snd . cwToDMD in
+    let cwToDMD cw = getPCX dm cw >>= fmap getDMD . findByNameInPCX nm in
+    let d = wrapBCX $ demandFacetB . fmap fst . cwToDMD in
+    let m = wrapBCX $ monitorFacetB  . fmap snd . cwToDMD in
     (d,m)
 
 -- load PCX for correct partition (type system tricks)
-getP :: (Partition p) => DemandMonitor b p e z -> PCX w -> PCX p
-getP _ = findInPCX
+getPCX :: (Partition p) => DemandMonitor b p e z -> PCX w -> IO (PCX p)
+getPCX _ = findInPCX
 
 newtype UDMD e = UDMD { getDMD :: (DemandAggr e [e], MonitorDist [e]) } deriving (Typeable)
 
@@ -69,14 +69,20 @@ newUDMD cp =
     newDemandAggr cp (primaryMonitorLnk md) sigZipLists >>= \ d ->
     return (d,md)
 
-demandFacetB :: DemandAggr e z -> B (S p e) (S p ())
-demandFacetB da = bvoid (unsafeLinkB lnDem) >>> bconst ()
-    where lnDem ln = assert (ln_dead ln) $ LnkSig <$> newDemandLnk da
+demandFacetB :: IO (DemandAggr e z) -> B (S p e) (S p ())
+demandFacetB getDA = bvoid (unsafeLinkB lnDem) >>> bconst ()
+    where lnDem ln = assert (ln_dead ln) $ 
+                getDA >>= \ da ->
+                newDemandLnk da >>= \ lu' ->
+                return (LnkSig lu')
 
-monitorFacetB :: MonitorDist z -> B (S p ()) (S p z)
-monitorFacetB md = unsafeLinkB lnMon
+monitorFacetB :: IO (MonitorDist z) -> B (S p ()) (S p z)
+monitorFacetB getMD = unsafeLinkB lnMon
     where lnMon LnkDead = return LnkDead -- dead code elim.
-          lnMon (LnkSig lu) = LnkSig <$> newMonitorLnk md lu
+          lnMon (LnkSig lu) = 
+                getMD >>= \ md ->
+                newMonitorLnk md lu >>= \ lu' ->
+                return (LnkSig lu')
 
 sigZipLists :: [Sig e] -> Sig [e]
 sigZipLists = foldr (s_full_zip jf) (s_always [])

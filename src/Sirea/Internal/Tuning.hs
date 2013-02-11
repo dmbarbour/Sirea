@@ -31,7 +31,7 @@ dtGrace     = dtHeartbeat -- time allotted for graceful start and stop
 -- block updates that apply too far in the future.
 dtInsigStabilityUp, dtFutureChoke :: DT
 dtInsigStabilityUp = dtHeartbeat - 0.001 -- largest insignificant pure-stability update
-dtFutureChoke      = dtEqf - 0.001       -- slow down updates if far beyond stability
+dtFutureChoke      = 30 * dtHeartbeat    -- slow down updates if far beyond stability
 
 -- There are several cases where we'll want to evaluate signals into
 -- their near future. For `bseq` we simply want to flatten signals 
@@ -39,15 +39,15 @@ dtFutureChoke      = dtEqf - 0.001       -- slow down updates if far beyond stab
 -- first difference between two signals so we can tweak update times
 -- accordingly and avoid rework downstream.
 dtEqf, dtSeq :: DT
-dtEqf   = 3.6  -- when seeking first difference in a signal
-dtSeq   = 0.36 -- when simply evaluating a signal ahead
+dtEqf   = 40 * dtHeartbeat  -- when seeking first difference in a signal
+dtSeq   = dtEqf / 10 -- when simply evaluating a signal ahead
 
 -- For dynamic behaviors, it's best to install behaviors a little 
 -- before they're necessary. Doing so can improve system latency and
 -- support better speculative evaluation downstream. The tradeoff is
--- potentially more rework when signals change.
+-- potentially much more rework when signals change.
 dtCompileFuture :: DT
-dtCompileFuture = 2.7 -- how far to anticipate dynamic behaviors
+dtCompileFuture = dtFutureChoke -- how far to anticipate dynamic behaviors
 
 -- Communication between partitions in Sirea occurs via bcross, and
 -- uses coarse-grained batches to support snapshot consistency and
@@ -56,18 +56,14 @@ dtCompileFuture = 2.7 -- how far to anticipate dynamic behaviors
 -- this value is per directed edge between partitions, not global.)
 --
 -- Tuning here is a tradeoff. A large number of batches may improve
--- parallelism and CPU efficiency, but costs memory, latency, and
--- increases potential drift and inconsistency. Memory can cost CPU
--- due to increased GC and paging overheads. Small batch count may
--- cause more waits between partitions but tighter properties for
--- system consistency. 
+-- parallelism, piggybacking, and CPU efficiency. However, it may
+-- cost memory, latency, and increases drift between partitions.
+-- A small number of batches will require more thread switching but
+-- may result in tighter tolerances.
 --
--- Critical values:
---    must be 1 or more or we'll just wait forever on send
---    must be 2 or to piggyback batches for efficiency
---
--- If partitions keep up with their workload, Sirea is wait-free at
--- the threads layer. Bounded buffers are the only waits in Sirea. 
+-- Bounded buffers between partitions are the only waits in Sirea.
+-- Sirea is potentially wait-free if threads keep up with workloads.
+-- This can also be understood as a basis for fair scheduling.
 --
 batchesInFlight :: Int
 batchesInFlight = 6
@@ -90,15 +86,16 @@ dtMdistHist = dtHeartbeat -- how long to tolerate late-arriving observers
 -- for a few seconds before finalizing. In those cases, dtFinalize
 -- is used to ensure any remaining values are processed.
 dtFinalize :: DT
-dtFinalize = 60.0 -- guarantee completion in all but absurd cases
+dtFinalize = 1000 * dtHeartbeat -- guarantee completion in all but absurd cases
 
 
 -- For console printing, currently I use a simple expiration model
 -- for old sentences. (I'd like to eventually develop a rigorous
 -- model for console output, but this is sufficient for now and
 -- roughly models a tuple space with expirations.)
+--  (note: this won't be used in near future)
 dtPrintExpire :: DT
-dtPrintExpire = 6.0 
+dtPrintExpire = 100 * dtHeartbeat 
 
 -- In some cases, I want to initialize structures with a lower bound
 -- for Time. But I don't want to pay code and performance overheads 

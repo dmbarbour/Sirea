@@ -3,7 +3,8 @@
 -- Types for FRP.Sirea.Link (here to avoid cyclic dependencies)
 -- plus related utilities
 module Sirea.Internal.LTypes 
-    ( MkLnk, Lnk, LnkW(..), LnkUp(..), StableT(..)
+    ( MkLnk, Lnk, LnkW(..), LnkUp(..)
+    , StableT(..), isDoneT, fromStableT, maybeStableT
     , ln_left, ln_right, ln_fst, ln_snd, ln_dead
     , ln_zero, ln_lnkup, ln_append
     , ln_lumap, ln_sfmap
@@ -154,6 +155,18 @@ instance Monoid (LnkUp a) where
 data StableT = StableT {-# UNPACK #-} !T
              | DoneT
              deriving (Show,Eq,Typeable)
+
+isDoneT :: StableT -> Bool
+isDoneT DoneT = True
+isDoneT _ = False
+
+fromStableT :: T -> StableT -> T
+fromStableT t DoneT = t
+fromStableT _ (StableT t) = t
+
+maybeStableT :: a -> (T -> a) -> StableT -> a
+maybeStableT a _ DoneT = a
+maybeStableT _ fn (StableT t) = fn t
 
 -- The main reason for StableT is right here. Dealing with Maybe's
 -- default Ord instance was painful.

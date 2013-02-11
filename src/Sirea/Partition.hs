@@ -37,16 +37,16 @@ module Sirea.Partition
     , Pt, P0
     , Stepper(..)
     , Stopper(..)
-    , onNextStep, onHeartbeat, phaseDelay, atEndOfStep
-    , getStepTime 
+    , PSched(..) -- re-exported
+    , getPSched
     ) where
 
 import Sirea.Behavior
 import Sirea.PCX
+import Sirea.PSched
 import Sirea.Internal.PTypes
 import Sirea.Internal.Thread
-import Sirea.Internal.PulseSensor (addPulseAction)
-import Sirea.Time
+import Sirea.Internal.PulseSensor (getPulseScheduler)
 
 import Data.Typeable
 import Data.IORef
@@ -66,70 +66,33 @@ class BCross b where
     bcross :: (Partition p, Partition p') => b (S p x) (S p' x)
 
 -- | Partition p - indicates a toplevel partition type, and also 
--- can override the default partition thread constructor.
+-- can override the default partition thread constructor. The
+-- partition must return its own stopper operation, which will be
+-- run from within the same partition when it is time to halt the
+-- application.
 --
--- Note: While partitions may have responsibilities beyond Sirea RDP
--- updates, they should not cause any significant effects until so
--- directed by RDP behaviors. 
--- 
--- Partition should later support dependency injection via Make.
--- This would be criticial for most non-trivial partitions, since
--- otherwise there is no clear way to hook up to behaviors. 
+-- Note: Partitions are Resources (see PCX) and should not have any
+-- significant side-effects until some effects are demanded.
 --
 class (Typeable p) => Partition p where
     -- | create a new partition thread, with access to partition
     -- resources via PCX. (Recommend use of GHC.Conc.labelThread.)
     newPartitionThread :: PCX p -> Stepper -> IO Stopper
 
--- | `onNextStep` will delay any IO action until the next runStepper
--- operation by an associated partition. onNextStep is mt-safe and
--- will trigger the stepper event (indicating work is available).
--- This makes it a useful way for worker threads to publish info
--- back to their controlling partition. onNextStep tasks will run
--- in the same order they are added.
---
--- Use of `onNextStep` is not guaranteed very near shutdown. 
-onNextStep :: (Partition p) => PCX p -> IO () -> IO ()
-onNextStep = addTCRecv . findInPCX
 
--- | `onHeartbeat` will delay an IO task based on an external signal
--- scheduled by the main partition. This runs at a moderate rate of
--- 10-20Hz, though a partition won't hear a heartbeat unless it has
--- scheduled an action for it. Heartbeats don't have precise timing,
--- but are useful for vague eventually tasks - e.g. cleanup, choke. 
---
-onHeartbeat :: (Partition p) => PCX p -> IO () -> IO ()
-onHeartbeat = addPulseAction
-
--- | `phaseDelay` causes the provided action to be delayed within 
--- the current step. This is used primarily so that touch actions
--- can complete prior to updates. phaseDelay is used at bcross so
--- touches are propagated and updates combined to minimize rework.
---
--- A partition can execute any number of phases within a runStepper
--- action, though there are usually only two (touch then update).
--- 
--- This is not mt-safe; it must be used from the partition thread.
-phaseDelay :: (Partition p) => PCX p -> IO () -> IO ()
-phaseDelay = addTCWork . findInPCX
-
--- | `atEndOfStep` will schedule an action for after the last phase,
--- the same stage Sirea schedules its bcross send actions. This must
--- not be used to compute or propagate updates (that would violate 
--- snapshot consistency), but may be a good location to decide when
--- to perform more actions or emit effects.  
---
--- This is not mt-safe; it must be used from the partition thread.
-atEndOfStep :: (Partition p) => PCX p -> IO () -> IO ()
-atEndOfStep = addTCSend . findInPCX
-
--- | getStepTime will obtain an effective wall-clock time associated
--- with the most recent step. This value is computed at the start of
--- each step (i.e. right at `runStepper`), and guaranteed monotonic.
---
--- This is not mt-safe; it must be used from the partition thread.
-getStepTime :: (Partition p) => PCX p -> IO T
-getStepTime = getTCTime . findInPCX
+-- | Given the PCX for a partition, we can obtain the scheduler,
+-- though doing so is optional. See Sirea.PSched for more info.
+getPSched :: (Partition p) => PCX p -> IO PSched
+getPSched cp = 
+    findInPCX cp >>= \ tc ->
+    getPulseScheduler cp >>= \ onPulse ->
+    return $! PSched 
+        { p_stepTime   = getTCTime tc
+        , p_onNextStep = addTCRecv tc
+        , p_onUpdPhase = addTCWork tc
+        , p_onStepEnd  = addTCSend tc
+        , p_eventually = onPulse
+        }
 
 -- | Pt is a type for trivial partitions. These partitions have few
 -- responsibilities, other than to process available RDP updates as

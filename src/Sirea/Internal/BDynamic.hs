@@ -17,6 +17,7 @@ import Control.Arrow (second)
 import Data.IORef
 import Data.List (foldl')
 import Data.Maybe (isNothing, fromMaybe, mapMaybe)
+import Data.Unique
 import qualified Data.Map.Strict as M
 import Sirea.Internal.BTypes
 import Sirea.Internal.STypes
@@ -28,7 +29,9 @@ import Sirea.Time
 import Sirea.Signal
 
 --import Debug.Trace
-type Key = Int
+
+-- TODO: Shift dynamic behavior updates into a future cycle (i.e. the
+-- next step). This can allow compile and touch in the opening phase.
 
 -- Evaluate a behavior provided dynamically.
 --
@@ -140,20 +143,19 @@ evalSynched ldt =
 -- Data needed for the dynamic evaluator source
 data Evaluator x y = Evaluator 
     { ev_data     :: !(IORef (EVD x y)) -- mutable state
-    , ev_mergeLnk :: !(Key -> Lnk y) -- remote links
+    , ev_mergeLnk :: !(Unique -> Lnk y) -- remote links
     , ev_dynX     :: !(LnkW Dyn x) -- source links
     }
 data EVD x y = EVD 
     { evd_signal   :: !(SigSt (B x y)) -- signal of dynamic behaviors
     , evd_compileT :: {-# UNPACK #-} !T -- how much of the signal has been compiled?
-    , evd_nextKey  :: {-# UNPACK #-} !Key -- for new keys to merge signals at y
     }
 
 -- buildEval prepares the evaluator to receive and process inputs.
 buildEval :: (SigMembr x) => LnkD LDT x -> Lnk y -> IO (Lnk (S p (B x y) :&: x))
 buildEval dtx lnyFinal =
     assert (evalSynched dtx) $
-    let evd0 = EVD st_zero tAncient 10000 in
+    let evd0 = EVD st_zero tAncient in
     newIORef evd0 >>= \ rfEVD ->
     mkFullDyn dtx >>= \ dynX -> 
     mkMergeLnkFactory lnyFinal >>= \ mergeLnkY ->
@@ -161,6 +163,7 @@ buildEval dtx lnyFinal =
     let luB = LnkUp (touchEV ev) (updateEV ev) (idleEV ev) in
     let xLnk = fullDynToLnk (ev_dynX ev) in
     return (LnkProd (LnkSig luB) xLnk)
+
 
 touchEV :: Evaluator x y -> IO ()
 touchEV ev =
@@ -214,14 +217,7 @@ updateDynamicsEV ev mbTU = updateBehaviors where
     compileE (t,mb) =
         maybe (return LnkDead) compile mb >>= \ lnx ->
         return (t,lnx)
-    compile b = newKey >>= compileBC1 b . (ev_mergeLnk ev)
-    newKey = -- get a unique key for merging signals (at Lnk y)
-        readIORef (ev_data ev) >>= \ evd ->
-        let k = succ (evd_nextKey evd) in
-        let evd' = evd { evd_nextKey = k } in
-        k `seq` evd' `seq`
-        writeIORef (ev_data ev) evd' >>
-        return k
+    compile b = newUnique >>= compileBC1 b . (ev_mergeLnk ev)
 
 -- this operation will compute which behaviors need to be compiled
 -- and installed. This set can be adjusted due to stability or to
@@ -511,7 +507,7 @@ loadUpdate tS tu s0 (lo:hi:xs) =
 -- expirations for those links could be achieved by HMAC provided on
 -- establishing the merge-link. (RDP is intended to set up without 
 -- any round-trip handshaking.)
-mkMergeLnkFactory :: Lnk y -> IO (Key -> Lnk y)
+mkMergeLnkFactory :: Lnk y -> IO (Unique -> Lnk y)
 mkMergeLnkFactory LnkDead = 
     return (const LnkDead)
 mkMergeLnkFactory (LnkProd f s) = 
@@ -535,7 +531,7 @@ mkMergeLnkFactory (LnkSig lu) =
 newtype MergeLnk a = MergeLnk { mln_data :: IORef (MLD a) }
 data MLD a = MLD
     { mld_touchCt  :: {-# UNPACK #-} !Int
-    , mld_table    :: !(M.Map Key (SigSt a))
+    , mld_table    :: !(M.Map Unique (SigSt a))
     , mld_tmup     :: !(Maybe T)
     }
 
@@ -549,11 +545,11 @@ mldZero = MLD
     , mld_tmup    = Nothing
     }
 
-mld_getSt :: MLD a -> Key -> SigSt a
+mld_getSt :: MLD a -> Unique -> SigSt a
 mld_getSt mld k = fromMaybe st_zero $ M.lookup k (mld_table mld)
 
 -- touch key (if not already touched)
-mld_touch :: MLD a -> Key -> MLD a
+mld_touch :: MLD a -> Unique -> MLD a
 mld_touch mld k =
     let st = mld_getSt mld k in
     if st_expect st then mld else 
@@ -562,7 +558,7 @@ mld_touch mld k =
     let tc' = succ (mld_touchCt mld) in
     mld { mld_touchCt = tc', mld_table = tbl' }
 
-mld_idle :: MLD a -> Key -> StableT -> MLD a
+mld_idle :: MLD a -> Unique -> StableT -> MLD a
 mld_idle mld k tS =
     let st = mld_getSt mld k in
     assert (st_expect st) $
@@ -571,7 +567,7 @@ mld_idle mld k tS =
     let tc' = pred (mld_touchCt mld) in
     mld { mld_touchCt = tc', mld_table = tbl' }
 
-mld_update :: MLD a -> Key -> StableT -> T -> Sig a -> MLD a
+mld_update :: MLD a -> Unique -> StableT -> T -> Sig a -> MLD a
 mld_update mld k tS tU su =
     let st = mld_getSt mld k in
     assert (st_expect st) $
@@ -596,7 +592,7 @@ mld_update mld k tS tU su =
 -- signals, which is proportional to update frequency for the dynamic
 -- behavior.
 --
-fnMergeEval :: MergeLnk a -> LnkUp a -> Key -> LnkUp a
+fnMergeEval :: MergeLnk a -> LnkUp a -> Unique -> LnkUp a
 fnMergeEval mln lu k = LnkUp touch update idle where
     touch = 
         readIORef (mln_data mln) >>= \ mld ->
@@ -648,20 +644,16 @@ emitMergedSignal mln lu =
    
 -- need to GC the table. An element can be removed once it no longer
 -- contributes to the result
-mergeEvalGC :: StableT -> (Key,SigSt a) -> Maybe (Key, SigSt a)
+mergeEvalGC :: StableT -> (k,SigSt a) -> Maybe (k, SigSt a)
 mergeEvalGC DoneT _ = Nothing
 mergeEvalGC (StableT tm) (k,st) = 
     assert ((not . st_expect) st) $
     let (x,sf) = s_sample (st_signal st) tm in
-    let bDone = isDone (st_stable st) &&
+    let bDone = isDoneT (st_stable st) &&
                 isNothing x && s_is_final sf tm
     in
     let st' = st { st_signal = sf } in
     if bDone then Nothing 
              else st' `seq` Just (k, st')
-
-isDone :: StableT -> Bool
-isDone DoneT = True
-isDone _ = False
 
 
