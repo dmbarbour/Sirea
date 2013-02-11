@@ -45,7 +45,7 @@ instance HasTimeTrigger (BCX w) where
 
 timeTriggerB :: B (S p T) (S p Bool)
 timeTriggerB = unsafeLinkB mkLn where
-    mkLn = return . (ln_lumap . ln_sumap . su_fmap) s_timeTrigger
+    mkLn = return . (ln_lumap . ln_sfmap) s_timeTrigger
 
 -- time trigger 0 assumes there is no pending trigger
 dsTimeTrigger0 :: DSeq (Maybe T) -> DSeq (Maybe Bool)

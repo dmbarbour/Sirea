@@ -24,11 +24,12 @@ module Sirea.AgentResource
 import Control.Applicative
 import Control.Monad (unless, when)
 import Control.Exception (assert)
+import Control.Monad.Fix (mfix)
 
 import Data.IORef
 import Data.Typeable
-import Data.Function (fix) 
 import Data.Maybe
+import Data.Function (fix)
 
 import Sirea.Signal
 import Sirea.Behavior
@@ -60,7 +61,9 @@ class (Partition p, Typeable duty) => AgentBehavior p duty where
     -- The `duty` parameter is undefined, used only for type. 
     agentBehaviorSpec :: duty -> BCX w (S p ()) (S p ())
 
--- AgentResource ensures single instance for invokeAgent.
+-- AgentResource ensures single instance for invokeAgent. A record
+-- of the signal is maintained here in order to ensure an old agent
+-- is kept in memory until it is no longer necessary.
 --
 --  NOTE: AgentResource is modeled as a global resource, since the
 --  agentBehavior may cross into multiple partitions. However, the
@@ -73,44 +76,41 @@ data AR p duty = AR
     } deriving (Typeable)
 
 data ARD = ARD 
-    { ard_signal     :: !(SigSt ())         -- current demand signal
+    { ard_signal     :: !(Sig ())           -- record of signal
     , ard_link       :: !(Maybe (LnkUp ())) -- current instance
     , ard_flush      :: !Bool               -- GC flush desired?
     , ard_flushSched :: !Bool               -- GC flush scheduled?
     } 
 
 ardZero :: ARD
-ardZero = ARD st_zero Nothing False False
+ardZero = ARD s_never Nothing False False
 
 instance (AgentBehavior p duty) => Resource w (AR p duty) where
     locateResource _ = newAR
 
 newAR :: (AgentBehavior p duty) => PCX w -> IO (AR p duty)
-newAR cw = fix $ \ mkar ->
-    getPCX mkar cw >>= \ cp ->
+newAR cw = mfix $ \ ar -> -- fix cyclic dependencies
+    getPCX ar cw >>= \ cp ->
     getPSched cp >>= \ pd ->
     newIORef ardZero >>= \ rf ->
-    let b = unwrapBCX (getABS mkar) cw in -- behavior
+    let b = unwrapBCX (getABS ar) cw in -- behavior
     let make = ln_lnkup <$> snd (compileB b (LnkDUnit ldt_zero) LnkDead) in 
-    let touch = touchAR make rf in
-    let update = updateAR pd rf in
-    let idle = idleAR pd rf in
+    let touch = touchAR ar in
+    let update = updateAR ar in
+    let idle = idleAR ar in
     let lnAgent = LnkUp touch update idle in
     wrapEqFilter dtEqf (==) lnAgent >>= \ lu ->
     newDemandAggr cp lu sigActive >>= \ da ->
-    let ar = AR { ar_daggr = da, ar_data = rf
-                , ar_make = make, ar_psched = pd }
-    in
-    ar `seq` return ar
+    return (AR da make rf pd)
     
 -- functions getABS, getDuty, getPCX mostly for type wrangling
-getABS :: (AgentBehavior p duty) => IO (AR p duty) -> BCX w (S p ()) (S p ())
+getABS :: (AgentBehavior p duty) => AR p duty -> BCX w (S p ()) (S p ())
 getABS = agentBehaviorSpec . getDuty
 
-getDuty :: (AgentBehavior p duty) => IO (AR p duty) -> duty
+getDuty :: AR p duty -> duty
 getDuty _ = undefined
 
-getPCX :: (AgentBehavior p duty) => IO (AR p duty) -> PCX w -> IO (PCX p) 
+getPCX :: (Partition p) => AR p duty -> PCX w -> IO (PCX p) 
 getPCX _ = findInPCX
     
 -- simple merge of activity signals
@@ -120,98 +120,85 @@ sigActive (s:ss) = foldl (<|>) s ss
 
 -- Touch on AgentResource will forward touch to the agent.
 -- It also instantiates the agent, if needed.
-touchAR :: IO (LnkUp ()) -> IORef ARD -> IO ()
-touchAR make rf = 
-    readIORef rf >>= \ ard ->
-    let st = ard_signal ard in
-    unless (st_expect st) $
-        let st' = st_poke st in
-        maybe make return (ard_link ard) >>= \ lu ->
-        let bTouchedForFlush = touchedByFlushARD ard in
-        let ard' = ard { ard_signal = st'
-                       , ard_link = Just lu
-                       , ard_flush = False } 
-        in
-        writeIORef rf ard' >> -- record agent and touched signal
-        unless bTouchedForFlush (ln_touch lu) -- forward touch to agent
+touchAR :: AR p duty -> IO ()
+touchAR ar =
+    readIORef (ar_data ar) >>= \ ard ->
+    maybe (ar_make ar) return (ard_link ard) >>= \ lu ->
+    let bTouchedAlready = touchedForFlush ard in
+    let ard' = ard { ard_link = Just lu, ard_flush = False } in
+    writeIORef (ar_data ar) ard' >>
+    unless bTouchedAlready (ln_touch lu)
 
-idleAR :: PSched -> IORef ARD -> StableT -> IO ()
-idleAR pd rf tS = 
-    readIORef rf >>= \ ard ->
-    assert ((st_expect . ard_signal) ard) $
-    
+-- Touch can also occur for flush. This is detectable by a state
+-- where the agent resource has flush active but not scheduled.
+touchedForFlush :: ARD -> Bool
+touchedForFlush ard = ard_flush ard && (not . ard_flushSched) ard
 
-deliverUpdateARD :: ARD -> StableT -> IO ()
-deliverUpdateARD ard = 
+getDaggrStability :: PSched -> StableT -> IO T
+getDaggrStability _ (StableT tm) = pure tm
+getDaggrStability pd DoneT = (`subtractTime` dtDaggrHist) <$> p_stepTime pd
+
+idleAR :: AR p duty -> StableT -> IO ()
+idleAR ar tS = 
+    readIORef (ar_data ar) >>= \ ard ->
     assert ((not . isNothing . ard_link) ard) $
-    maybe ignore ln_update (ard_link ard)
-    where ignore _ = return ()
-  
--- handle update of collective demand for the agent, and possibly
--- schedule a flush to ensure the agent is cleared. This operation
--- will not actually clear the agent.
-updateAR :: PSched -> IORef ARD -> StableT -> T -> Sig () -> IO ()
-updateAR pd rf tS tU su = 
-    readIORef rf >>= \ ard ->
-    assert ((st_expect . ard_signal) ard) $ -- we have a signal
-    maybe getTStable pure (su_stable su) >>= \ tStable ->    
-    let st' = st_clear tStable (st_sigup su (ard_signal ard)) in
-    let bNeedFlush = isNothing (su_stable su) in
-    let bFlushSched = ard_flushSched ard || bNeedFlush in
-    let bSchedFlush = (not . ard_flushSched) ard && bNeedFlush in
-    let ard' = ard { ard_signal = st', ard_flush = bNeedFlush   
-                   , ard_flushSched = bFlushSched } 
-    in
-    ard' `seq` writeIORef rf ard' >>
-    when bSchedFlush (p_eventually pd (flushAR pd rf)) >>
-    let su' = su { su_stable = Just tStable } in 
-    deliverUpdateARD ard' su'
-    where getTStable = (`subtractTime` dtDaggrHist) <$> pd_time pd
+    let lu = fromMaybe ln_zero (ard_link ard) in
+    getDaggrStability (ar_psched ar) tS >>= \ tCut ->
+    let s' = s_trim (ard_signal ard) tCut in
+    let ard' = ard { ard_signal = s' } in
+    ard' `seq` writeIORef (ar_data ar) ard' >>
+    ln_idle lu (StableT tCut) >>
+    when (isDoneT tS) (initFlushAR ar)    
+     
+updateAR :: AR p duty -> StableT -> T -> Sig () -> IO ()
+updateAR ar tS tU su =
+    readIORef (ar_data ar) >>= \ ard ->
+    assert ((not . isNothing . ard_link) ard) $
+    let lu = fromMaybe ln_zero (ard_link ard) in
+    getDaggrStability (ar_psched ar) tS >>= \ tCut ->
+    let s1 = s_switch (ard_signal ard) tU su in
+    let s' = s_trim s1 tCut in
+    let ard' = ard { ard_signal = s' } in
+    ard' `seq` writeIORef (ar_data ar) ard' >>
+    ln_update lu (StableT tCut) tU su >>
+    when (isDoneT tS) (initFlushAR ar)
 
--- flush is invoked when it seems we won't be receiving updates from
--- the demand aggregator, enabling the agent to be removed when it
--- is no longer necessary. Flush may be disabled if an update occurs
--- on the same round. 
---
--- Flush will automatically repeat as necessary (on heartbeat).
-flushAR :: PartD -> IORef ARD -> IO ()
-flushAR pd rf = initFlush where
-    initFlush =
-        readIORef rf >>= \ ard ->
-        assert (ard_flushSched ard) $
+initFlushAR :: AR p duty -> IO ()
+initFlushAR ar =
+    readIORef (ar_data ar) >>= \ ard ->
+    let bSchedFlush = not (ard_flushSched ard) in
+    let ard' = ard { ard_flush = True, ard_flushSched = True } in
+    ard' `seq` writeIORef (ar_data ar) ard' >>
+    when bSchedFlush (p_eventually (ar_psched ar) (flushAR ar))
+    
+flushAR :: AR p duty -> IO ()
+flushAR ar = beginFlush where
+    beginFlush =
+        readIORef (ar_data ar) >>= \ ard ->
+        assert (ard_flushSched ard) $ 
         let ard' = ard { ard_flushSched = False } in
-        writeIORef rf ard' >>
-        let bFlush = ard_flush ard' in
-        when bFlush $
-            assert (touchedByFlushARD ard') $
-            pd_phaseDelay pd finiFlush >>
-            maybe (return ()) (ln_touch) (ard_link ard')
-    finiFlush =
-        readIORef rf >>= \ ard ->
-        when (ard_flush ard) $
-            assert ((isNothing . st_stable . ard_signal) ard) $
-            pd_time pd >>= \ tNow ->
-            let tStable = tNow `subtractTime` dtDaggrHist in
-            let st' = st_clear tStable (ard_signal ard) in
-            let bDone = s_term (st_signal st') tStable in
-            let bNeedFlush = isNothing (st_stable st') && not bDone in
-            let deliverUpdate = deliverUpdateARD ard in
-            let ard' = if bDone then ardZero else 
-                       ard { ard_signal = st', ard_flush = bNeedFlush
-                           , ard_flushSched = bNeedFlush }
+        writeIORef (ar_data ar) ard' >>= \ _ ->
+        when (ard_flush ard') $
+            assert (touchedForFlush ard') $
+            let lu = fromMaybe ln_zero (ard_link ard') in
+            p_onUpdPhase (ar_psched ar) deliverFlush >>
+            ln_touch lu
+    deliverFlush =
+        readIORef (ar_data ar) >>= \ ard ->
+        when (touchedForFlush ard) $ -- blocked by touch or initFlushAR
+            assert (ard_flush ard) $
+            p_stepTime (ar_psched ar) >>= \ tNow ->
+            let tCut = tNow `subtractTime` dtDaggrHist in
+            let s' = s_trim (ard_signal ard) tCut in
+            let lu = fromMaybe ln_zero (ard_link ard) in
+            let bDone = s_term s' tCut in
+            let ard' = if bDone then ardZero else
+                       ard { ard_signal = s', ard_flushSched = True } 
             in
-            let suStable = if bDone then Nothing else Just tStable in
-            let su = SigUp { su_state = Nothing, su_stable = suStable } in
-            ard' `seq` writeIORef rf ard' >>
-            when bNeedFlush (pd_eventually pd (flushAR pd rf)) >>
-            deliverUpdate su 
-
--- An AgentResource can be touched by flush or touched for update.
--- But we only want to touch once. If we touch for flush first, we
--- can tell because flush will be active but flushSched will be
--- inactive. 
-touchedByFlushARD :: ARD -> Bool
-touchedByFlushARD ard = ard_flush ard && (not . ard_flushSched) ard
+            let tS = if bDone then DoneT else StableT tCut in
+            ard' `seq` writeIORef (ar_data ar) ardZero >>
+            unless bDone (p_eventually (ar_psched ar) (flushAR ar)) >>
+            ln_idle lu tS
 
 -- | `invokeAgent` will install a unique instance of agent behavior
 -- (one for each unique partition-duty pair). This behavior is built
@@ -224,14 +211,15 @@ touchedByFlushARD ard = ard_flush ard && (not . ard_flushSched) ard
 -- safe use of non-idempotent adapters (e.g. UnsafeOnUpdate). 
 --
 invokeAgent :: (AgentBehavior p duty) => duty -> BCX w (S p ()) (S p ())
-invokeAgent duty = fix $ \ b -> wrapBCX $ \ cw ->
-    getAR duty b cw >>= \ ar ->
-    invokeDutyAR ar
+invokeAgent duty = fix $ \ b -> wrapBCX $ \ cw -> 
+    invokeDutyAR (getAR duty b cw)
 
-invokeDutyAR :: AR p duty -> B (S p ()) (S p ())
-invokeDutyAR ar = bvoid (unsafeLinkB lnInvoke) where
+invokeDutyAR :: IO (AR p duty) -> B (S p ()) (S p ())
+invokeDutyAR findAR = bvoid (unsafeLinkB lnInvoke) where
     lnInvoke ln = assert (ln_dead ln) $ 
-        LnkSig <$> newDemandLnk (ar_daggr ar)
+        findAR >>= \ ar ->
+        newDemandLnk (ar_daggr ar) >>= \ lu ->
+        return (LnkSig lu)
 
 getAR :: (AgentBehavior p duty) 
       => duty -> BCX w (S p ()) (S p ()) 

@@ -50,8 +50,7 @@ import Sirea.Time
 import Sirea.Link
 import Sirea.Partition
 import Sirea.PCX
-import Sirea.Internal.Tuning (dtDaggrHist, dtMdistHist
-                             ,dtFutureChoke)
+import Sirea.Internal.Tuning (dtDaggrHist, dtMdistHist, dtFutureChoke)
 import Sirea.Internal.LTypes -- for convenient SigSt, et. al.
 
 --import Debug.Trace (traceIO)
@@ -340,22 +339,17 @@ primaryMonitorLnk md = LnkUp touch update idle where
             -- touch each observer link (where needed).
             let lst = filter (not . st_expect . mln_signal) (M.elems (mdd_table mdd')) in
             mapM_ (ln_touch . mln_link) lst
-    idle tS = 
-        readIORef (md_data md) >>= \ mdd ->
-        let st = mdd_signal mdd in
-        assert (st_expect st) $
-        let st' = st_idle tS st in
-        let mdd' = mdd { mdd_signal = st' } in
-        processUpdates mdd'
-    update tS tU su =
-        readIORef (md_data md) >>= \ mdd ->
-        let st = mdd_signal mdd in
-        assert (st_expect st) $
-        let st' = st_update tS tU su st in
+    idle tS = processUpdates $ \ mdd ->
+        let st' = st_idle tS (mdd_signal mdd) in
+        mdd { mdd_signal = st' } 
+    update tS tU su = processUpdates $ \ mdd ->
+        let st' = st_update tS tU su (mdd_signal mdd) in
         let tmup' = Just $! maybe tU (min tU) (mdd_tmup mdd) in
-        let mdd' = mdd { mdd_signal = st', mdd_tmup = tmup' } in
-        processUpdates mdd'
-    processUpdates mdd' =
+        mdd { mdd_signal = st', mdd_tmup = tmup' } 
+    processUpdates fnUpMDD =
+        readIORef (md_data md) >>= \ mdd ->
+        assert ((st_expect . mdd_signal) mdd) $
+        let mdd' = fnUpMDD mdd in
         assert (mdd_cleanup mdd') $
         mdd' `seq` writeIORef (md_data md) mdd' >>
         let lObservers = filter (not . st_expect . mln_signal)

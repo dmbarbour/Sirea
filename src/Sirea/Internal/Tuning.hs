@@ -31,7 +31,7 @@ dtGrace     = dtHeartbeat -- time allotted for graceful start and stop
 -- block updates that apply too far in the future.
 dtInsigStabilityUp, dtFutureChoke :: DT
 dtInsigStabilityUp = dtHeartbeat - 0.001 -- largest insignificant pure-stability update
-dtFutureChoke      = 30 * dtHeartbeat    -- slow down updates if far beyond stability
+dtFutureChoke      = 15 * dtHeartbeat    -- slow down updates if far beyond stability
 
 -- There are several cases where we'll want to evaluate signals into
 -- their near future. For `bseq` we simply want to flatten signals 
@@ -39,8 +39,8 @@ dtFutureChoke      = 30 * dtHeartbeat    -- slow down updates if far beyond stab
 -- first difference between two signals so we can tweak update times
 -- accordingly and avoid rework downstream.
 dtEqf, dtSeq :: DT
-dtEqf   = 40 * dtHeartbeat  -- when seeking first difference in a signal
-dtSeq   = dtEqf / 10 -- when simply evaluating a signal ahead
+dtEqf   = dtRestart   -- when seeking first difference in a signal
+dtSeq   = dtHeartbeat -- when simply evaluating a signal ahead
 
 -- For dynamic behaviors, it's best to install behaviors a little 
 -- before they're necessary. Doing so can improve system latency and
@@ -86,7 +86,7 @@ dtMdistHist = dtHeartbeat -- how long to tolerate late-arriving observers
 -- for a few seconds before finalizing. In those cases, dtFinalize
 -- is used to ensure any remaining values are processed.
 dtFinalize :: DT
-dtFinalize = 1000 * dtHeartbeat -- guarantee completion in all but absurd cases
+dtFinalize = dtRestart
 
 
 -- For console printing, currently I use a simple expiration model
@@ -95,14 +95,12 @@ dtFinalize = 1000 * dtHeartbeat -- guarantee completion in all but absurd cases
 -- roughly models a tuple space with expirations.)
 --  (note: this won't be used in near future)
 dtPrintExpire :: DT
-dtPrintExpire = 100 * dtHeartbeat 
+dtPrintExpire = dtRestart
 
 -- In some cases, I want to initialize structures with a lower bound
 -- for Time. But I don't want to pay code and performance overheads 
 -- for a symbolic representation of this lower bound. So I'll just
 -- use tAncient to represent a long before-time.
---
--- I'll model the ancient sentinel time as a billion days ago. 
 tAncient :: T
 tAncient = mkTime (negate aBillionDays) 0 where
     aBillionDays = 1000 * 1000 * 1000

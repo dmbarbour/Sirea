@@ -572,9 +572,9 @@ class (Category b) => BTemporal b where
     -- The bfchoke behavior will help regulate update cycles, cause
     -- them to backoff once they've run too far ahead of stability.
     -- The cost is a potential loss of snapshot consistency for a
-    -- behavior's distant future values. bfchoke is an annotation or
-    -- suggestion; it has the same semantic meaning as bfwd. But it
-    -- is essential in cases of temporal recursion.
+    -- behavior's distant future values. bfchoke is a performance
+    -- annotation but is essential for cyclic applications. Sirea
+    -- does not include any automatic chokes at this time.
     bfchoke :: b x x
 
 

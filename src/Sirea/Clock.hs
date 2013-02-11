@@ -95,21 +95,13 @@ clockB cs =
           buildFn (LnkSig lu) = LnkSig (clockFn cs lu)
 
 clockFn :: ClockSpec -> LnkUp T -> LnkUp ()
-clockFn cs lu = LnkUp { ln_touch = touch, ln_update = update }
-    where touch = ln_touch lu
-          update su =
-            let tStable = su_stable su in
-            case su_state su of
-                Nothing ->
-                    let su' = SigUp { su_state = Nothing
-                                    , su_stable = tStable } 
-                    in ln_update lu su'
-                Just (s, tUpd) ->
-                    let sClock = clockSig cs tUpd in
-                    let s' = s_mask sClock s in
-                    let su' = SigUp { su_state = Just (s',tUpd)
-                                    , su_stable = tStable }
-                    in ln_update lu su'
+clockFn cs lu = LnkUp touch update idle where
+    touch = ln_touch lu
+    idle tS = ln_idle lu tS
+    update tS tU su =
+        let sClock = clockSig cs tU in
+        let su' = s_mask sClock su in
+        ln_update lu tS tU su' 
 
 -- An observation of a clock signal starting near a given instant.
 -- Note that the clock signal does not depend on the time we begin

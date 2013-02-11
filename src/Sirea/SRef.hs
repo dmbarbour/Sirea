@@ -13,13 +13,11 @@ module Sirea.SRef
     , SRefI, getSRefI, readSRef, addSRefEvent, bsignalSRef
     ) where
 
-import Data.Maybe
 import Data.IORef
 import Data.Typeable
 import Data.Function (fix)
 import Control.Applicative
 import Control.Exception (assert)
-import Control.Monad (when)
 
 import Sirea.Signal
 import Sirea.Behavior
@@ -34,7 +32,7 @@ import Sirea.Internal.Tuning (dtDaggrHist)
 import Sirea.Internal.DemandMonitorData
 
 -- | for partition-to-many communication references
-newtype SRefO z = SRefO (MonitorDist (Maybe z), DT -> Sig z -> IO())
+data SRefO z = SRefO !(MonitorDist (Maybe z)) !(T -> Sig z -> IO())
     deriving (Typeable)
 
 instance (Partition p, Typeable z) => Resource p (SRefO z) where 
@@ -42,70 +40,64 @@ instance (Partition p, Typeable z) => Resource p (SRefO z) where
 
 newSRefO :: (Partition p) => PCX p -> IO (SRefO z)
 newSRefO cp = 
+    getPSched cp >>= \ pd ->
     newMonitorDist cp (s_always Nothing) >>= \ md ->
-    mkStepDelay cp (primaryMonitorLnk md) >>= \ lu ->
-    let getT = getStepTime cp in
-    let write dtReq sz =
-            let dtAct = max (negate dtDaggrHist) dtReq in
-            getT >>= \ tNow ->
-            let tu = tNow `addTime` dtAct in
-            let smz = s_full_map Just (s_trim sz tu) in
-            let su = SigUp { su_stable = Nothing 
-                           , su_state = Just (smz,tu) } 
-            in
-            ln_update lu su
-    in
-    return (SRefO (md,write))
+    newIORef Nothing >>= \ rf ->
+    let lu = primaryMonitorLnk md in
+    return (newSRefO' pd md rf lu)
 
--- create a LnkUp that delays processing to the next step.
-mkStepDelay :: (Partition p) => PCX p -> LnkUp z -> IO (LnkUp z)
-mkStepDelay cp lz = lnStepDelay <$> newIORef Nothing where
-    lnStepDelay rf = LnkUp { ln_touch = return (), ln_update = update rf }
-    update rf = later . receive rf -- delays processing of SigUp until next step
-    later = onNextStep cp
-    receive rf su = 
-        readIORef rf >>= \ mbsu ->
-        case mbsu of 
+newSRefO' :: PSched -> MonitorDist (Maybe z) 
+          -> IORef (Maybe (T,Sig z)) -> LnkUp (Maybe z)
+          -> SRefO z
+newSRefO' pd md rf lu = SRefO md write where
+    write tU su = -- protect stability for low tU values.
+        p_stepTime pd >>= \ tNow ->
+        let tU' = max tU (tNow `subtractTime` dtDaggrHist) in
+        write' tU' su
+    write' tU su = -- record the update; activate for next step
+        readIORef rf >>= \ mbup ->
+        case mbup of
             Nothing ->
-                writeIORef rf (Just su) >>
-                nextPhase (deliver rf) >>
-                ln_touch lz
-            Just su0 -> -- combine multiple upates (last one wins)
-                let su' = su_piggyback su0 su in
-                writeIORef rf (Just su')
-    nextPhase = phaseDelay cp
-    deliver rf =
-        readIORef rf >>= \ mbsu ->
-        assert ((not . isNothing) mbsu) $
+                writeIORef rf (Just (tU,su)) >>
+                p_onNextStep pd activate
+            Just (tU0,su0) ->
+                if (tU0 >= tU) 
+                    then writeIORef rf (Just (tU,su)) 
+                    else writeIORef rf (Just (tU0, s_switch su0 tU su))
+    activate =
+        readIORef rf >>= \ mbup ->
         writeIORef rf Nothing >>
-        maybe (return ()) (ln_update lz) mbsu
+        case mbup of
+            Nothing -> return ()
+            Just (tU,su) -> 
+                let smz = s_full_map Just su in
+                let action = ln_update lu DoneT tU smz in
+                p_onUpdPhase pd action >>
+                ln_touch lu
+
 
 -- | for many-to-partition communication references
-newtype SRefI z = SRefI (DemandAggr z [z], IORef (SigUp [z] -> IO ())) deriving (Typeable)
+data SRefI z = SRefI !(DemandAggr z [z]) !(IORef (T -> Sig [z] -> IO ()))
+    deriving (Typeable)
 
 instance (Partition p, Typeable z) => Resource p (SRefI z) where
     locateResource _ cp = newSRefI cp
 
 newSRefI :: (Partition p) => PCX p -> IO (SRefI z)
-newSRefI cp =
-    newIORef dropUpdates >>= \ rf ->
-    let reportUpdate su =
-            readIORef rf >>= \ onUpdate ->
-            writeIORef rf dropUpdates >>
-            onUpdate su
-    in
-    let later = atEndOfStep cp in
-    let update su =
-            let bDoNotify = (not . isNothing . su_state) su in
-            when bDoNotify (later $ reportUpdate su)
-    in
-    let lu = LnkUp { ln_touch = return (), ln_update = update } in
-    newDemandAggr cp lu sigListZip >>= \ da ->
-    return (SRefI (da,rf))            
+newSRefI cp = 
+    newIORef ((const . const . return) ()) >>= \ rf ->
+    getPSched cp >>= \ pd ->
+    newDemandAggr cp (lnkSRefI pd rf) sigListZip >>= \ da ->
+    return (SRefI da rf) 
 
-dropUpdates :: SigUp [z] -> IO ()
-dropUpdates = const (return ())
-
+lnkSRefI :: PSched -> IORef (T -> Sig zs -> IO ()) -> LnkUp zs
+lnkSRefI pd rf = LnkUp touch update idle where
+    touch = return ()
+    idle _ = return ()
+    update _ tU su = p_onStepEnd pd $
+        readIORef rf >>= \ eventHandler ->
+        eventHandler tU su
+    
 sigListZip :: [Sig a] -> Sig [a]
 sigListZip = foldr (s_full_zip jf) (s_always [])
   where jf (Just x) (Just xs) = Just (x:xs)
@@ -119,24 +111,22 @@ sigListZip = foldr (s_full_zip jf) (s_always [])
 -- identified by type and a string name. Developers should usually
 -- wrap getSRef operations to avoid mistakes with names and types.
 -- An SRef should only be used from the corresponding partition.
-getSRefI :: (Partition p, Typeable z) => PCX p -> String -> SRefI z
+getSRefI :: (Partition p, Typeable z) => PCX p -> String -> IO (SRefI z)
 getSRefI = flip findByNameInPCX
 
 -- | Obtain an output SRef within a partition. An SRef is uniquely
 -- identified by type and a string name. Developers should usually
 -- wrap getSRef operations to avoid mistakes with names and types.
 -- An SRef should only be used from the corresponding partition.
-getSRefO :: (Partition p, Typeable z) => PCX p -> String -> SRefO z
+getSRefO :: (Partition p, Typeable z) => PCX p -> String -> IO (SRefO z)
 getSRefO = flip findByNameInPCX
 
--- | Write to an output SRef. The DT offset enables writing to the
--- future (positive value) or very recent past. Writing the future
--- reduces rework, but also introduces latency for reactions. There
--- is a limit how far back the past can be written (~50ms) and reach
--- beyond it will be silently truncated, but writing a little of the
--- past can be useful for retroactive correction and consistency.
-writeSRef :: SRefO z -> DT -> Sig z -> IO ()
-writeSRef (SRefO (_,write)) = write 
+-- | Write to an output SRef. Developers must specify at which time
+-- their updates begin to apply, but this may be silently truncated
+-- for deep retroactive updates (more than ~50ms). To reduce rework, 
+-- it's preferable to update the future.
+writeSRef :: SRefO z -> T -> Sig z -> IO ()
+writeSRef (SRefO _ write) = write 
 
 -- | Read the current input signal for an input SRef. This enables
 -- polling of the current value, including access to the recent
@@ -147,7 +137,7 @@ writeSRef (SRefO (_,write)) = write
 -- NOTE: Developers must treat the list as a set, i.e. not depending
 -- on order or duplicates. A list is used to avoid Ord constraints.
 readSRef :: SRefI z -> IO (Sig [z])
-readSRef (SRefI (da,_)) = pollDemandAggr da
+readSRef (SRefI da _) = pollDemandAggr da
 
 -- | Add a callback to hear the next signal update to an input SRef.
 -- The callbacks run at the end of the next runStepper step in which
@@ -158,8 +148,8 @@ readSRef (SRefI (da,_)) = pollDemandAggr da
 --
 -- NOTE: Developers must treat the list as a set, i.e. not depending
 -- on order or duplicates. A list is used to avoid Ord constraints.
-addSRefEvent :: SRefI z -> (SigUp [z] -> IO ()) -> IO ()
-addSRefEvent (SRefI (_,rf)) ev = modifyIORef rf addEv where
+addSRefEvent :: SRefI z -> (T -> Sig [z] -> IO ()) -> IO ()
+addSRefEvent (SRefI _ rf) ev = modifyIORef rf addEv where
     addEv oldOps su = (oldOps su) >> ev su
 
 -----------------------------------------
@@ -171,27 +161,35 @@ addSRefEvent (SRefI (_,rf)) ev = modifyIORef rf addEv where
 -- will report an active Nothing signal.
 bwatchSRef :: (Partition p, Typeable z) => String -> BCX w (S p ()) (S p (Maybe z))
 bwatchSRef nm = fix $ \ b -> wrapBCX $ \ cw ->
-    let cp = getPCX b cw in    
-    let SRefO (md,_) = getSRefO cp nm in
-    monitorFacetB md
+    let getMD = getPCX b cw >>= \ cp -> 
+                getSRefO cp nm >>= \ (SRefO md _) ->
+                return md
+    in
+    monitorFacetB getMD
 
 -- | Send a signal to an input SRef to be observed in partition.
 -- Mutiple signals may be sent and processed concurrently.
 bsignalSRef :: (Partition p, Typeable z) => String -> BCX w (S p z) (S p ())
 bsignalSRef nm = fix $ \ b -> wrapBCX $ \ cw ->
-    let cp = getPCX b cw in
-    let SRefI (da,_) = getSRefI cp nm in
-    demandFacetB da
+    let getDA = getPCX b cw >>= \ cp -> 
+                getSRefI cp nm >>= \ (SRefI da _) -> 
+                return da 
+    in
+    demandFacetB getDA 
 
-getPCX :: (Partition p) => BCX w (S p a) z -> PCX w -> PCX p
+getPCX :: (Partition p) => BCX w (S p a) z -> PCX w -> IO (PCX p)
 getPCX _ = findInPCX
 
-monitorFacetB :: MonitorDist z -> B (S p ()) (S p z)
-monitorFacetB md = unsafeLinkB lnMon
+monitorFacetB :: IO (MonitorDist z) -> B (S p ()) (S p z)
+monitorFacetB getMD = unsafeLinkB lnMon
     where lnMon LnkDead = return LnkDead -- dead code elim.
-          lnMon (LnkSig lu) = LnkSig <$> newMonitorLnk md lu
+          lnMon (LnkSig lu) = 
+            getMD >>= \ md ->
+            LnkSig <$> newMonitorLnk md lu
 
-demandFacetB :: DemandAggr e z -> B (S p e) (S p ())
-demandFacetB da = bvoid (unsafeLinkB lnDem) >>> bconst ()
-    where lnDem ln = assert (ln_dead ln) $ LnkSig <$> newDemandLnk da
+demandFacetB :: IO (DemandAggr e z) -> B (S p e) (S p ())
+demandFacetB getDA = bvoid (unsafeLinkB lnDem) >>> bconst ()
+    where lnDem ln = assert (ln_dead ln) $
+            getDA >>= \ da -> 
+            LnkSig <$> newDemandLnk da
 

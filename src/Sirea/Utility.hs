@@ -28,6 +28,11 @@ import Control.Monad (when, liftM)
      primitive input models go.
  -}
 
+-- TODO: a TimeStamp state behavior:
+--    String -> B (S p ()) (S p T)
+--   Returns a timestamp for the start of a period of contiguous activity.
+--   Inherently volatile. No need for persistence.
+
 
 -- | Print allows developer to provide show function (a -> String)
 -- and preserves the type of the input. This makes it easier to
@@ -65,19 +70,6 @@ newtype PrintBuffer = PrintBuffer { pb_list  :: IORef [(T,String)] } deriving (T
 instance Resource P0 PrintBuffer where
     locateResource _ _ = liftM PrintBuffer $ newIORef [] 
            
-
-{- IDEA: a volatile, stateful `timestamp` behavior
-          i.e. String -> BCX w (S p ()) (S p T)
-
-   State is the time value when initially activated.
-   Holds that state until deactivated.
-   Basically reports time of contiguous activation.
-   Since naturally volatile, no persistence needed.
-   Could be useful for integrating tuple spaces, etc.
--}
-
-
-
 
 -- | BUndefined - exploratory programming often involves incomplete
 -- behaviors. `bundefined` serves a similar role to `undefined` in
