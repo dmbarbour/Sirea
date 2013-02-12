@@ -286,11 +286,13 @@ st_zero = SigSt s_never (StableT tAncient) False
 st_poke :: SigSt a -> SigSt a
 st_poke st = st { st_expect = True }
 
--- clear history based on stability
+-- clear history based on stability.
+-- asserts that we don't clear beyond stability.
 st_clear :: StableT -> SigSt a -> SigSt a 
-st_clear DoneT _ = SigSt s_never DoneT False 
-st_clear tS@(StableT tCut) st = SigSt sf tS False
-    where sf = s_trim (st_signal st) tCut
+st_clear tsClr st =
+    assert (st_stable st >= tsClr) $
+    let s' = maybeStableT s_never (s_trim (st_signal st)) tsClr in
+    st { st_signal = s' }
 
 st_update :: StableT -> T -> Sig a -> SigSt a -> SigSt a
 st_update tS tU su st =
