@@ -43,10 +43,8 @@ module Sirea.PCX
 import Data.Typeable
 import Data.Dynamic
 import Control.Concurrent.MVar
-import qualified Data.Map as M
+import qualified Data.Map.Strict as M
 import Control.Monad.Fix (mfix)
-
--- TODO: consider changing toplevel `PCX w` to `PCX W`
 
 -- | PCX p - Partition Resource Context. Abstract.
 --
@@ -62,19 +60,20 @@ import Control.Monad.Fix (mfix)
 -- memory overheads. If more dynamism is required, it is necessary
 -- to create resource types that handle the dynamism internally.
 --
--- A PCX is MT-safe and will serialize all lookup operations. Lookup
+-- A PCX is MT-safe and reentrant, but does not support cyclic
+-- dependencies (i.e. reentrant lookups must be acyclic). Lookup
 -- should be considered moderately expensive, so the result should
--- be remembered if the resource will be needed often. Since PCX is
--- idempotent and lookups are commutative, it is safe to use PCX via
--- unsafePerformIO (or even unsafeDupablePerformIO). But this will
--- not be the default.
+-- be remembered if the resource will be needed often. Lookups are
+-- idempotent and resources are insensitive to time (or supposed to
+-- be) so PCX should be safe for use with unsafePerformIO if ever
+-- there is a need for it. (PCX is usually in an IO context anyway.)
 --
 data PCX p = PCX 
     { pcx_path :: !(RPath)
     , pcx_store :: !(MVar Store)
     } deriving(Typeable)
 
-type Store = M.Map (TypeRep,String) Dynamic
+type Store = M.Map (TypeRep,String) (MVar Dynamic)
 
 -- | The PCX Path is a path of types and strings, ordered from leaf
 -- to root. Every resource has a unique path (from newPCX) that is
@@ -90,6 +89,7 @@ type RPath = [(TypeRep,String)]
 --   * no observable side-effects in the locator
 --   * no observable effects for mere existence of resource
 --   * not sensitive to thread in which construction occurs
+--   * not sensitive to time of construction
 --
 -- We shouldn't see anything unless we interact with resources with
 -- further IO operations. If we create a resource but don't ever use
@@ -103,6 +103,9 @@ type RPath = [(TypeRep,String)]
 -- Every resource has a unique path relative to a root PCX. The path
 -- supports persistence or generation of default states. This path
 -- will be stable across program executions.
+--
+-- NOTE: While resources may depend on other resources, dependencies
+-- must currently be acyclic (due to the implementation of PCX).
 --
 class (Typeable r) => Resource p r where
     locateResource :: RPath -> PCX p -> IO r
@@ -128,17 +131,28 @@ findInPCX = findByNameInPCX ""
 -- not to have observable side-effects until we interact with them.
 --
 findByNameInPCX :: (Resource p r) => String -> PCX p -> IO r
-findByNameInPCX nm pcx = mfix $ \ rForType ->
-    let k = (typeOf rForType, nm) in
-    modifyMVar (pcx_store pcx) $ \ tbl ->
-        let elt = fromDynamic =<< M.lookup k tbl in
-        case elt of
-            Just r -> return (tbl,r)
+findByNameInPCX nm cp = mfix $ \ rForTypeOnly ->
+    let k = (typeOf rForTypeOnly, nm) in
+    pcxGetMVK cp k >>= \ (mvk,bFirst) ->
+    if bFirst 
+       then locateResource (k:pcx_path cp) cp >>= \ r ->
+            putMVar mvk (toDyn r) >>
+            return r
+       else readMVar mvk >>= \ dynR ->
+            return $! (fromDyn dynR badR)
+    where badR = error "illegal PCX state"
+
+-- returns (MVar for element, First lookup (i.e. empty mvar))
+-- The MVar is only written to on the first lookup.
+pcxGetMVK :: PCX p -> (TypeRep,String) -> IO (MVar Dynamic, Bool)
+pcxGetMVK cp k = 
+    modifyMVar (pcx_store cp) $ \ tbl ->
+        case M.lookup k tbl of
+            Just mvk -> return (tbl,(mvk,False))
             Nothing ->
-                locateResource (k:pcx_path pcx) pcx >>= \ r ->
-                let tbl' = M.insert k (toDyn r) tbl in
-                r `seq` tbl' `seq`
-                return (tbl',r)
+                 newEmptyMVar >>= \ mvk ->
+                 let tbl' = M.insert k mvk tbl in
+                 return (tbl', tbl' `seq` (mvk,True))
 
 -- | newPCX - a `new` toplevel PCX
 newPCX :: String -> IO (PCX w)

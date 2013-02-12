@@ -42,7 +42,7 @@ main :: IO ()
 main = runSireaApp $ allTests
 
 tstCycle :: BCX w (S P0 ()) (S P0 ())
-tstCycle = snd dm >>> bdelay 1.0 >>> bfchoke 9.0 >>> bfmap addOne >>> bprint show >>> fst dm
+tstCycle = snd dm >>> bdelay 1.0 >>> bfchoke >>> bfmap addOne >>> bprint show >>> fst dm
      where dm = demandMonitor "tstCycle"
            addOne = succ . maximum . ((0::Int):)
 

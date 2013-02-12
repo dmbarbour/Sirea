@@ -50,7 +50,7 @@ newSRefO' :: PSched -> MonitorDist (Maybe z)
           -> IORef (Maybe (T,Sig z)) -> LnkUp (Maybe z)
           -> SRefO z
 newSRefO' pd md rf lu = SRefO md write where
-    write tU su = -- protect stability for low tU values.
+    write tU su = -- protect stability against low tU values.
         p_stepTime pd >>= \ tNow ->
         let tU' = max tU (tNow `subtractTime` dtDaggrHist) in
         write' tU' su
@@ -64,7 +64,7 @@ newSRefO' pd md rf lu = SRefO md write where
                 if (tU0 >= tU) 
                     then writeIORef rf (Just (tU,su)) 
                     else writeIORef rf (Just (tU0, s_switch su0 tU su))
-    activate =
+    activate = -- touch and update (SRef never idles)
         readIORef rf >>= \ mbup ->
         writeIORef rf Nothing >>
         case mbup of
@@ -125,6 +125,9 @@ getSRefO = flip findByNameInPCX
 -- their updates begin to apply, but this may be silently truncated
 -- for deep retroactive updates (more than ~50ms). To reduce rework, 
 -- it's preferable to update the future.
+--
+-- Note: while the input signal is inactive, active observers will
+-- see a 'Nothing' value. The input signal starts inactive.
 writeSRef :: SRefO z -> T -> Sig z -> IO ()
 writeSRef (SRefO _ write) = write 
 
@@ -134,23 +137,27 @@ writeSRef (SRefO _ write) = write
 -- model, and may lose information. Suggest use of addSRefEvent if
 -- you need reliable processing for the data.
 --
--- NOTE: Developers must treat the list as a set, i.e. not depending
--- on order or duplicates. A list is used to avoid Ord constraints.
+-- NOTE: the list of values [z] should be treated as a set, i.e. any
+-- duplicate values and ordering should not affect behavior of the
+-- application. (It is provided as a list to avoid Ord constraint.)
 readSRef :: SRefI z -> IO (Sig [z])
 readSRef (SRefI da _) = pollDemandAggr da
 
 -- | Add a callback to hear the next signal update to an input SRef.
 -- The callbacks run at the end of the next runStepper step in which
--- a signal state (su_state) update occurs. 
+-- a signal state update occurs. 
 --
 -- The SRefEvent is a one-time callback. Developers must explicitly
--- reset it if they want to hear the next update, etc.. 
+-- reset it when they want to hear the next update. Usually, it is
+-- best to reset upon receiving the event.
 --
--- NOTE: Developers must treat the list as a set, i.e. not depending
--- on order or duplicates. A list is used to avoid Ord constraints.
+-- NOTE: the list of values [z] should be treated as a set, i.e. any
+-- duplicate values and ordering should not affect behavior of the
+-- application. (It is provided as a list to avoid Ord constraint.)
 addSRefEvent :: SRefI z -> (T -> Sig [z] -> IO ()) -> IO ()
 addSRefEvent (SRefI _ rf) ev = modifyIORef rf addEv where
     addEv oldOps su = (oldOps su) >> ev su
+
 
 -----------------------------------------
 ---- SRef access and update from RDP ----

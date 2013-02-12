@@ -50,10 +50,11 @@ import Sirea.Time
 import Sirea.Link
 import Sirea.Partition
 import Sirea.PCX
-import Sirea.Internal.Tuning (dtDaggrHist, dtMdistHist, dtFutureChoke)
+import Sirea.Internal.Tuning (dtDaggrHist, dtMdistHist)
 import Sirea.Internal.LTypes -- for convenient SigSt, et. al.
 
 --import Debug.Trace (traceIO)
+--showK = ("U#" ++) . show . hashUnique
 
 -- TODO: Fix the future-choke mechanisms for DemandAggr so that I
 -- don't really need choking elsewhere to control cycles.
@@ -129,6 +130,7 @@ touchDaggr da k =
         let tc' = succ (dd_touchCt dd) in
         let dd' = dd { dd_touchCt = tc', dd_table = tbl' } in
         writeIORef (da_data da) dd' >>
+        -- traceIO ("touchDaggr " ++ showK k ++ ". tc = " ++ show tc') >>
         when (1 == tc') (firstTouchDaggr da)
 
 -- called on first touch on a DemandAggr. Currently a NOP.
@@ -146,6 +148,7 @@ idleDaggr da k tS =
     let tbl' = M.insert k st' (dd_table dd) in
     let dd' = dd { dd_table = tbl', dd_touchCt = tc' } in
     dd' `seq` writeIORef (da_data da) dd' >>
+    -- traceIO ("idleDaggr " ++ showK k ++ ". tc = " ++ show tc') >>
     when (0 == tc') (finalUpdateDaggr da)
 
 -- called on update for a demand source
@@ -160,26 +163,29 @@ updateDaggr da k tS tU su =
     let tmup' = Just $! maybe tU (min tU) (dd_tmup dd) in
     let dd' = dd { dd_touchCt = tc', dd_table = tbl', dd_tmup = tmup' } in
     dd' `seq` writeIORef (da_data da) dd' >>
+    -- traceIO ("updateDaggr " ++ showK k ++ ". tc = " ++ show tc') >>
     when (0 == tc') (finalUpdateDaggr da)
 
 -- called on last demand-source update in a round. This will make a
 -- decision on whether the update occurs next round or on some
 -- future heartbeat (flush).
 finalUpdateDaggr :: DemandAggr e z -> IO ()
-finalUpdateDaggr da = 
-    let pd = da_psched da in
-    p_stepTime pd >>= \ tNow ->
-    readIORef (da_data da) >>= \ dd ->
-    assert (0 == dd_touchCt dd) $
-    let bUrgent = case dd_tmup dd of
-            Nothing -> False
-            Just tU -> (tU < addTime tNow dtFutureChoke)
-    in
-    if bUrgent then p_onNextStep pd (deliverDaggr da) else
-    unless (dd_flush dd) $
-        let dd' = dd { dd_flush = True } in
-        writeIORef (da_data da) dd' >>
-        p_eventually pd (flushDaggr da)
+finalUpdateDaggr da = decideUpdate where
+    decideUpdate = 
+        -- traceIO ("finalUpdateDaggr") >>
+        readIORef (da_data da) >>= \ dd ->
+        assert (0 == dd_touchCt dd) $
+        case dd_tmup dd of
+            Nothing -> eventuallyFlush dd
+            Just _  -> deliverOnNextStep
+    eventuallyFlush dd =
+        unless (dd_flush dd) $
+            let dd' = dd { dd_flush = True } in
+            writeIORef (da_data da) dd' >>
+            p_eventually (da_psched da) (flushDaggr da)
+    deliverOnNextStep = 
+        p_onNextStep (da_psched da) $
+            deliverDaggr da
 
 -- at the moment, flushDaggr is simply a GC operation unless there
 -- is a pending update, in which case it will deliver the update.
@@ -191,10 +197,12 @@ flushDaggr da = initFlush where
         let bDeliver = (not . isNothing . dd_tmup) dd in
         if bDeliver then deliver dd else flush dd
     deliver dd =
+        --traceIO ("deliverDaggr via flush") >>
         let dd' = dd { dd_flush = False } in
         writeIORef (da_data da) dd' >>
         deliverDaggr da
     flush dd =
+        --traceIO ("flushDaggr") >>
         p_stepTime (da_psched da) >>= \ tNow ->
         let tGC = tNow `subtractTime` dtDaggrHist in
         let lst = M.toAscList (dd_table dd) in
@@ -217,6 +225,7 @@ deliverDaggr da = maybeDeliver where
             Nothing -> return ()
             Just tU -> doDeliver dd tU 
     doDeliver dd tU0 =
+        -- traceIO ("deliverDaggr") >>
         p_stepTime (da_psched da) >>= \ tNow ->
         let tTgt = tNow `subtractTime` dtDaggrHist in
         let tU = max tU0 tTgt in -- cut old updates
