@@ -16,6 +16,23 @@ module Sirea.Internal.LTypes
     , sm_waiting, sm_stable, sm_emit, sm_cleanup
     , ln_forEach, ln_freeze, ln_touchAll, ln_withSigM
     , adjStableTime
+
+    -- support for time manipulations
+    , TR, TS, LDT(..)
+    , tr_unit, tr_fwd, tr_dead
+    , LnkD(..)
+    , lnd_fst -- :: LnkD d (x :&: y) -> LnkD d x
+    , lnd_snd -- :: LnkD d (x :&: y) -> LnkD d y
+    , lnd_left -- :: LnkD d (x :|: y) -> LnkD d x
+    , lnd_right -- :: LnkD d (x :|: y) -> LnkD d y
+    , lnd_sig -- :: LnkD d (S p x) -> d
+    , lnd_fmap, lnd_aggr, lnd_zip
+    , ldt_zero
+    , ldt_maxGoal, ldt_minGoal
+    , ldt_maxCurr, ldt_minCurr
+    , ldt_anyLive, ldt_valid
+
+
     ) where
 
 import Sirea.Internal.STypes

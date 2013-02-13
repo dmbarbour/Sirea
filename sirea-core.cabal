@@ -35,7 +35,7 @@ Author: David Barbour
 Maintainer: dmbarbour@gmail.com
 Homepage: http://github.com/dmbarbour/Sirea
 Package-Url: 
-Copyright: (c) 2012 by David Barbour
+Copyright: (c) 2013 by David Barbour
 License: BSD3
 Stability: experimental
 build-type: Simple
@@ -48,41 +48,44 @@ Library
     ,containers (>= 0.5)
 
   Exposed-Modules:
+    -- getting started
     Sirea.Prelude
-
-    Sirea.Time
-    Sirea.Signal 
-    Sirea.Behavior
-    Sirea.BDeep
     Sirea.Build 
-    Sirea.PCX  
-    Sirea.PSched
+
+    -- concepts
+    Sirea.Behavior
+    Sirea.Signal 
+    Sirea.Time
+    Sirea.BDeep
     Sirea.Partition
-
-    Sirea.B 
-    Sirea.BCX 
-
     Sirea.Link
+    Sirea.Context
+    Sirea.B 
+
+    -- user support
+    Sirea.Utility
+    Sirea.UnsafeLink
+    Sirea.UnsafeOnUpdate
     Sirea.DemandMonitor
     Sirea.DemandListMonitor
     Sirea.AgentResource
-    Sirea.UnsafeOnUpdate
     Sirea.Clock
     Sirea.TimeTrigger
     Sirea.SRef
-    Sirea.Utility
 
+    -- transforms
     Sirea.Trans.Pure
     Sirea.Trans.Static
     Sirea.Trans.Error
     Sirea.Trans.Reader
 
+    -- implementation details
+    Sirea.Internal.B0
     Sirea.Internal.STypes
     Sirea.Internal.DiscreteTimedSeq
     Sirea.Internal.DemandMonitorData
     Sirea.Internal.SigType
     Sirea.Internal.LTypes
-    Sirea.Internal.BTypes
     Sirea.Internal.PTypes
     Sirea.Internal.BImpl
     Sirea.Internal.BCross
@@ -91,7 +94,6 @@ Library
     Sirea.Internal.BDynamic
     Sirea.Internal.PulseSensor
     Sirea.Internal.Tuning
-    
 
   ghc-options: -threaded -Wall -fno-warn-orphans
 

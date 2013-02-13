@@ -1,83 +1,89 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving, MultiParamTypeClasses #-}
 
-{-# LANGUAGE MultiParamTypeClasses #-}
 
--- | `B w x y` is the raw, primitive behavior type in Sirea. 
+-- | Behaviors with IO.
 --
--- `B` assumes that necessary hooks (into environment and resources)
--- are already formed. However, it is inconvenient to achieve those
--- hooks by hand. To model environment and convenient type-driven
--- relationships (and multi-threading with bcross), use BCX.
+-- BCX distributes a value representing an application's resource
+-- context, a `PCX`, to every behavior component that needs it. The
+-- resource context models volatile resources (threads, connections,
+-- cache, demand monitors) and proxies to persistent resources.
 --
--- See Also:
---   Sirea.Link for `unsafeLnkB` - new behavior primitives.
---   Sirea.BCX for behavior with resource context
-module Sirea.B 
-    ( B
+-- Conceptually, BCX is behavior with ambient authority to external
+-- resources and FFI, whereas type B should never be used for direct
+-- access to a resource. (Type B is for computation only.)
+--
+-- Using PCX rather than Haskell global space is convenient via BCX,
+-- and robust for multiple instances and plugins.
+--
+-- BCX and PCX enable declarative, type-driven resource acquisition
+-- in Sirea. To have two behaviors observe and influence one GLUT
+-- window, use the same type to identify the window resources. The
+-- behaviors can access the PCX to hook elements together by type.
+--
+-- Types aren't essential to this design, but are convenient and
+-- only weakly constrained by Haskell's module namespace. (You can
+-- protect resources against casual access by hiding their types.)
+-- 
+-- NOTE: RDP is designed for secure programming in object capability
+-- languages. A good object capability language will have convenient
+-- syntax and module systems for distributing capabilities and for
+-- controlling their distribution. This use of global state with BCX
+-- irks me. But Haskell is not an object capability language. Sirea
+-- needs to be convenient for Haskell.
+-- 
+module Sirea.BCX
+    ( BCX
+    , unwrapBCX
+    , wrapBCX
     ) where
 
-import Sirea.Behavior
--- import Sirea.Partition
-import Sirea.Internal.BTypes
-import Sirea.Internal.BImpl
-import Sirea.Internal.Tuning (dtEqf, dtSeq, dtFutureChoke)
-import Sirea.Internal.BDynamic
+import Prelude hiding ((.),id)
 import Data.Typeable
+import Control.Applicative
+import Control.Category
+--import Control.Arrow
+import Sirea.Internal.BCross (crossB)
+import Sirea.Behavior
+import Sirea.Trans.Static 
+import Sirea.Partition
+import Sirea.PCX
+import Sirea.Internal.B0
 
-instance Typeable2 B where
-    typeOf2 _ = mkTyConApp tcB []
-        where tcB = mkTyCon3 "sirea-core" "Sirea.Behavior" "B"
+-- WithPCX is a functor and applicative of values that take a PCX.
+type WithPCX w = WrappedArrow (->) (PCX w)
 
 
-eqfB :: (x -> x -> Bool) -> B (S p x) (S p x)
-eqfB = unsafeEqShiftB dtEqf
-
-instance BFmap B where 
-    bfmap    = fmapB
-    bconst c = constB c >>> eqfB ((const . const) True)
-    bstrat   = stratB 
-    bseq     = seqB dtSeq
-    badjeqf  = adjeqfB >>> eqfB (==)
-instance BProd B where
-    bfirst   = firstB
-    bdup     = dupB
-    b1i      = s1iB
-    b1e      = s1eB
-    btrivial = trivialB
-    bswap    = swapB
-    bassoclp = assoclpB
-instance BSum B where
-    bleft    = leftB
-    bmirror  = mirrorB
-    bmerge   = mergeB
-    b0i      = s0iB
-    b0e      = s0eB
-    bvacuous = vacuousB
-    bassocls = assoclsB
-instance BZip B where
-    bzap     = zapB
-instance BSplit B where
-    bsplit   = splitB
-instance BDisjoin B where 
-    bdisjoin = disjoinB
-instance BTemporal B where
-    bdelay   = delayB
-    bsynch   = synchB
-    bfchoke  = fchokeB dtFutureChoke
-instance BPeek B where
-    bpeek    = peekB
-instance Behavior B 
-
--- Unfortunately, we can't have dynamic behaviors for type B
--- due to update scheduling issues. evalB without scheduler 
--- access must perform touches in the update phase, which is
--- a problem (since it can lead to premature updates).
+-- | The BCX type is essentially:
 --
-instance BDynamic B B where
-    beval dt = evalB dt >>> bright bfst
+--       type BCX w x y = PCX w -> B w x y
+--
+-- But wrapped for manipulation as a Behavior.
+--
+-- BCX is a behavior that can work in any world w, given a context
+-- (GCX w) to represent or proxy resources in that world. 
+newtype B m x y = B { from0 :: StaticB (WithPCX w) B0 m x y } 
+    deriving ( Category, BFmap, BProd, BSum, BDisjoin
+             , BZip, BSplit, BTemporal, BPeek, Behavior )
+    -- NOT deriving: BDynamic, BCross
 
+instance Typeable2 (B m) where
+    typeOf2 _ = mkTyConApp tcBCX []
+        where tcBCX = mkTyCon3 "sirea-core" "Sirea.BCX" "BCX"
 
+unwrapBCX :: B m x y -> (PCX w -> B x y)
+unwrapBCX = unwrapArrow . unwrapStatic . fromBCX
 
+wrapBCX :: (PCX w -> B x y) -> BCX w x y
+wrapBCX =  BCX . wrapStatic . WrapArrow
 
+instance BCross (BCX w) where
+    bcross = wrapBCX crossB
 
+instance BDynamic (BCX w) B where
+    beval = wrapBCX . const . beval
+
+instance BDynamic (BCX w) (BCX w) where
+    beval dt = wrapBCX $ \ cw -> 
+        bfirst (bfmap (`unwrapBCX` cw)) >>> beval dt
 
 

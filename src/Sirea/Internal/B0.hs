@@ -1,25 +1,10 @@
 {-# LANGUAGE GADTs, TypeOperators #-}
 
--- Behavior types. 
-module Sirea.Internal.BTypes
-    ( B(..)
-
-    -- support for time manipulations
-    , TR, TS, LDT(..)
-    , tr_unit, tr_fwd, tr_dead
-    , LnkD(..)
-    , lnd_fst -- :: LnkD d (x :&: y) -> LnkD d x
-    , lnd_snd -- :: LnkD d (x :&: y) -> LnkD d y
-    , lnd_left -- :: LnkD d (x :|: y) -> LnkD d x
-    , lnd_right -- :: LnkD d (x :|: y) -> LnkD d y
-    , lnd_sig -- :: LnkD d (S p x) -> d
-    , lnd_fmap, lnd_aggr, lnd_zip
-    , ldt_zero
-    , ldt_maxGoal, ldt_minGoal
-    , ldt_maxCurr, ldt_minCurr
-    , ldt_anyLive, ldt_valid
-
-    , latentOnTime
+-- | Type B0 is the primitive behavior type in Sirea. It operates in
+-- a hidden applicative monad of kind 'm'. Hiding the monad ensures 
+-- effects are performed with secure capabilities.  
+module Sirea.Internal.B0
+    ( B0(..), MkB0(..)
     ) where
 
 import Sirea.Internal.STypes (S,(:&:),(:|:))
@@ -27,7 +12,18 @@ import Sirea.Internal.LTypes
 import Sirea.Time (DT)
 import Control.Exception (assert)
 
--- | (B w x y) describes an RDP behavior - a signal transformer with
+-- | MkB0 is the primary constructor for primitive Sirea behaviors.
+data MkB0 m x y = MkB0
+    { mkb_fwd :: LCaps m x -> LCaps m y
+    , mkb_rev :: LCaps m x -> Lnk m y -> m (Lnk m x)
+    }
+
+-- | B0 m x y describes an RDP behavior that operates in an 
+-- applicative monad m (which may be hidden), and processes
+-- signals that are applied to it.
+
+-- 
+ - a signal transformer with
 -- potential for declarative `demand effects`. Signal x is called
 -- the demand, and y the response. Behaviors may be composed, so the
 -- response from one behavior easily becomes demand on another.
@@ -60,40 +56,12 @@ import Control.Exception (assert)
 -- Behaviors compose much like arrows (from Control.Arrow), but are
 -- more constrained due to partitioning, asynchrony, and duration
 -- coupling. 
-data B x y where
-  -- most operations:
-  --   TR to report induced delays or transform of latency
-  --   MkLnk to apply effects
-  B_mkLnk   :: (TR x y) -> (MkLnk x y) -> B x y
-
-  -- category
-  B_pipe    :: (B x y) -> (B y z) -> B x z
-
-  -- arrows
-  B_first   :: (B x x') -> B (x :&: y) (x' :&: y)
-  B_left    :: (B x x') -> B (x :|: y) (x' :|: y)
-
-  -- access information from the first compilation pass
-  B_latent  :: (LnkD LDT x -> B x y) -> B x y
-
-  -- ability to compare opaque behaviors would be nice...
-  -- B_unique :: UniqueID -> (B w x y) -> B w x y
-
--- POSSIBILITY: Add the UniqueID automatically with unsafeLnkB 
--- (via unsafePerformIO) and for all the BImpl options. 
---
--- REASON: performance with dynamic behaviors? especially in case
--- where we switch between the same two or three dynamic behaviors.
--- Could leave the last few behaviors installed and cached.
---
--- It could work reasonably well in practice. But no pressing need
--- for it.
-
--- | delay computation of B x y until timing info is available
--- (note: this separation exists for the potential case that I
--- later extend compilation phase 1 with more than timing info).
-latentOnTime :: (LnkD LDT x -> B x y) -> B x y
-latentOnTime = B_latent
+data B0 m x y where
+  B0_mkLnk   :: MkB0 m x y -> B0 m x y
+  B0_pipe    :: B0 m x y -> B0 m y z -> B0 m x z
+  B0_first   :: B0 m x x' -> B0 m (x :&: y) (x' :&: y)
+  B0_left    :: B0 m x x' -> B0 m (x :|: y) (x' :|: y)
+  B0_latent  :: (LCaps m x -> B0 m x y) -> B0 m x y
 
 ---------------------------------------------------------
 -- A simple model for time-shifts. We have a current delay and a
