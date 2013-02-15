@@ -1,13 +1,14 @@
-{-# LANGUAGE GADTs, TypeOperators, Rank2Types, DeriveDataTypeable #-}
+{-# LANGUAGE GADTs, TypeOperators, Rank2Types #-}
 
--- Types for FRP.Sirea.Link (here to avoid cyclic dependencies)
--- plus related utilities
+-- | This module provides the concrete datatypes and organization of
+-- Sirea's implementation. Specific behavior logic is in B0Impl. 
 module Sirea.Internal.LTypes 
-    ( MkLnk, Lnk, LnkW(..), LnkUp(..)
+    ( LnkW(..), Lnk, LnkUp, LCC, LCaps
     , StableT(..), isDoneT, fromStableT, maybeStableT
     , ln_left, ln_right, ln_fst, ln_snd, ln_dead
     , ln_zero, ln_lnkup, ln_append
     , ln_lumap, ln_sfmap
+    , lc_
     , SigSt(..), st_zero, st_poke, st_clear, st_update, st_idle
     , monotonicStability, respectsStability
     , SigM(..), sm_zero
@@ -16,23 +17,6 @@ module Sirea.Internal.LTypes
     , sm_waiting, sm_stable, sm_emit, sm_cleanup
     , ln_forEach, ln_freeze, ln_touchAll, ln_withSigM
     , adjStableTime
-
-    -- support for time manipulations
-    , TR, TS, LDT(..)
-    , tr_unit, tr_fwd, tr_dead
-    , LnkD(..)
-    , lnd_fst -- :: LnkD d (x :&: y) -> LnkD d x
-    , lnd_snd -- :: LnkD d (x :&: y) -> LnkD d y
-    , lnd_left -- :: LnkD d (x :|: y) -> LnkD d x
-    , lnd_right -- :: LnkD d (x :|: y) -> LnkD d y
-    , lnd_sig -- :: LnkD d (S p x) -> d
-    , lnd_fmap, lnd_aggr, lnd_zip
-    , ldt_zero
-    , ldt_maxGoal, ldt_minGoal
-    , ldt_maxCurr, ldt_minCurr
-    , ldt_anyLive, ldt_valid
-
-
     ) where
 
 import Sirea.Internal.STypes
@@ -45,47 +29,33 @@ import Control.Applicative
 import Data.Monoid
 import Data.IORef
 import Data.Typeable
-
--- | MkLnk - construct a link in the IO monad, accepting destination 
--- capability and generating the source capability. IO is for caches
--- and any per-link resource management, but must avoid observable 
--- side-effects. (Any observable consequence must be from USING the
--- link with an active signal, not from building it.)
---
--- Dead-sink optimizations are supported as part of the construction
--- process: the `LnkDead` constructor provides some information that
--- the output is unused, which allows the MkLnk operation to control
--- accordingly how much computation to perform. 
---
--- > type MkLnk x y = Lnk y -> IO (Lnk x)
---
-type MkLnk x y = Lnk y -> IO (Lnk x)
-
--- | A Lnk describes a complex product of LnkUp values, to 
--- support all complex signal types - S, (:&:) and (:|:). 
---
--- > data Lnk x = 
--- >     LnkDead :: Lnk x
--- >     LnkSig  :: LnkUp a -> Lnk (S p a)
--- >     LnkProd :: Lnk x -> Lnk y -> Lnk (x :&: y)
--- >     LnkSum  :: Lnk x -> Lnk y -> Lnk (x :|: y)
---
--- Lnk is a GADT type. The use of `LnkDead` can be treated as a set
--- of `ln_zero` values (`LnkUp` that does nothing), but is provided
--- to easily perform dead code elimination.
--- 
-type Lnk = LnkW LnkUp
+import Data.Unique (Unique)
+import Data.Set (Set)
 
 -- | LnkW is a GADT for a complex product of signals. 
+-- Support complex signal types: S, V, (:&:) and (:|:).
 data LnkW s a where
     LnkDead :: LnkW s a -- for dead code
     LnkSig  :: (s a) -> LnkW s (S p a)
     LnkProd :: (LnkW s a) -> (LnkW s b) -> LnkW s (a :&: b)
     LnkSum  :: (LnkW s a) -> (LnkW s b) -> LnkW s (a :|: b)
 
--- | LnkUp processes updates to a concrete signal. Complex signal
--- processors are represented as a product of LnkUp structures via
--- the `LnkW` GADT. 
+-- | A Lnk describes a complex product of LnkUp values. 
+--
+-- > data Lnk m x = 
+-- >     LnkDead :: Lnk m x
+-- >     LnkSig  :: LnkUp m a -> Lnk m (S p a)
+-- >     LnkProd :: Lnk m x -> Lnk m y -> Lnk m (x :&: y)
+-- >     LnkSum  :: Lnk m x -> Lnk m y -> Lnk m (x :|: y)
+--
+-- Lnk is a GADT type. The use of `LnkDead` can be treated as a set
+-- of `ln_zero` values (`LnkUp` that does nothing), but is provided
+-- to easily perform dead code elimination.
+-- 
+type Lnk m = LnkW (LnkUp m)
+
+-- | LnkUp processes updates to a concrete signal. Complex signals
+-- are addressed via Lnk or LnkW.
 --
 -- When updating a signal, ln_touch should be called in the initial
 -- phase, and either ln_update or ln_idle in the second phase. Only
@@ -105,62 +75,40 @@ data LnkW s a where
 --   ln_idle: update signal's stability only, indicating there was
 --      no significant change in value. 
 --
-data LnkUp a = LnkUp
-    { ln_touch  :: !(IO ())
-    , ln_update :: !(StableT -> T -> Sig a -> IO ())
-    , ln_idle   :: !(StableT -> IO ())
-    --, ln_cycle  :: !((Set Int) -> IO ())
-    } deriving (Typeable)
+--   ln_cycle: recognize cycles; if one's own unique token is in the
+--      set, it must have arrived by cycle. If not, add one's token,
+--      then pass it on. Where cycles are detected, they can be cut
+--      by delaying updates to a future step. (Developers can dampen
+--      cycles by use of bfchoke.) Most links just pass this on.
+--
+--      Only IO resources have cycles, so they can access newUnique.
+--      Only cycles within a partition, where ln_touch is used, need
+--      to be broken this way.
+--
+data LnkUp m a = LnkUp
+    { ln_touch  :: !(m ())
+    , ln_update :: !(StableT -> T -> Sig a -> m ())
+    , ln_idle   :: !(StableT -> m ())
+    , ln_cycle  :: !((Set Unique) -> m ())
+    }
 
 instance Monoid (LnkUp a) where
     mempty  = ln_zero
     mappend = ln_append
 
---  (under consideration):
---
---   ln_cycle: supports a test to determine whether a given resource
---      is part of a partition-local feedback cycle. The participant
---      adds its identifier, and if the set comes back around with
---      the participant's own identifier, the participant must break
---      the cycle, i.e. by delaying update to a future round.
---
---      IF THIS WORKS:
---    
---      While computing cycles does introduce small overhead, it can
---      improve update order, reduce rework, eliminate extra sends,
---      better compose resources, ultimately save a lot.
---
---      I think the savings will almost always be greater than the 
---      overhead. I.e. if there is no chain of operations, the cost
---      should nearly be zero. 
---
---      WILL IT WORK?
---
---      Not sure. Mostly, BDynamic seems to cause issue, since I
---      don't always know who will receive behavior updates internal
---      to new behaviors. Maybe I could make BDynamic work by delay
---      of touch/update for new BDynamic values by a step, i.e. such
---      that they always respect 'touch first phase, update second'.
---
---      Maybe try to fix BDynamic first, so I don't need to treat
---      it as a special case. (But to fix BDynamic, I'll need access
---      to the scheduling mechanisms. Does that mean BDynamic will
---      have only a BCX implementation?)
---
---      Another potential issue is the MonitorDist, i.e. that we 
---      won't always find monitors prior to the cycle tests. Maybe
---      this can be addressed by keeping a record of cycle IDs 
---      that reach a MonitorDist, then propagating these to new
---      observers when they attach.
---
---      If we're cut, we'll delay the real update to the next round
---      but maybe perform touch and stability update this round.
---
---      Notes: This could be a *conservative* estimate, e.g. using a
---      hash of an ID or even a stableName. Or per partition value?
---
--- TODO: make this (global) change after finishing the current one.
+newtype LCX m x = LCX { getLC :: LC m }
+data LC m =
+    { lc_cc      :: !(CC m)
+    , lc_dtCurr  :: {-# UNPACK #-} !DT
+    , lc_dtGoal  :: {-# UNPACK #-} !DT
+    }
+type LCaps m x = LnkW (LCX m) x
 
+lc_map :: (LC m -> LC m) -> LCX m x -> LCX m y
+lc_map fn = LCX . fn . getLC
+
+lc_fwd :: LCX m x -> LCX m y
+lc_fwd = LCX . getLC
 
 
 -- | StableT describes a stability value for a signal. This is a
@@ -171,7 +119,7 @@ instance Monoid (LnkUp a) where
 --
 data StableT = StableT {-# UNPACK #-} !T
              | DoneT
-             deriving (Show,Eq,Typeable)
+             deriving (Show,Eq)
 
 isDoneT :: StableT -> Bool
 isDoneT DoneT = True
@@ -214,10 +162,11 @@ ln_zero = LnkUp touch update idle where
 
 -- duplicate touches and updates.
 ln_append :: LnkUp a -> LnkUp a -> LnkUp a
-ln_append x y = LnkUp touch update idle where
+ln_append x y = LnkUp touch update idle cycle where
     touch = ln_touch x >> ln_touch y
     idle t = ln_idle x t >> ln_idle y t
     update tS tU sig = ln_update x tS tU sig >> ln_update y tS tU sig
+    cycle cs = ln_cycle x cs >> ln_cycle y cs
 
 -- | ln_lnkup extracts LnkUp (from LnkSig or ln_zero from LnkDead)
 ln_lnkup  :: Lnk (S p a) -> (LnkUp a)
@@ -255,10 +204,11 @@ ln_dead (LnkSum a b) = ln_dead a && ln_dead b
 -- coupling (which supports composable resource management).
 --
 ln_sfmap :: (Sig x -> Sig y) -> LnkUp y -> LnkUp x
-ln_sfmap fn ln = LnkUp touch update idle where
+ln_sfmap fn ln = LnkUp touch update idle cycle where
     touch = ln_touch ln
     idle = ln_idle ln
     update tS tU = ln_update ln tS tU . fn
+    cycle = ln_cycle ln
 
 -- | simple transformer from LnkUp to Lnk
 ln_lumap :: (LnkUp x -> LnkUp y) -> Lnk (S p x) -> Lnk (S p y)
@@ -289,7 +239,7 @@ data SigSt a = SigSt
     { st_signal :: !(Sig a)    -- signal value
     , st_stable :: !StableT    -- signal stability
     , st_expect :: !Bool       -- expecting an update?
-    } deriving (Typeable)
+    }
 
 -- st_zero is an initial SigSt value. 
 --
@@ -341,7 +291,7 @@ data SigM x y = SigM
     { sm_lsig :: {-# UNPACK #-} !(SigSt x)  -- state for left signal
     , sm_rsig :: {-# UNPACK #-} !(SigSt y)  -- state for right signal
     , sm_tmup :: !(Maybe T)  -- earliest update (if any)
-    } deriving (Typeable)
+    }
 
 -- initial SigM. 
 sm_zero :: SigM x y
@@ -434,5 +384,130 @@ ln_withSigM' rf onTouch onEmit = (lux,luy)
                     onEmit sm
           lux = LnkUp pokeX updX idleX
           luy = LnkUp pokeY updY idleY
+
+{-
+
+---------------------------------------------------------
+-- A simple model for time-shifts. We have a current delay and a
+-- goal delay. A time-shift can move either or both. Differences
+-- in current delay can be turned into a final behavior - i.e. 
+-- we compare ldt_curr before and after, and delay accordingly. 
+--
+-- TR does not cause time-shifts, but controls how timing info is
+-- preserved across MkLnk behaviors. Only a few special behaviors,
+-- such as bdisjoin, need other than tr_unit, id, or tr_fwd.
+type TR x y = LnkD LDT x -> LnkD LDT y
+type TS x = TR x x
+data LDT = LDT 
+    { ldt_curr :: !DT   -- actual delay from start of behavior
+    , ldt_goal :: !DT   -- aggregated but unapplied logical delay
+    , ldt_live :: !Bool -- is this a live branch (not binl or binr?)
+    }
+
+ldt_maxGoal, ldt_minGoal, ldt_maxCurr, ldt_minCurr :: LnkD LDT x -> DT
+ldt_maxGoal = lnd_aggr max . lnd_fmap ldt_goal
+ldt_minGoal = lnd_aggr min . lnd_fmap ldt_goal
+ldt_maxCurr = lnd_aggr max . lnd_fmap ldt_curr
+ldt_minCurr = lnd_aggr min . lnd_fmap ldt_curr
+
+-- ldt_anyLive returns true if ANY inputs are alive.
+ldt_anyLive :: LnkD LDT x -> Bool
+ldt_anyLive = lnd_aggr (||) . lnd_fmap ldt_live
+
+-- simple validation on LnkD LDT structure
+-- not very efficient, but okay for assert
+ldt_valid :: LnkD LDT x -> Bool
+ldt_valid (LnkDUnit ldt) = (ldt_goal ldt >= ldt_curr ldt)
+ldt_valid (LnkDSum x y) = ldt_valid x && ldt_valid y
+ldt_valid (LnkDProd x y) = ldt_valid x && ldt_valid y && 
+    (ldt_anyLive x == ldt_anyLive y)
+
+-- tr_unit validates an assumption that all inputs have uniform
+-- timing properties. It is the normal timing translator for MkLnk.
+tr_unit :: TR x y
+tr_unit x =
+    assert (ldt_valid x) $
+    assert (ldt_maxGoal x == ldt_minGoal x) $
+    assert (ldt_maxCurr x == ldt_minCurr x) $
+    LnkDUnit $ LDT 
+        { ldt_curr = ldt_maxCurr x
+        , ldt_goal = ldt_maxGoal x
+        , ldt_live = ldt_anyLive x
+        }
+
+tr_fwd :: TR (S p1 x1) (S p2 x2)
+tr_fwd = LnkDUnit . lnd_sig
+
+tr_dead :: LnkD LDT x -> LnkD LDT y
+tr_dead x = LnkDUnit ldtDead
+    where ldtDead = LDT { ldt_curr = ldt_maxCurr x
+                        , ldt_goal = ldt_maxGoal x
+                        , ldt_live = False 
+                        }
+
+
+----------------------------------------------------------
+-- LnkD is a more generic version of LnkW for metadata.
+-- It allows a single value to represent a group. Usefully
+-- it can be propagated even if the type is unknown.
+data LnkD d x where
+    LnkDUnit :: d -> LnkD d x
+    LnkDProd :: (LnkD d x) -> (LnkD d y) -> LnkD d (x :&: y)
+    LnkDSum  :: (LnkD d x) -> (LnkD d y) -> LnkD d (x :|: y)
+
+lnd_fst :: LnkD d (x :&: y) -> LnkD d x
+lnd_snd :: LnkD d (x :&: y) -> LnkD d y
+lnd_left :: LnkD d (x :|: y) -> LnkD d x
+lnd_right :: LnkD d (x :|: y) -> LnkD d y
+lnd_sig  :: LnkD d (S p x) -> d
+
+lnd_fst (LnkDUnit d) = LnkDUnit d
+lnd_fst (LnkDProd x _) = x
+lnd_snd (LnkDUnit d) = LnkDUnit d
+lnd_snd (LnkDProd _ y) = y
+lnd_left (LnkDUnit d) = LnkDUnit d
+lnd_left (LnkDSum x _) = x
+lnd_right (LnkDUnit d) = LnkDUnit d
+lnd_right (LnkDSum _ y) = y 
+lnd_sig (LnkDUnit d) = d
+
+-- map a simple operation across all elements independently. 
+lnd_fmap :: (a -> b) -> LnkD a x -> LnkD b x
+lnd_fmap fn (LnkDUnit d) = LnkDUnit (fn d)
+lnd_fmap fn (LnkDProd l r) = LnkDProd (lnd_fmap fn l) (lnd_fmap fn r)
+lnd_fmap fn (LnkDSum l r) = LnkDSum (lnd_fmap fn l) (lnd_fmap fn r)
+
+-- aggregate a value. Note that the aggregation function should be
+-- idempotent and commutative. There aren't many applicable 
+-- functions that are meaningful, except min and max.
+lnd_aggr :: (b -> b -> b) -> LnkD b x -> b
+lnd_aggr _ (LnkDUnit b) = b
+lnd_aggr fn (LnkDProd l r) = fn (lnd_aggr fn l) (lnd_aggr fn r)
+lnd_aggr fn (LnkDSum l r) = fn (lnd_aggr fn l) (lnd_aggr fn r)
+
+-- apply a function pairwise between matching elements in structure.
+lnd_zip :: (a -> b -> c) -> LnkD a x -> LnkD b x -> LnkD c x
+lnd_zip fn (LnkDUnit a) (LnkDUnit b) = 
+    LnkDUnit (fn a b)
+lnd_zip fn (LnkDSum al ar) blr = 
+    let cl = lnd_zip fn al (lnd_left blr) in
+    let cr = lnd_zip fn ar (lnd_right blr) in
+    LnkDSum cl cr
+lnd_zip fn alr (LnkDSum bl br) =
+    let cl = lnd_zip fn (lnd_left alr) bl in
+    let cr = lnd_zip fn (lnd_right alr) br in
+    LnkDSum cl cr
+lnd_zip fn (LnkDProd a1 a2) b12 =
+    let c1 = lnd_zip fn a1 (lnd_fst b12) in
+    let c2 = lnd_zip fn a2 (lnd_snd b12) in
+    LnkDProd c1 c2
+lnd_zip fn a12 (LnkDProd b1 b2) =
+    let c1 = lnd_zip fn (lnd_fst a12) b1 in
+    let c2 = lnd_zip fn (lnd_snd a12) b2 in
+    LnkDProd c1 c2
+-}
+
+
+
 
 

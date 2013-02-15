@@ -46,25 +46,27 @@ import Data.IORef (newIORef, readIORef, writeIORef, IORef)
 
 import qualified Data.List as L
 
-instance Category B where
+instance Category (B0 m) where
   id  = fwdB
-  (.) = flip B_pipe
+  (.) = flip B0_pipe
 
+firstB :: B0 m x x' -> B0 m (x :&: y) (x' :&: y)
+firstB = B0_first
 
-firstB :: B x x' -> B (x :&: y) (x' :&: y)
-firstB = B_first
+leftB :: B0 m x x' -> B0 (x :|: y) (x' :|: y)
+leftB = B0_left
 
-leftB :: B x x' -> B (x :|: y) (x' :|: y)
-leftB = B_left
-
-mkLnkPure :: (Lnk y -> Lnk x) -> (Lnk y -> IO (Lnk x)) 
+mkLnkPure :: (Monad m) => (Lnk m y -> Lnk m x) -> (Lnk m y -> m (Lnk m x)) 
 mkLnkPure = (return .)
 
-mkLnkB :: TR x y -> (Lnk y -> IO (Lnk x)) -> B x y
-mkLnkB = B_mkLnk
+-- Note: mkLnkB assumes a pure LCaps transform. (Only bcross needs
+-- the effectful transform, and that's in another module.)
+mkLnkB :: (LCaps m x -> LCaps m y) 
+       -> (LCaps m x -> Lnk m y -> m (Lnk m x)) -> B0 m x y
+mkLnkB fcp mkLN = B_mkLnk (return . fcp) mkLN
 
 -- fwdB is the simplest behavior...
-fwdB :: B x x 
+fwdB :: B0 m x x 
 fwdB = mkLnkB id $ mkLnkPure id
 
 -- introduce S1. This creates an imaginary signal out of nothing.

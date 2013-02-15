@@ -34,16 +34,16 @@
 module Sirea.Partition 
     ( Partition(..)
     , BCross(..)
-    , Pt, P0
+    , Pt, P0, W
     , Stepper(..)
     , Stopper(..)
-    , PSched(..) -- re-exported
+    , PSched, Sched(..) -- re-exported
     , getPSched
     ) where
 
 import Sirea.Behavior
 import Sirea.PCX
-import Sirea.PSched
+import Sirea.Internal.CC
 import Sirea.Internal.PTypes
 import Sirea.Internal.Thread
 import Sirea.Internal.PulseSensor (getPulseScheduler)
@@ -58,8 +58,8 @@ import GHC.Conc (labelThread)
 -- are accessed. In the normal use case, partitions are created when
 -- you cross into them by type, i.e. bcross into a GLUT partition in
 -- order to create and control a GLUT window. The illusion is that
--- the partitions have always existed, they're just passive until
--- agitated - i.e. discovery and manipulation rather than creation.
+-- the partitions have always existed, they're just passive unless
+-- you control them - i.e. discovery, not creation.
 --
 -- Cross from a partition to itself may optimize to identity.
 class BCross b where
@@ -79,6 +79,17 @@ class (Typeable p) => Partition p where
     -- resources via PCX. (Recommend use of GHC.Conc.labelThread.)
     newPartitionThread :: PCX p -> Stepper -> IO Stopper
 
+-- We need a child PCX for each partition.
+instance (Partition p) => Resource W p where 
+    locateResource rp _ = newPCX rp
+
+-- | The W type represents the toplevel PCX. Each thread partition 
+-- operates directly under the world or process level partition, W.
+data W
+
+-- | PSched is a partition scheduler, operating on partition threads
+-- in the IO monad.
+type PSched = Sched IO
 
 -- | Given the PCX for a partition, we can obtain the scheduler,
 -- though doing so is optional. See Sirea.PSched for more info.
@@ -87,11 +98,11 @@ getPSched cp =
     findInPCX cp >>= \ tc ->
     getPulseScheduler cp >>= \ onPulse ->
     return $! PSched 
-        { p_stepTime   = getTCTime tc
-        , p_onNextStep = addTCRecv tc
-        , p_onUpdPhase = addTCWork tc
-        , p_onStepEnd  = addTCSend tc
-        , p_eventually = onPulse
+        { stepTime   = getTCTime tc
+        , onNextStep = addTCRecv tc
+        , onUpdPhase = addTCWork tc
+        , onStepEnd  = addTCSend tc
+        , eventually = onPulse
         }
 
 -- | Pt is a type for trivial partitions. These partitions have few

@@ -1,16 +1,15 @@
 
 {-# LANGUAGE TypeOperators, MultiParamTypeClasses, Rank2Types #-}
 
--- | This module describes RDP behaviors classes in Sirea. Behaviors 
--- are a restricted class of Arrows that transform and orchestrate 
--- (but neither create nor destroy) signals. 
+-- | This module documents abstract behaviors used in Sirea. These
+-- classes are implemented by the concrete behavior type B, but are
+-- presented in typeclasses to support documentation and transforms.
+-- (Users of Sirea are not expected to implement these typeclasses.)
 --
--- This module contains behaviors only for data plumbing, pure
--- functional computation, and simple performance annotations. In
--- general, RDP behaviors may be effectful. 
+-- This module focuses on the primary compositional behaviors plus a
+-- few common performance annotations. Specific effects might be 
+-- achieved via other classes.
 --
--- For concrete behavior types, see Sirea.B or Sirea.BCX. 
--- For partition management behaviors, see Sirea.Partition.
 module Sirea.Behavior  
     ( (:&:), (:|:), S, S0, S1, SigInP
     , (>>>) -- from Control.Category
@@ -693,9 +692,6 @@ bevalb = beval
 bexecb = bexec
 bevalbOrElse = bevalOrElse
 
-
-
-
 -- WISHLIST: a behavior-level map operation.
 --
 --  I'd love to have a notion of performing a behavior on every
@@ -804,9 +800,12 @@ benvseq bx by = bdup >>> (bfst *** bx) >>> by
 -- The alternative is use wrappers - `S p (f x)` technique, wrapping
 -- the `x` type to enforce constraints locally. The main difficulty
 -- here is that continous time-varying signals can't be ignorant of
--- `bdelay`. With this technique, I'll probably need to wrao the `S`
+-- `bdelay`. With this technique, I'll probably need to wrap the `S`
 -- type as well, hide it behind another kind of behavior to enforce
 -- tighter constraints or open a GADT to new options.
+--
+-- Potentially I can change this transparently, later, by defining
+-- `S p x` as `SF Sig p x` or similar.
 -- 
 
 

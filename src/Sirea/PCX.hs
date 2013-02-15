@@ -1,44 +1,37 @@
 {-# LANGUAGE MultiParamTypeClasses, FlexibleInstances, DeriveDataTypeable #-}
 
--- | A declarative resource linking mechanism for Sirea and Haskell.
+-- | PCX is a context object providing access to abstract, volatile,
+-- external resources: FFI, services, state, sensors, actuators, UI.
+-- PCX supports the abstraction that these resources already exist,
+-- that the client is just locating or discovering them, linking not
+-- creating. RDP requires this conservative notion of resources. RDP
+-- relies on external resources to provide state, and the ultimate
+-- role of an RDP application is to bind and orchestrate resources
+-- through use of signals.
 --
--- RDP has a conservative notion of resources: nothing is created,
--- nothing is destroyed. That is, there is no equivalent notion to
--- `new` or `delete`, nor even `newIORef`. Instead, resources are
--- external; developers use discovery idioms. In applications that
--- need dynamic resources, discovery is directed by domain values,
--- e.g. using client identifiers to specify unique files or tables
--- in a database. 
+-- When resources are external to an application, modularity has a
+-- different flavor. Instead of encapsulation, we use partitioning.
+-- The idea is basically that a parent application can grant access
+-- to different subcontexts for different subprograms. Untrusted 
+-- subprograms can thus be prevented from interfering with trusted
+-- or sensitive subprograms. PCX is conceptually a partition of a
+-- larger resource context. 
 --
--- Resources represent services, state, sensors, actuators, or FFI.
---
--- State resources tend to be "abundant" such that developers can
--- discover however many they need (e.g. one for each client, or for
--- each form or widget). The conservative resource philosophy works
--- very well with orthogonal persistence of state, and in Sirea (or
--- any RDP implementation) state resources ought to be persistent 
--- unless they have a good, natural excuse to be otherwise (such as
--- windowed history, or tuple spaces with short expirations). When 
--- clean state is necessary, using explicit resets independent from
--- application restarts is a good idea for live programming.
---
--- State resources can still be modular and secure via partitioning
--- schemes, providing different partitions to different subprograms.
---
--- The PCX type supports this conservative notion of resources in
--- Sirea. By nature, PCX carries only volatile resources, but that
--- includes volatile proxies to persistent resources (maintained in
--- a database or filesystem). PCX is mostly used behind the scenes,
--- when adapting new resources to Sirea's BCX behavior model. 
+-- PCX resources are necessarily volatile, i.e. because they exist
+-- within a Haskell process. However, they may be volatile proxies
+-- for persistent state. An advantage of external state resources 
+-- is natural support for orthogonal persistence. State resources
+-- for Sirea shall be persistent unless they have a good, natural
+-- explanation to be volatile (e.g short windowed history).
 --
 module Sirea.PCX
-    ( PCX       -- abstract
-    , RPath     -- path type
-    , newPCX    -- a new toplevel
-    , findInPCX, findByNameInPCX -- the lookup functions
-    , Resource(..)
+    ( Resource(..)
+    , NamedResource
+    , PCX, newPCX
+    , findInPCX -- lookup by type
+    , findByNameInPCX -- lookup by type and string
+    , RPath -- stable resource path descriptor
     ) where
-
 
 import Data.Typeable
 import Data.Dynamic
@@ -46,13 +39,13 @@ import Control.Concurrent.MVar
 import qualified Data.Map.Strict as M
 import Control.Monad.Fix (mfix)
 
--- | PCX p - Partition Resource Context. Abstract.
+-- | PCX p - Partitioned Resource Context.
 --
 -- A partition context is a vast space of resources. Conceptually, 
--- it already holds the resources, but we locate them as needed. In
+-- it already holds the resources, and we locate them as needed. In
 -- practice, the resource is created on the first lookup and further
--- lookups will return the same resource. Resources are uniquely 
--- identified (located) based on type (via Typeable) and string. 
+-- lookups will find the same resource. Resources are uniquely 
+-- identified (and located) based on type (via Typeable) and string.
 --
 -- A weakness of PCX is that there is no mechanism to GC resources
 -- without collecting the whole space. Consequently, developers must
@@ -60,22 +53,18 @@ import Control.Monad.Fix (mfix)
 -- memory overheads. If more dynamism is required, it is necessary
 -- to create resource types that handle the dynamism internally.
 --
--- A PCX is MT-safe and reentrant, but does not support cyclic
--- dependencies (i.e. reentrant lookups must be acyclic). Lookup
--- should be considered moderately expensive, so the result should
--- be remembered if the resource will be needed often. Lookups are
--- idempotent and resources are insensitive to time (or supposed to
--- be) so PCX should be safe for use with unsafePerformIO if ever
--- there is a need for it. (PCX is usually in an IO context anyway.)
+-- PCX is implemented to be MT-safe and reentrant. However, cyclic
+-- dependencies are not supported. (I.e. reentrancy only allows the
+-- lookup of resources so long as they don't form a cycle.)
 --
 data PCX p = PCX 
-    { pcx_path :: !(RPath)
-    , pcx_store :: !(MVar Store)
+    { pcx_path    :: !(RPath)
+    , pcx_store   :: !(MVar Store)
     } deriving(Typeable)
 
 type Store = M.Map (TypeRep,String) (MVar Dynamic)
 
--- | The PCX Path is a path of types and strings, ordered from leaf
+-- | The PCX RPath is a path of types and strings, ordered from leaf
 -- to root. Every resource has a unique path (from newPCX) that is
 -- accessible via locateResource.
 type RPath = [(TypeRep,String)]
@@ -110,17 +99,17 @@ type RPath = [(TypeRep,String)]
 class (Typeable r) => Resource p r where
     locateResource :: RPath -> PCX p -> IO r
 
-instance (Typeable p) => Resource p0 (PCX p) where
-    locateResource p _ =
-        newMVar M.empty >>= \ s ->
-        return (PCX { pcx_path = p, pcx_store = s })
+-- | NamedResource is simply a declaration that allows access to a
+-- resource by string. This prevents accidental use of findByName
+-- when a resource should be identified only by type and partition.
+--
+-- For named resources, findInPCX = findByNameInPCX ""
+class (Resource p r) => NamedResource p r
 
--- | Find a resource in the partition context based on its type.
---
---     findInPCX = findByNameInPCX ""
---
+-- | Find a resource by type. 
 findInPCX :: (Resource p r) => PCX p -> IO r
-findInPCX = findByNameInPCX ""
+findInPCX = findByNameInPCX' ""
+
 
 -- | Find a resource in a partition based on both name and type.
 --
@@ -130,8 +119,11 @@ findInPCX = findByNameInPCX ""
 -- the same resource. To protect notional existence, resources are
 -- not to have observable side-effects until we interact with them.
 --
-findByNameInPCX :: (Resource p r) => String -> PCX p -> IO r
-findByNameInPCX nm cp = mfix $ \ rForTypeOnly ->
+findByNameInPCX :: (NamedResource p r) => String -> PCX p -> IO r
+findByNameInPCX = findByNameInPCX'
+
+findByNameInPCX' :: (Resource p r) => String -> PCX p -> IO r
+findByNameInPCX' nm cp = mfix $ \ rForTypeOnly ->
     let k = (typeOf rForTypeOnly, nm) in
     pcxGetMVK cp k >>= \ (mvk,bFirst) ->
     if bFirst 
@@ -139,7 +131,8 @@ findByNameInPCX nm cp = mfix $ \ rForTypeOnly ->
             putMVar mvk (toDyn r) >>
             return r
        else readMVar mvk >>= \ dynR ->
-            return $! (fromDyn dynR badR)
+            let Just r = fromDynamic dynR in
+            return r
     where badR = error "illegal PCX state"
 
 -- returns (MVar for element, First lookup (i.e. empty mvar))
@@ -154,13 +147,11 @@ pcxGetMVK cp k =
                  let tbl' = M.insert k mvk tbl in
                  return (tbl', tbl' `seq` (mvk,True))
 
--- | newPCX - a `new` toplevel PCX
-newPCX :: String -> IO (PCX w)
-newPCX nm = 
+-- | newPCX - a `new` resource context.
+newPCX :: RPath -> IO (PCX w)
+newPCX p = 
     newMVar M.empty >>= \ s ->
-    let p = (typeOf (), nm):[] in
     let pcx = PCX { pcx_path = p, pcx_store = s } in
     return pcx
-
 
 

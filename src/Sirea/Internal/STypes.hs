@@ -1,10 +1,11 @@
-{-# LANGUAGE TypeOperators, EmptyDataDecls,   
+{-# LANGUAGE TypeOperators, EmptyDataDecls, DeriveDataTypeable  
     MultiParamTypeClasses, FlexibleInstances #-}
 
 module Sirea.Internal.STypes
     ( (:&:)
     , (:|:)
     , S, S0, S1
+    --, V
     , SigInP
     , SigMembr, BuildMembr(..), buildMembr
     ) where 
@@ -17,7 +18,7 @@ import Data.Typeable -- all are typeable
 -- 600ms, then y will have the same profile. However, asynchronous
 -- delays enable a small divergence of exactly when these periods
 -- occur. (They'll be synchronized before recombining signals.)
-data (:&:) x y
+data (:&:) x y deriving(Typeable)
 infixr 3 :&:
 
 -- | (x :|: y). Union or Sum of asynchronous or partitioned signals.
@@ -26,7 +27,7 @@ infixr 3 :&:
 -- 100 ms, active up to 400 ms, then inactive 100 ms. (There may be
 -- durations where both are inactive.) Due to asynchronous delays 
 -- the active periods might overlap for statically known periods.
-data (:|:) x y
+data (:|:) x y deriving(Typeable)
 infixr 2 :|:
 
 -- | (S p a) is a Sig a in partition p. 
@@ -45,10 +46,10 @@ infixr 2 :|:
 -- Partitions must be Data.Typeable to support analysis of types
 -- as values. Some types may have special meaning, indicating that
 -- extra threads should be constructed when behavior is initiated.
-data S p a
+data S p a deriving(Typeable)
 
 -- a local version of Void (not exported)
-data Void
+data Void deriving(Typeable)
 
 -- | S0 is the identity type for (:|:). It is a signal that is never
 -- active. There are no valid values for it, so it cannot be active.
@@ -117,7 +118,7 @@ instance (SigInP p x, SigInP p y) => SigInP p (x :|: y)
 -- to express in Coq...
 
 -- Data.Typeable support. 
-
+{-
 instance Typeable2 S where
     typeOf2 _ = mkTyConApp tycSig []
         where tycSig = mkTyCon3 "sirea-core" "Sirea.Behavior" "S"
@@ -130,5 +131,56 @@ instance Typeable2 (:&:) where
     typeOf2 _ = mkTyConApp tycProd []
         where tycProd = mkTyCon3 "sirea-core" "Sirea.Behavior" "(:&:)"
 
+-}
+
+
+
+-- (V x) lifts collection processing to Sirea's reactive layer.
+-- The vector of signals is homogenous, but may have a time-varying 
+-- finite size. A signal of collections may be converted to a vector
+-- of signals and back, i.e.:
+--
+--    b (S p [x]) (V (S p x)) 
+--    b (V (S p x) :&: S p ()) (S p [x])
+--      or maybe
+--    b (S p [Maybe x]) (V (S p x))
+--    b (V (S p x) :&: S p ()) (S p [Maybe x])
+--
+-- Vectors are logically synchronous, with every element having the
+-- same latency. Though for a complex signals of form `V (y :&: z)`
+-- the y and z components may still have varying latencies.
+--
+-- THOUGHTS: would it be worthwhile to constrain V to process a
+-- maximum static count (V k x), with k in the type-system? This 
+-- would make V a little less widely useful, but a little more
+-- suitable for real-time systems... and still quite useful for
+-- dynamic systems, and easier to implement properly.
+--
+-- (STATUS: preliminary design, experimental)
+-- data V k x
+
+-- Related to V:
+--
+-- A concept of partial-signals might be useful, i.e. one half of an
+-- 'if'. Formally, we can get this using S1:
+--    type H x = x :|: S1 -- half-signals
+--    (x :|: y) ~> H x -- bright btrivial
+--    x ~> H x -- b0i >>> bleft bvacuous >>> mirror
+--    y ~> H x -- b0i >>> (bvacuous +++ btrivial)
+--    H x :|: H x ~> H x -- plumb >>> (bmerge +++ bmerge) where
+--       plumb :: (x1 :|: y1) :|: (x2 :|: y2) ~> (x1 :|: x2) :|: (y1 :|: y2)
+--       plumb = bassocrs >>> bright plumb2 >>> bassocls
+--       plumb2 = bassocls >>> bleft bmirror >>> bassocrs
+--     
+-- But it is inconvenient to deal with products of partial signals,
+-- since each signal might be partial in its own ways. I know of no
+-- efficient, effective way to combine (H x :&: H y :&: H z).
+--
+-- If vectors have maximum dynamic size, then presumably we could 
+-- understand them as a vector of H signals values. In that case,
+-- it might be better to separate V from H (such that we can have
+-- `V k (H x)` explicitly), but we might be able to provide some
+-- useful, standard ways to operate on the signals, too.
+-- 
 
 

@@ -50,7 +50,7 @@ Library
   Exposed-Modules:
     -- getting started
     Sirea.Prelude
-    Sirea.Build 
+    Sirea.Activate
 
     -- concepts
     Sirea.Behavior
@@ -58,8 +58,7 @@ Library
     Sirea.Time
     Sirea.BDeep
     Sirea.Partition
-    Sirea.Link
-    Sirea.Context
+    Sirea.PCX
     Sirea.B 
 
     -- user support
@@ -80,14 +79,15 @@ Library
     Sirea.Trans.Reader
 
     -- implementation details
-    Sirea.Internal.B0
+    Sirea.Internal.CC
+    Sirea.Internal.B0Type
+    Sirea.Internal.B0Impl
     Sirea.Internal.STypes
     Sirea.Internal.DiscreteTimedSeq
     Sirea.Internal.DemandMonitorData
     Sirea.Internal.SigType
     Sirea.Internal.LTypes
     Sirea.Internal.PTypes
-    Sirea.Internal.BImpl
     Sirea.Internal.BCross
     Sirea.Internal.BCompile
     Sirea.Internal.Thread

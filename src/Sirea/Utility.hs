@@ -2,14 +2,12 @@
 
 -- | Utility behaviors that lack a better home. 
 module Sirea.Utility
-    ( bprint, bprint_
-    , BUndefined(..), bundefined
-    -- , BUnit(..)
+    ( bprint
+    , bundefined
     ) where
 
 import Sirea.Behavior
 import Sirea.B (B)
-import Sirea.BCX (BCX, wrapBCX)
 import Sirea.Partition (P0)
 import Sirea.UnsafeOnUpdate 
 import Sirea.PCX 
@@ -37,11 +35,11 @@ import Control.Monad (when, liftM)
 -- | Print allows developer to provide show function (a -> String)
 -- and preserves the type of the input. This makes it easier to
 -- inject bprint into a behavior for debugging.
-bprint :: (a -> String) -> BCX w (S P0 a) (S P0 a)
-bprint showFn = bvoid $ bfmap showFn >>> bprint_
+bprint :: (Show a) => B (S P0 a) (S P0 a)
+bprint showFn = bvoid $ bfmap show >>> bprint_
   -- TODO: switch to demand monitor + agent resource 
   -- for console printing
-bprint_ :: BCX w (S P0 String) (S P0 ())
+bprint_ :: B (S P0 String) (S P0 String)
 bprint_ = unsafeOnUpdateBCX mkPrinter >>> bconst ()
     where mkPrinter cw = findInPCX cw >>= return . mbPrint . pb_list
           mbPrint _ _ Nothing = return ()
@@ -78,13 +76,8 @@ instance Resource P0 PrintBuffer where
 -- there is stable, active input signal, and a consumer for the 
 -- undefined result.
 -- 
-class BUndefined b where bundefined_ :: (SigInP p y) => b (S p ()) y
-
-bundefined :: (BUndefined b, BFmap b, SigInP p y) => b (S p x) y
-bundefined = bconst () >>> bundefined_
-
-instance BUndefined B where bundefined_ = undefinedB
-instance BUndefined (BCX w) where bundefined_ = (wrapBCX . const) undefinedB
+bundefined :: (SigInP p y) => B (S p x) y
+bundefined = bconst () >>> undefinedB
 
 -- undefinedB is only live code if there is demand on `y`.
 -- This would be unsafe without `y` being entirely in p.
@@ -94,7 +87,7 @@ instance BUndefined (BCX w) where bundefined_ = (wrapBCX . const) undefinedB
 -- active signal to the undefined behavior. (It's also okay if we never
 -- 
 undefinedB :: (SigInP p y) => B (S p ()) y 
-undefinedB = unsafeOnUpdateBL (return undefinedIO) >>> unsafeLinkB mkKeepAlive
+undefinedB = unsafeOnUpdateBL (const $ return undefinedIO) >>> unsafeLinkB mkKeepAlive
     where mkKeepAlive = return . sendNothing
           undefinedIO _ Nothing = return () -- inactive signal is okay
           undefinedIO _ (Just _) = undefined {- Haskell's undefined IO op -}

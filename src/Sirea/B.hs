@@ -1,89 +1,57 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving, MultiParamTypeClasses #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 
-
--- | Behaviors with IO.
+-- | This module provides the B type behaviors, the primary behavior
+-- kind exposed to clients of Sirea. These behaviors operate in IO 
+-- and with a global resource context (WCX). The runSireaApp action
+-- will begin executing a B type behavior. 
 --
--- BCX distributes a value representing an application's resource
--- context, a `PCX`, to every behavior component that needs it. The
--- resource context models volatile resources (threads, connections,
--- cache, demand monitors) and proxies to persistent resources.
---
--- Conceptually, BCX is behavior with ambient authority to external
--- resources and FFI, whereas type B should never be used for direct
--- access to a resource. (Type B is for computation only.)
---
--- Using PCX rather than Haskell global space is convenient via BCX,
--- and robust for multiple instances and plugins.
---
--- BCX and PCX enable declarative, type-driven resource acquisition
--- in Sirea. To have two behaviors observe and influence one GLUT
--- window, use the same type to identify the window resources. The
--- behaviors can access the PCX to hook elements together by type.
---
--- Types aren't essential to this design, but are convenient and
--- only weakly constrained by Haskell's module namespace. (You can
--- protect resources against casual access by hiding their types.)
+-- See Also:
+--   Sirea.Activate - to activate a B type behavior
+--   Sirea.PCX - for use of use of partitioned resource contexts
 -- 
--- NOTE: RDP is designed for secure programming in object capability
--- languages. A good object capability language will have convenient
--- syntax and module systems for distributing capabilities and for
--- controlling their distribution. This use of global state with BCX
--- irks me. But Haskell is not an object capability language. Sirea
--- needs to be convenient for Haskell.
--- 
-module Sirea.BCX
-    ( BCX
-    , unwrapBCX
-    , wrapBCX
+module Sirea.B
+    ( B
+    , wrapB
+    , unwrapB
     ) where
 
 import Prelude hiding ((.),id)
 import Data.Typeable
 import Control.Applicative
 import Control.Category
---import Control.Arrow
 import Sirea.Internal.BCross (crossB)
 import Sirea.Behavior
 import Sirea.Trans.Static 
 import Sirea.Partition
-import Sirea.PCX
-import Sirea.Internal.B0
+import Sirea.ResourceContext
+import Sirea.Internal.B0 -- B0 abstract type and instances
 
--- WithPCX is a functor and applicative of values that take a PCX.
-type WithPCX w = WrappedArrow (->) (PCX w)
-
-
--- | The BCX type is essentially:
---
---       type BCX w x y = PCX w -> B w x y
---
--- But wrapped for manipulation as a Behavior.
---
--- BCX is a behavior that can work in any world w, given a context
--- (GCX w) to represent or proxy resources in that world. 
-newtype B m x y = B { from0 :: StaticB (WithPCX w) B0 m x y } 
+-- | The primary, concrete behavior implementation provided by Sirea.
+newtype B x y = B { fromB0 :: StaticB (WrappedArrow (->) PCX W) (B0 IO) x y } 
     deriving ( Category, BFmap, BProd, BSum, BDisjoin
              , BZip, BSplit, BTemporal, BPeek, Behavior )
     -- NOT deriving: BDynamic, BCross
 
-instance Typeable2 (B m) where
-    typeOf2 _ = mkTyConApp tcBCX []
+instance Typeable2 B where
+    typeOf2 _b = mkTyConApp tcBCX [typeOf1 (getM _b)]
         where tcBCX = mkTyCon3 "sirea-core" "Sirea.BCX" "BCX"
+              getM :: B m x y -> m ()
+              getM _ = undefined
 
-unwrapBCX :: B m x y -> (PCX w -> B x y)
-unwrapBCX = unwrapArrow . unwrapStatic . fromBCX
+wrapB :: (PCX W -> B0 IO x y) -> B x y
+wrapB =  B . wrapStatic . WrapArrow
 
-wrapBCX :: (PCX w -> B x y) -> BCX w x y
-wrapBCX =  BCX . wrapStatic . WrapArrow
+unwrapB :: B x y -> (PCX W -> B0 IO x y)
+unwrapB = unwrapArrow . unwrapStatic . fromB0
 
-instance BCross (BCX w) where
-    bcross = wrapBCX crossB
+instance BCross B where
+    bcross = wrapB crossB
 
-instance BDynamic (BCX w) B where
-    beval = wrapBCX . const . beval
+instance BDynamic B (B0 IO) where
+    beval = wrapB . const . beval
 
-instance BDynamic (BCX w) (BCX w) where
-    beval dt = wrapBCX $ \ cw -> 
-        bfirst (bfmap (`unwrapBCX` cw)) >>> beval dt
+instance BDynamic B B where
+    beval dt = wrapB $ \ cw -> 
+        bfirst (bfmap (`unwrapB0` cw)) >>> beval dt
 
 

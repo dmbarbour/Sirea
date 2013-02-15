@@ -1,31 +1,14 @@
 {-# LANGUAGE GADTs, Rank2Types, MultiParamTypeClasses, DeriveDataTypeable #-}
 
--- | Build a Sirea application for embedding in an external loop.
+-- | This module contains the functions to run a Sirea application.
+-- The main function you'll need is 'runSireaApp'. The rest can be
+-- ignored unless you need to control the main thread loop or have
+-- other special needs.
 --
--- A Sirea application, SireaApp, is a behavior with trivial inputs
--- and outputs, but that will observe and influence its environment
--- through sensors, actuators, and shared state. Applications react
--- continuously to their environment, and may record information to
--- adjust future behavior. Each SireaApp is essentially an agent.
---
--- Build will compile an application into a (Stepper,Stopper) pair.
--- Those types are defined in Sirea.Partition. Stepper allows Sirea 
--- to be used with existing event loops, and Stopper allows halting
--- the application. If there is no need to hook Sirea into existing
--- event loops, use `runSireaApp`, which takes over calling thread.
---
--- The first runStepper operation activates the application, setting
--- the input signal (S P0 ()) to active at current wall-clock time.
--- Stability is several seconds, increased incrementally by later 
--- step operations. Stopper respects stability, so it takes seconds
--- to halt a SireaApp in that manner. 
---
-module Sirea.Build
-    ( buildSireaApp, buildSireaAppN
-    , runSireaApp, pulseSireaApp
-    , beginSireaApp
-    , SireaApp
+module Sirea.Activate
+    ( runSireaApp, pulseSireaApp
     , SireaAppObject(..)
+    , buildSireaApp, beginSireaApp
     , bUnsafeExit
     ) where
 
@@ -37,7 +20,7 @@ import Control.Concurrent.MVar
 import Control.Monad (unless, when, void, liftM)
 import Control.Exception (catch, assert, AsyncException)
 import Control.Concurrent (myThreadId, forkIO, killThread, threadDelay)
-import Sirea.Internal.BTypes
+import Sirea.Internal.B0Type
 import Sirea.Internal.LTypes
 import Sirea.Internal.BCompile(compileB)
 import Sirea.Internal.PTypes
@@ -55,32 +38,37 @@ import Sirea.Signal
 
 import Debug.Trace (traceIO)
 
--- | This is what an RDP application looks like in Sirea:
---
---     type SireaApp = forall w . BCX w (S P0 ()) (S P0 ())
---
--- Such a behavior is intended for side-effects. Internally, signals
--- orchestrate real-world resources: sensors, actuators, databases,
--- and user interfaces. Interaction with an application must occur
--- via shared resources. The BCX type provides a means to distribute 
--- shared resources (or proxies to them) through the app.
---
--- RDP applications are essentially agents. Agents can be composed
--- in parallel (&&&) to model multi-agent systems operating in a 
--- shared resource environment. Agents can be composed by switching
--- (+++ or bdynamic) to model modal behavior and process control. In
--- both cases, the agents can communicate and collaborate via shared
--- state, especially the blackboard metaphor. By adding resources to
--- the environment, agents can provide configuration and extension.
---
--- In most cases, you'll want just one SireaApp for the process, and
--- use composition to model concurrent or modal applications. For 
--- precise shutdown behavior, consider modeling a shutdown mode.
---
-type SireaApp = forall w . BCX w (S P0 ()) (S P0 ())
 
-unwrapSireaApp :: SireaApp -> BCX w (S P0 ()) (S P0 ())
-unwrapSireaApp app = app
+-- | The typical use case for Sirea is to simply runSireaApp as the
+-- main operation, with enough abstraction that the app itself is a
+-- one-liner. The application behavior is activated for side-effects
+-- and the response signal is ignored. 
+--
+--    main :: IO ()
+--    main = runSireaApp $ foo |*| bar |*| baz
+--
+-- RDP supports multi-agent composition with the |*| operator, where
+-- an agent is modeled as an RDP behavior that drops its response. A
+-- suggestion is to limit main to a composition of agents behaviors.
+--
+-- runSireaApp will activate the behavior and keep it active until 
+-- interrupted by any AsyncException in the initial thread. Ctrl+C
+-- will cause such a exception. After interruption, runSireaApp will
+-- run a few more heartbeats (a fraction of a second) while shutting
+-- down gracefully, then return. (A second interrupt will abort the 
+-- effort for graceful shutdown.)
+--
+runSireaApp :: B (S P0 ()) y -> IO ()
+runSireaApp app = buildSireaApp (app >>> btrivial) >>= beginSireaApp
+
+-- | pulseSireaApp will simply runSireaApp very briefly, a fraction
+-- of a second. This is potentially useful for testing, and enables
+-- RDP to be wielded much like a procedure call.
+pulseSireaApp :: B (S P0 ()) y -> IO ()
+pulseSireaApp app = 
+    buildSireaApp (app >>> btrivial) >>= \ so ->
+    (runStopper . sireaStopper) so >>
+    beginSireaApp so
 
 -- | SireaAppObject manages life cycle of an initialized SireaApp:
 -- 
@@ -91,7 +79,8 @@ unwrapSireaApp app = app
 -- These types are defined in the Partition and PCX modules. The P0
 -- partition is thus similar to other partitions, excepting Stopper
 -- is provided to halt the whole app. Stopper is not instantaneous;
--- continue to runStepper until Stopper event is executed.
+-- continue to runStepper until Stopper callback event is executed
+-- to support graceful shutdown.
 --
 -- (*) It is not recommended to actually use sireaContext, since any
 -- explicit use is difficult to abstract and reuse. It is included 
@@ -103,8 +92,8 @@ data SireaAppObject = SireaAppObject
     }
 
 -- AppPeriodic data is used internally on the man clock step.
-data AppPeriodic w = AppPeriodic 
-    { ap_cw     :: !(PCX w)
+data AppPeriodic = AppPeriodic 
+    { ap_cw     :: !(PCX W)
     , ap_tc0    :: !(TC)
     , ap_gs     :: !(GobStopper)
     , ap_pulse  :: !(IO ())
@@ -123,29 +112,16 @@ data AppPeriodic w = AppPeriodic
 -- (Explicitly hooking up resources detracts from the declarative 
 -- programming experience, and is not readily extensible.)
 --
-buildSireaApp :: SireaApp -> IO SireaAppObject
-buildSireaApp = buildSireaAppN defaultN
-
--- Default name for a Sirea application.
--- This has no real meaning. 
-defaultN :: String
-defaultN = "sirea"
-
--- | As buildSireaApp, except with a distinguishing name. Necessary
--- if a single Haskell process uses multiple Sirea applications, to
--- distinguish those applications, e.g. to avoid interference for 
--- persistent state resources.
-buildSireaAppN :: String -> SireaApp -> IO SireaAppObject
-buildSireaAppN name app = 
-    -- new generic context; fresh global space for the app
-    newPCX name >>= \ cw -> 
-    getPCX0 cw >>= \ cp0 ->
+buildSireaApp :: B (S P0 ()) S1 -> IO SireaAppObject
+buildSireaApp app = 
+    newPCX [] >>= \ cw -> -- new global resource context
+    getPCX0 cw >>= \ cp0 -> -- partition context P0
     findInPCX cp0 >>= \ tc0 ->
     writeIORef (tc_init tc0) True >>
     -- compute behavior in the new context
     -- add a phase delay for consistency with bcross updates
-    let bcx = (wrapBCX phaseDelayB) >>> (unwrapSireaApp app) in
-    let b   = unwrapBCX bcx cw in
+    let bcx = wrapB phaseDelayB >>> app in
+    let b   = unwrapB bcx cw in
     -- compile behavior, dropping response
     let (_, mkLn) = compileB b (LnkDUnit ldt_zero) LnkDead in
     mkLn >>= \ lnk0 ->
@@ -155,13 +131,13 @@ buildSireaAppN name app =
     when bDead ((runStopper . sireaStopper) sireaAppObj) >> 
     return sireaAppObj
 
-getPCX0 :: PCX w -> IO (PCX P0)
+getPCX0 :: PCX W -> IO (PCX P0)
 getPCX0 = findInPCX
   
 -- Build from a LnkUp, meaning there is something listening to the
 -- signal. This doesn't actually initialize the signal, but does set
 -- the app to kickstart on the first runStepper operation.
-buildSireaBLU :: PCX w -> LnkUp () -> IO SireaAppObject
+buildSireaBLU :: PCX W -> LnkUp () -> IO SireaAppObject
 buildSireaBLU cw lu =
     newIORef emptyStopData >>= \ rfSD ->
     getPCX0 cw >>= \ cp0 ->
@@ -187,7 +163,7 @@ buildSireaBLU cw lu =
 -- pulseSireaApp depends on stop condition remaining unchecked until
 -- maintenance phases, so beginApp will always activate the app.
 --
-beginApp :: PCX w -> IORef StopData -> LnkUp () -> IO ()
+beginApp :: PCX W -> IORef StopData -> LnkUp () -> IO ()
 beginApp cw rfSD lu = 
     findInPCX cw >>= \ gs ->
     getPCX0 cw >>= \ cp0 ->
@@ -220,7 +196,7 @@ schedule dt op = assert (usec > 0) $ void $
 -- active signal on a regular basis; performed within main thread.
 -- At any given time, one maintenance operation is either queued in
 -- the main thread or delayed by a 'schedule' thread.
-maintainApp :: AppPeriodic w -> T -> IO ()
+maintainApp :: AppPeriodic -> T -> IO ()
 maintainApp apw tS0 = beginPulse where
     lu = ap_luMain apw 
     tc0 = ap_tc0 apw
@@ -254,7 +230,7 @@ maintainApp apw tS0 = beginPulse where
 -- After we set the main signal to inactive, we must still wait for
 -- real-time to catch up, and should run a final few heartbeats to
 -- provide any pulse actions.
-haltingApp :: AppPeriodic w -> T -> IO ()
+haltingApp :: AppPeriodic -> T -> IO ()
 haltingApp apw tFinal = 
     ap_pulse apw >> -- heartbeat
     getTCTime tc0 >>= \ tNow ->
@@ -270,7 +246,7 @@ haltingApp apw tFinal =
 -- at this point we've run the all-stop for all other threads,
 -- so we're just biding time until threads report completion.
 -- There might not be any more heartbeats at this point.
-finalizingApp :: AppPeriodic w -> IO ()
+finalizingApp :: AppPeriodic -> IO ()
 finalizingApp apw =
     ap_pulse apw >> -- heartbeat (potentially last)
     readIORef (ap_sd apw) >>= \ sd ->
@@ -279,31 +255,7 @@ finalizingApp apw =
         let tc0 = ap_tc0 apw in
         schedule dtHeartbeat (addTCRecv tc0 nextStep)
 
--- | If you don't need to run the stepper yourself (that is, if you
--- don't need full control of the main thread event loop), consider 
--- use of runSireaApp. 
---
--- This will run the application until killThread or AsyncException,
--- such as ctrl+c interrupt. At that point it will try to shutdown 
--- gracefully. Use of `bUnsafeExit` causes an async killThread from
--- within the application behavior.
---
---    runSireaApp app = buildSireaApp app >>= beginSireaApp
---
-runSireaApp :: SireaApp -> IO ()
-runSireaApp app = buildSireaApp app >>= beginSireaApp
 
--- | pulseSireaApp will simply runSireaApp very briefly, a small
--- fraction of a second. This is intended to be useful for testing,
--- as it allows working with an RDP application in a manner similar
--- to a command or procedure call.
-pulseSireaApp :: SireaApp -> IO ()
-pulseSireaApp app = 
-    -- stop condition isn't checked until maintenance phases, so we
-    -- can stop before we start to get a small activity cycle.
-    buildSireaApp app >>= \ so ->
-    (runStopper . sireaStopper) so >>
-    beginSireaApp so
 
 -- | beginSireaApp activates a forever loop to process the SireaApp.
 -- Stopped by asynchronous exception, such as killThread or ctrl+c 
@@ -344,7 +296,7 @@ basicSireaAppLoop rfContinue stepper =
 -- use dynamic behaviors and explicitly switch to shutdown behavior,
 -- which could then perform this exit.
 --
-bUnsafeExit :: BCX w (S P0 ()) (S P0 ())
+bUnsafeExit :: B (S P0 ()) (S P0 ())
 bUnsafeExit = unsafeOnUpdateBCX $ \ cw -> 
     getPCX0 cw >>= \ cp0 ->
     inExitR <$> findInPCX cp0 >>= \ rfKilled ->
