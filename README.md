@@ -97,11 +97,13 @@ Reactive Demand Programming offers many wonderful, high level features that make
 
 The weaknesses of Sirea RDP belong more to Sirea than to RDP. 
 
-* Developers must use a point-free style for RDP behaviors in Sirea. This a very rewarding style, and the full power of Haskell functions is still available for static information (~staged programming). But newcomers seem to find point-free intimidating. While I'd like to answer this concern with a higher layer language that can compile to behaviors, it is low priority for Sirea.
+* Developers must use a point-free style for RDP behaviors in Sirea. This a very rewarding style once you become familiar with it, and the full power of Haskell functions is still available (via bfmap, beval). But newcomers often find point-free intimidating. 
 
-* RDP is designed for [object capability model](http://en.wikipedia.org/wiki/Object-capability_model) systems, using dynamic behaviors as runtime composable capabilities. (This is reflected, for example, in having fine-grained capabilities for many resources.) Sirea, however, is designed to be convenient in context of Haskell's module and type systems, and uses types to obtain ambient resources. I am not entirely comfortable with this tradeoff; it isn't necessary if one reifies the module and linking system (e.g. service registry and matchmaker). 
+* RDP is designed for [object capability model](http://en.wikipedia.org/wiki/Object-capability_model) systems, using dynamic behaviors as runtime composable capabilities. Sirea, however, is designed to be convenient in Haskell, and supports ambient, typeful access to resources. (Object capability model is great, but the module, FFI, and linking systems really must be designed for it.)
 
-* Sirea is sensitive to the OS clock. RDP requires robust, synchronized, monotonic clocks to work effectively, but is designed to tolerate a few milliseconds drift. Sirea is robust to small shifts in OS clock, but large sudden shift may cause problematic behavior. It is best to use Sirea in conjunction with robust time services for the OS.
+* Sirea is sensitive to the OS clock. Sirea and RDP can tolerate a few milliseconds drift, but ideally need robust, monotonic, well synchronized clocks. It is best to use Sirea in conjunction with a time services for the OS.
+
+* Sirea attempts to recognize and logically deactivate for the duration of a suspended state (e.g. when the laptop sleeps), but the current implementation seems to have a high heap overhead when recovering. I'm working on this one.
 
 * Performance of dynamic behaviors is poor - i.e. expensive install and maintain; difficult to optimize and anticipate. RDP is designed with an assumption of having very few, relatively stable 'layers' of dynamic behavior, e.g. for staged metaprogramming. Sirea can handle that much. More will probably take a dedicated RDP language or EDSL that can perform partial evaluations, tracing, or other cross-layer optimizations.
 

@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeOperators, EmptyDataDecls, DeriveDataTypeable  
+{-# LANGUAGE TypeOperators, EmptyDataDecls, DeriveDataTypeable, 
     MultiParamTypeClasses, FlexibleInstances #-}
 
 module Sirea.Internal.STypes
@@ -105,8 +105,6 @@ buildMembr = sigMembr
 -- | (SigInP p x) constrains that complex signal x exists entirely
 -- in partition p. This avoids need for implicit bcross in disjoin
 -- and eval behaviors, while allowing them to be reasonably generic.
---
--- Not intended for extension by clients of Sirea.
 class (SigMembr x) => SigInP p x
 instance SigInP p (S p x)
 instance (SigInP p x, SigInP p y) => SigInP p (x :&: y)
@@ -115,24 +113,8 @@ instance (SigInP p x, SigInP p y) => SigInP p (x :|: y)
 -- would like something that `selects` a signal in p, and extracts a
 -- unit signal, in a generic way... that would certainly make disjoin
 -- easier to express. This sort of type-driven program would be easy
--- to express in Coq...
-
--- Data.Typeable support. 
-{-
-instance Typeable2 S where
-    typeOf2 _ = mkTyConApp tycSig []
-        where tycSig = mkTyCon3 "sirea-core" "Sirea.Behavior" "S"
-
-instance Typeable2 (:|:) where
-    typeOf2 _ = mkTyConApp tycSum []
-        where tycSum = mkTyCon3 "sirea-core" "Sirea.Behavior" "(:|:)"
-
-instance Typeable2 (:&:) where
-    typeOf2 _ = mkTyConApp tycProd []
-        where tycProd = mkTyCon3 "sirea-core" "Sirea.Behavior" "(:&:)"
-
--}
-
+-- to express in Coq. But I'd also want to optimize which signal is
+-- selected (i.e. the cheapest one to receive).
 
 
 -- (V x) lifts collection processing to Sirea's reactive layer.

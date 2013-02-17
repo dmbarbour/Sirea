@@ -28,7 +28,6 @@
 -- 
 module Sirea.Clock
     ( ClockSpec(..)
-    , HasClock(..)
     , bclockOfFreq, bclockOfFreqAndPhase
     , bclockHours, bclockMinutes, bclockSeconds
     , freqToClockSpec, freqAndPhaseToClockSpec
@@ -38,9 +37,8 @@ module Sirea.Clock
 import Control.Exception (assert)
 import Data.Ratio
 import Sirea.B
-import Sirea.BCX
 import Sirea.Time
-import Sirea.Link
+import Sirea.UnsafeLink
 import Sirea.Behavior
 import Sirea.Signal
 
@@ -76,28 +74,20 @@ data ClockSpec = ClockSpec
     , clock_offset :: !DT
     } deriving (Show,Eq)
 
-class HasClock b where
-    -- | Observe a logical clock of a given ClockSpec. 
-    bclock :: ClockSpec -> b (S p ()) (S p T)
-
--- note: clock is conceptually 'ambient' resource, so require BCX
--- instance HasClock B where bclock = clockB
-
-instance HasClock (BCX w) where bclock = wrapBCX . const . clockB
-
--- clockB will implement a clock via unsafe
-clockB :: ClockSpec -> B (S p ()) (S p T)
-clockB cs =
+-- | Observe a logical clock of a given ClockSpec. 
+bclock :: (Partition p) => ClockSpec -> B (S p ()) (S p T)
+bclock cs =
     assert (clockSpecValid cs) $ 
     unsafeLinkB clockLnk
-    where clockLnk = return . buildFn
+    where clockLnk _ = return . buildFn
           buildFn LnkDead = LnkDead
           buildFn (LnkSig lu) = LnkSig (clockFn cs lu)
 
 clockFn :: ClockSpec -> LnkUp T -> LnkUp ()
-clockFn cs lu = LnkUp touch update idle where
+clockFn cs lu = LnkUp touch update idle cycle where
     touch = ln_touch lu
-    idle tS = ln_idle lu tS
+    idle  = ln_idle lu
+    cycle = ln_cycle lu
     update tS tU su =
         let sClock = clockSig cs tU in
         let su' = s_mask sClock su in
@@ -159,19 +149,19 @@ timeAfterTime cs t0 = t0 `seq` (t1:timeAfterTime cs t1)
 -- Note that high frequencies will become a space and CPU burden.
 -- The practical period for a clock really ranges from a few minutes
 -- down to a millisecond or so.   
-bclockOfFreq :: (HasClock b) => Rational -> b (S p ()) (S p T)
+bclockOfFreq :: Rational -> B (S p ()) (S p T)
 bclockOfFreq = bclock . freqToClockSpec
 
 -- | Frequency is updates per second, and phase how far into each
 -- period we perform the update. E.g. if frequency was 2 and phase
 -- is 0.5, then we update twice per second at 0.25 and 0.75. 
 -- Phase must be bounded by [0.0,1.0). 
-bclockOfFreqAndPhase :: (HasClock b) => Rational -> Rational -> b (S p ()) (S p T)
+bclockOfFreqAndPhase :: Rational -> Rational -> B (S p ()) (S p T)
 bclockOfFreqAndPhase dFreq dPhase = bclock $ freqAndPhaseToClockSpec dFreq dPhase
 
 -- | A few common low-frequency clocks. These each report the full time, 
 -- but do so at a very slow rate (relative to processor speeds).
-bclockHours, bclockMinutes, bclockSeconds :: (HasClock b) => b (S p ()) (S p T)
+bclockHours, bclockMinutes, bclockSeconds :: B (S p ()) (S p T)
 bclockHours   = bclock csHours 
 bclockMinutes = bclock csMinutes
 bclockSeconds = bclock csSeconds

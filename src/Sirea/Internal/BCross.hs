@@ -2,10 +2,8 @@
              DeriveDataTypeable
   #-}
 
--- | BCross is the implementation of cross for B and BCX.
---
--- It also contains types associated with partitions and crossB, 
--- i.e. used in BCX.
+-- | BCross is the implementation of cross for B. To avoid cyclic
+-- module dependencies, it is represented as an unwrapped B type.
 --
 -- Sirea makes a promise called "snapshot consistency", which means
 -- that partitions operate on a frozen picture of other partitions.
@@ -22,10 +20,10 @@
 -- update has an arrive-by date. If that date is far in the future by
 -- many seconds, then it could be delayed a little. For snapshot 
 -- consistency, a whole batch could be delayed, or nothing. However,
--- I have decided to NOT pursue this because, as a solution, it is
--- not very robust under extension (adding code to observe another 
--- resource in a partition resource could break existing code). The
--- cross behavior will drop insignificant stability updates.
+-- the whole-batch choke isn't very robust to extension; developers
+-- shouldn't depend on it, so I've decided to eliminate it. BCross
+-- will, however, drop insignificant stability updates (less than a
+-- heartbeat) to avoid trivial activations.
 --
 -- BCross uses a bounded buffer - a limited number of batches may be
 -- "in flight" between any two partitions. This limit helps ensure 
@@ -39,12 +37,12 @@
 -- more efficient, enabling it to catch back up.
 -- 
 module Sirea.Internal.BCross 
-    ( crossB
-    , phaseDelayB
+    ( crossB0
     , GobStopper(..)
     , runGobStopper
-    , OutBox
     ) where
+
+import Prelude hiding (cycle)
 
 import Data.Typeable
 import Data.Function (fix)
@@ -54,16 +52,17 @@ import Control.Exception (assert)
 import Control.Concurrent.MVar 
 import Control.Monad (join, unless, when)
 
-import Sirea.Internal.BTypes
+import Sirea.Internal.B0Type
 import Sirea.Internal.STypes
 import Sirea.Internal.LTypes
 import Sirea.Internal.PTypes
-import Sirea.Internal.BImpl (phaseUpdateB)
+import Sirea.Internal.B0Impl (phaseUpdateB0)
 import Sirea.Internal.PulseSensor (initPulseListener)
 import Sirea.Internal.Tuning ( batchesInFlight, tAncient, dtInsigStabilityUp)
 import Sirea.Partition
 import Sirea.PCX
 import Sirea.Behavior
+
 import Sirea.Time
 
 type Event = IO ()
@@ -74,102 +73,145 @@ type Work = IO ()
 --    allow updates on input to buffer and batch (bounded buffer)
 -- crossB is eliminated if typeOf p1 == typeOf p2
 --
-crossB :: (Partition p1, Partition p2) => PCX w -> B (S p1 x) (S p2 x)
-crossB cw = fix $ \ b ->
+crossB0 :: (Partition p1, Partition p2) => PCX W -> B0 IO (S p1 x) (S p2 x)
+crossB0 cw = fix $ \ b ->
     let (p1,p2) = getPartitions b in
-    if (typeOf p1 == typeOf p2) 
-      then B_mkLnk tr_fwd (return . fnStay)
-      else sendB cw p1 p2 >>> phaseDelayB cw
+    if (typeOf p1 == typeOf p2) -- are we sitting still
+      then falseCrossB0
+      else sendB0 cw p1 p2 >>> phaseUpdateB0 
+
+-- falseCross is called when crossB start and stop partitions are
+-- the same. Basically, it is an id function. 
+falseCrossB0 :: (Monad m) => B0 m (S p1 x) (S p2 x)
+falseCrossB0 = B0_mkLnk lcX lnX
+    lcX (LnkSig (LCX lc)) = (LnkSig (LCX lc)) -- type change
+    lcX LnkDead = LnkDead
+    lnX _ (LnkSig lu) = return (LnkSig lu) -- type change
+    lnX _ LnkDead = return LnkDead
 
 -- this is a total hack in haskell to access typesystem data
-getPartitions :: B (S p1 x) (S p2 x) -> (p1,p2)
+getPartitions :: (Partition p1, Partition p2) 
+              => B0 IO (S p1 x) (S p2 x) -> (p1,p2)
 getPartitions _ = (undefined,undefined)
 
-fnStay :: Lnk (S p x) -> Lnk (S p' x)
-fnStay LnkDead = LnkDead
-fnStay (LnkSig lu) = (LnkSig lu)
 
--- sendB, if active (not dead code), will
+-- phaseUpdateB0 is the receiver-side for `bcross`. Multiple updates
+-- may be received due to multiple batches in-flight (i.e. when slow
+-- consumer receives from fast sender). phaseUpdateB0 causes all the
+-- updates to "piggyback" into one larger update, which is processed
+-- with greater efficiency (due to eliminating rework) compared to
+-- processing the updates independently. This should result in subtle
+-- self-regulation of partitions for fairness. I've not measured the 
+-- impact, and bounded buffers have a much stronger effect.
 --
---   * create partitions if they don't already exist
---   * batch multiple updates to one partition (across signals)
---   * delay operation to runTCSend phase
---
--- sendB will also flag work as urgent or non-urgent, which allows
--- simple choking when a batch consists fully of non-urgent updates.
---
-sendB :: (Partition p1, Partition p2) 
-      => PCX w -> p1 -> p2 -> B (S p1 x) (S p2 x)
-sendB cw p1 p2 = B_mkLnk tr_fwd lnkSend
-    where lnkSend = mkSend cw p1 p2
+phaseUpdateB0 :: (Monad m) => B0 m (S p x) (S p x)
+phaseUpdateB0 = B0_mkLnk id mkLnPhase
 
-mkSend :: (Partition p1, Partition p2) 
-       => PCX w -> p1 -> p2 -> Lnk (S p2 x) -> IO (Lnk (S p1 x))
-mkSend _ _ _ LnkDead = return LnkDead
-mkSend cw p1 p2 (LnkSig lu) = 
-    initPartition p1 cw >> -- create partition thread p1 (idempotent)
-    initPartition p2 cw >> -- create partition thread p2 (idempotent)
-    newIORef (StableT tAncient) >>= \ rfChoke -> -- track stability to compute urgency
-    mkOBSend cw p1 p2 >>= \ obSend ->
-    let touch = return () in
-    let idle tS = 
-            readIORef rfChoke >>= \ tS0 ->
-            when (urgentStability tS0 tS) $
-                writeIORef rfChoke tS >>
-                obSend (ln_idle lu tS)
-    in
-    let update tS tU su =
-            writeIORef rfChoke tS >>
-            obSend (ln_update lu tS tU su)
-    in
-    let luSend = LnkUp touch update idle in
-    return (LnkSig luSend)    
+mkLnPhase :: (Monad m) => LCaps m (S p x) -> Lnk m (S p x) -> m (Lnk m (S p x))
+mkLnPhase (LnkSig (LCX lc)) (LnkSig lu) =
+    let cc = lc_cc lc in    
+    cc_getSched cc >>= \ pd ->
+    cc_newRef cc NoUpdate >>= \ rfSu ->
+    let lu' = mkLuPhase rfSu pd lu in 
+    return (LnkSig lu')
+mkLnPhase _ _ = return LnkDead
+
+data UpdateRecord a 
+    = NoUpdate 
+    | IdleUpdate !StableT 
+    | FullUpdate !StableT !T !(Sig a)
+
+mkLuPhase :: (Monad m) => Ref m (UpdateRecord a) 
+          -> Sched m -> LnkUp m a -> LnkUp m a
+mkLuPhase rf pd lu = LnkUp touch update idle cycle where
+    touch = return () -- touch happens on received update
+    cycle _ = return () -- no cycles can cross partitions
+    maybeSchedule NoUpdate = 
+        -- first 'maybeSchedule' op in step
+        onUpdPhase pd deliver >> 
+        ln_touch lu
+    maybeSchedule _ = return ()
+    deliver =
+        readRef rf >>= \ rec ->
+        writeRef rf NoUpdate >>
+        case rec of
+            NoUpdate -> error "unexpected update record state!"
+            IdleUpdate tS -> ln_idle lu tS
+            FullUpdate tS tU su -> ln_update lu tS tU su
+    idle tS =
+        readRef rf >>= \ rec ->
+        maybeSchedule rec >>
+        let rec' = case rec of
+                FullUpdate _ tU su -> FullUpdate tS tU su
+                _ -> IdleUpdate tS
+        in
+        writeRef' rf rec'
+    update tS tU su =
+        readRef rf >>= \ rec ->
+        maybeSchedule rec >>
+        let rec' = case rec of
+                FullUpdate _ tU0 su0 ->
+                    if (tU0 >= tU) 
+                        then FullUpdate tS tU su 
+                        else FullUpdate tS tU0 (s_switch' su0 tU su)
+                _ -> FullUpdate tS tU su
+        in
+        writeRef' rf rec'
+
+
+-- sendB0, if active (not dead code), is the output port between
+-- partitions. It manages mailboxes, one for each remote partition.
+-- All updates computed in a step will be added to the same box as
+-- one 'batch' to be delivered at the end of the current step. Some
+-- insignificant stability updates may be dropped. 
+--
+-- Partitions will be created if they don't already exist.
+--
+sendB0 :: (Partition p1, Partition p2) 
+      => PCX W -> p1 -> p2 -> B0 IO (S p1 x) (S p2 x)
+sendB0 cw p1 p2 = wrapB $ \ cw -> B0_mkLnk lcSend lnSend where
+    lcSend LnkDead = LnkDead
+    lcSend (LnkSig (LCX lc)) =
+        -- primarily just need to change schedulers
+        let getSched' = getPCX p2 cw >>= getPSched in
+        let cc' = CC { cc_getSched = getSched', cc_newRef = newRefIO } in
+        let lc' = lc { lc_cc = cc' } in
+        LnkSig (LCX lc')
+    lnSend _ LnkDead = return LnkDead
+    lnSend _ (LnkSig lu) = 
+        initPartition p1 cw >>
+        initPartition p2 cw >>
+        getOBSend cw p1 p2 >>= \ obSend ->
+        newIORef (StableT tAncient) >>= \ rfT ->
+        let lu' = luSend rfT obSend lu in
+        return (LnkSig lu')
+
+luSend :: IORef StableT -> OBSend -> LnkUp m x -> LnkUp m x
+luSend rfT obSend lu = LnkUp touch update idle cycle where
+    touch = return () -- touches stop at partition boundary
+    cycle _ = return () -- cycles are partition-local
+    idle tS =
+        readIORed rfT >>= \ tS0 ->
+        when (urgentStability tS0 tS) $
+            writeIORef rfT tS >>
+            obSend (ln_idle lu tS)
+    update tS tU su =
+        tS `seq` writeIORef rfT tS >>
+        obSend (ln_update tS tU su)
 
 -- | stability updates are pretty much all or nothing; a minor
 -- stability update can be ignored, but a big one needs to be
 -- processed to support GC.
 urgentStability :: StableT -> StableT -> Bool
-urgentStability DoneT _ = False
+urgentStability DoneT tf = False
 urgentStability _ DoneT = True
 urgentStability (StableT t0) (StableT tf) =
     (tf > (t0 `addTime` dtInsigStabilityUp))
 
-{-
--- | every update must be delivered, but we aren't always in a rush
--- to deliver updates. If the update only applies to some distant
--- future, we're free to delay the update until it is closer to an
--- appropriate time. By regulating this behavior, it is possible to
--- keep most temporal-recursive cycles in Sirea from running too far
--- ahead of real-time (which costs memory).
-updateUrgency :: StableT -> T -> T
-updateUrgency DoneT _ = ASAP
-updateUrgency (StableT tS) tU =
-    let tCut = tU `subtractTime` dtFutureChoke in
-    if (tS >= tCut) then tCut else
-    let dt = tCut `diffTime` tS in
-    assert (dt > 0) $
-    (tS `addTime` (dt*0.25))
--}
-
--- | phaseDelayB delays updates a phase within runStepper. The idea
--- is to touch a bunch of updates in one run before executing them 
--- later run, potentially eliminating redundant updates. Use of 
--- phaseDelayB may also accumulate multiple updates, which is useful
--- if phaseDelayB runs in the runStepper receive phase.
-phaseDelayB :: (Partition p) => PCX w -> B (S p x) (S p x)
-phaseDelayB cw = fix $ \ b -> 
-    let (p,_) = getPartitions b in
-    let mkPQ =
-            getPCX p cw >>= \ cp ->
-            getTC cp >>= \ tc ->
-            return (addTCWork tc)
-    in
-    phaseUpdateB mkPQ
-
 getTC :: (Partition p) => PCX p -> IO TC
 getTC = findInPCX 
 
-getPCX :: (Typeable p) => p -> PCX w -> IO (PCX p)
+getPCX :: (Typeable p) => p -> PCX W -> IO (PCX p)
 getPCX _ = findInPCX
 
 -- | the GobStopper is collection of all the Stopper values in an
@@ -203,7 +245,7 @@ runGobStopper gs ev =
 -- behaviors) when we cross into another partition. It ensures the
 -- partition exists before we step into it. Idempotent and atomic.
 -- (Must be atomic if dynamic behaviors may declare partitions).
-initPartition :: (Partition p) => p -> PCX w -> IO ()
+initPartition :: (Partition p) => p -> PCX W -> IO ()
 initPartition p cw =
     getPCX p cw >>= \ cp ->
     getTC cp >>= \ tc ->
@@ -260,14 +302,14 @@ instance (Partition p0, Partition p) => Resource p0 (OutBox p) where
 -- batch level enables  
 --
 type OBSend = Work -> IO ()
-mkOBSend :: (Partition p1, Partition p2) => PCX w -> p1 -> p2 -> IO OBSend
-mkOBSend cw p1 p2 = mkOBSend' <$> tc1 <*> ob <*> tc2 where    
+getOBSend :: (Partition p1, Partition p2) => PCX w -> p1 -> p2 -> IO OBSend
+getOBSend cw p1 p2 = getOBSend' <$> tc1 <*> ob <*> tc2 where    
     tc1 = getPCX p1 cw >>= getTC
     ob  = getOB cw p1 p2
     tc2 = getPCX p2 cw >>= getTC
 
-mkOBSend' :: TC -> OutBox p2 -> TC -> OBSend
-mkOBSend' tc1 ob tc2 = obwAddWork where
+getOBSend' :: TC -> OutBox p2 -> TC -> OBSend
+getOBSend' tc1 ob tc2 = obwAddWork where
       obwAddWork work =
         readIORef (ob_state ob) >>= \ lw ->
         let bFirst = null lw in

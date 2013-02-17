@@ -133,7 +133,6 @@ findByNameInPCX' nm cp = mfix $ \ rForTypeOnly ->
        else readMVar mvk >>= \ dynR ->
             let Just r = fromDynamic dynR in
             return r
-    where badR = error "illegal PCX state"
 
 -- returns (MVar for element, First lookup (i.e. empty mvar))
 -- The MVar is only written to on the first lookup.

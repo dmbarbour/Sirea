@@ -82,6 +82,9 @@ Library
     Sirea.Internal.CC
     Sirea.Internal.B0Type
     Sirea.Internal.B0Impl
+    Sirea.Internal.B0Compile
+    Sirea.Internal.B0Dynamic
+    Sirea.Internal.B0
     Sirea.Internal.STypes
     Sirea.Internal.DiscreteTimedSeq
     Sirea.Internal.DemandMonitorData
@@ -89,9 +92,7 @@ Library
     Sirea.Internal.LTypes
     Sirea.Internal.PTypes
     Sirea.Internal.BCross
-    Sirea.Internal.BCompile
     Sirea.Internal.Thread
-    Sirea.Internal.BDynamic
     Sirea.Internal.PulseSensor
     Sirea.Internal.Tuning
 

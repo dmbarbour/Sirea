@@ -47,7 +47,7 @@ import Control.Monad (unless, when)
 import Control.Exception (assert)
 import Sirea.Signal
 import Sirea.Time
-import Sirea.Link
+import Sirea.UnsafeLink
 import Sirea.Partition
 import Sirea.PCX
 import Sirea.Internal.Tuning (dtDaggrHist, dtMdistHist)
@@ -302,7 +302,7 @@ data MDD z = MDD
 --       observer-signal updates. It is cleared on next touch.
 
 data MLN z = MLN 
-    { mln_link      :: !(LnkUp z)           -- observer update callbacks
+    { mln_link      :: !(LnkUp IO z)        -- observer update callbacks
     , mln_signal    :: !(SigSt ())          -- observer query (the mask)
     , mln_tmup      :: !(Maybe T)           -- tracks observed update time
     }
@@ -340,7 +340,7 @@ pollMonitorDist md =
 -- A cleanup of the MonitorDist is performed every step it activates
 -- or possibly also on a flush.
 --
-primaryMonitorLnk :: MonitorDist z -> LnkUp z
+primaryMonitorLnk :: MonitorDist z -> LnkUp IO z
 primaryMonitorLnk md = LnkUp touch update idle where
     touch = 
         readIORef (md_data md) >>= \ mdd ->

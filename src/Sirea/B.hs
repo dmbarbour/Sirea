@@ -19,11 +19,11 @@ import Prelude hiding ((.),id)
 import Data.Typeable
 import Control.Applicative
 import Control.Category
-import Sirea.Internal.BCross (crossB)
+import Sirea.Internal.BCross (crossB0)
 import Sirea.Behavior
 import Sirea.Trans.Static 
 import Sirea.Partition
-import Sirea.ResourceContext
+import Sirea.PCX
 import Sirea.Internal.B0 -- B0 abstract type and instances
 
 -- | The primary, concrete behavior implementation provided by Sirea.
@@ -45,7 +45,7 @@ unwrapB :: B x y -> (PCX W -> B0 IO x y)
 unwrapB = unwrapArrow . unwrapStatic . fromB0
 
 instance BCross B where
-    bcross = wrapB crossB
+    bcross = wrapB crossB0
 
 instance BDynamic B (B0 IO) where
     beval = wrapB . const . beval

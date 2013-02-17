@@ -9,10 +9,12 @@
 module Sirea.Internal.CC 
     ( CC(..)
     , Ref(..), writeRef', modifyRef, modifyRef'
+    , RefIO, newRefIO
     , Sched(..)
-    }
+    ) where
 
 import Sirea.Time (T)
+import Data.IORef
 
 -- | CC is a set of capabilities and similar features processed on
 -- the forward compilation pass through a behavior. This includes
@@ -21,8 +23,13 @@ import Sirea.Time (T)
 --
 -- Basically, these are the 'common computational capabilities' that
 -- are considered ambient in an application.
+--
+-- Note that CC's must generally be constructed purely. This is why
+-- 'getSched' is provided as an effect, since it generally needs to
+-- tap PCX at bcross.
+--
 data CC m = CC 
-    { cc_sched     :: !(Sched m)
+    { cc_getSched  :: !(m (Sched m)) 
     , cc_newRef    :: !(forall a . a -> m (Ref m a))
     }
 
@@ -37,12 +44,19 @@ writeRef' :: Ref m a -> a -> m ()
 writeRef' rf a = a `seq` writeRef rf a
 
 -- | modify a reference.
-modifyRef :: Ref m a -> (a -> a) -> m ()
+modifyRef :: (Monad m) => Ref m a -> (a -> a) -> m ()
 modifyRef rf fn = readRef rf >>= writeRef rf . fn
 
 -- | strict modify reference
-modifyRef' :: Ref m a -> (a -> a) -> m ()
+modifyRef' :: (Monad m) => Ref m a -> (a -> a) -> m ()
 modifyRef' rf fn = readRef rf >>= writeRef' rf . fn
+
+type RefIO a = Ref IO a
+
+newRefIO :: a -> IO (RefIO a)
+newRefIO a =
+    newIORef a >>= \ rf ->
+    return (Ref (readIORef rf) (writeIORef rf))
 
 -- | Sched is a useful set of capabilities for scheduling actions
 -- for a thread or resource. 

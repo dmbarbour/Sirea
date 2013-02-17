@@ -33,15 +33,14 @@ import Data.Function (fix)
 
 import Sirea.Signal
 import Sirea.Behavior
-import Sirea.BCX
+import Sirea.B
 import Sirea.PCX
 import Sirea.Partition
-import Sirea.Link
+import Sirea.UnsafeLink
 import Sirea.Time
 
-import Sirea.Internal.BTypes
-import Sirea.Internal.BCompile (compileB)
-import Sirea.Internal.BImpl (wrapEqFilter)
+import Sirea.Internal.B0Compile (compileB0)
+import Sirea.Internal.B0Impl (wrapEqFilter)
 import Sirea.Internal.DemandMonitorData
 import Sirea.Internal.LTypes
 import Sirea.Internal.Tuning (dtEqf, dtDaggrHist)
@@ -58,8 +57,9 @@ import Sirea.Internal.Tuning (dtEqf, dtDaggrHist)
 --
 class (Partition p, Typeable duty) => AgentBehavior p duty where
     -- | This should be instantiated as: agentBehaviorSpec _ = ...
-    -- The `duty` parameter is undefined, used only for type. 
-    agentBehaviorSpec :: duty -> BCX w (S p ()) (S p ())
+    -- The `duty` parameter is undefined, used only for typeful
+    -- construction. 
+    agentBehaviorSpec :: duty -> B (S p ()) (S p ())
 
 -- AgentResource ensures single instance for invokeAgent. A record
 -- of the signal is maintained here in order to ensure an old agent
@@ -85,16 +85,19 @@ data ARD = ARD
 ardZero :: ARD
 ardZero = ARD s_never Nothing False False
 
-instance (AgentBehavior p duty) => Resource w (AR p duty) where
+instance (AgentBehavior p duty) => Resource W (AR p duty) where
     locateResource _ = newAR
 
-newAR :: (AgentBehavior p duty) => PCX w -> IO (AR p duty)
+newAR :: (AgentBehavior p duty) => PCX W -> IO (AR p duty)
 newAR cw = mfix $ \ ar -> -- fix cyclic dependencies
     getPCX ar cw >>= \ cp ->
     getPSched cp >>= \ pd ->
     newIORef ardZero >>= \ rf ->
-    let b = unwrapBCX (getABS ar) cw in -- behavior
-    let make = ln_lnkup <$> snd (compileB b (LnkDUnit ldt_zero) LnkDead) in 
+    let b0 = unwrapB (getABS ar) cw in -- behavior
+    let cc0 = CC { cc_getSched = return pd, cc_newRef = newRefIO } in
+    let lc0 = LC { lc_dtCurr = 0, lc_dtGoal = 0, lc_cc = cc0 } in
+    let lcaps = LnkSig (LCX lc0) in
+    let make = ln_lnkup <$> snd (compileB0 b0 lcaps LnkDead) in 
     let touch = touchAR ar in
     let update = updateAR ar in
     let idle = idleAR ar in
@@ -104,19 +107,19 @@ newAR cw = mfix $ \ ar -> -- fix cyclic dependencies
     return (AR da make rf pd)
     
 -- functions getABS, getDuty, getPCX mostly for type wrangling
-getABS :: (AgentBehavior p duty) => AR p duty -> BCX w (S p ()) (S p ())
+getABS :: (AgentBehavior p duty) => AR p duty -> B (S p ()) (S p ())
 getABS = agentBehaviorSpec . getDuty
 
 getDuty :: AR p duty -> duty
 getDuty _ = undefined
 
-getPCX :: (Partition p) => AR p duty -> PCX w -> IO (PCX p) 
+getPCX :: (Partition p) => AR p duty -> PCX W -> IO (PCX p) 
 getPCX _ = findInPCX
     
 -- simple merge of activity signals
-sigActive :: [Sig ()] -> Sig ()
+sigActive :: [Sig a] -> Sig ()
 sigActive [] = s_never
-sigActive (s:ss) = foldl (<|>) s ss
+sigActive (s:ss) = s_const () $ foldl (<|>) s ss
 
 -- Touch on AgentResource will forward touch to the agent.
 -- It also instantiates the agent, if needed.
@@ -210,20 +213,18 @@ flushAR ar = beginFlush where
 -- unique installation may be much more efficient and will simplify
 -- safe use of non-idempotent adapters (e.g. UnsafeOnUpdate). 
 --
-invokeAgent :: (AgentBehavior p duty) => duty -> BCX w (S p ()) (S p ())
-invokeAgent duty = fix $ \ b -> wrapBCX $ \ cw -> 
-    invokeDutyAR (getAR duty b cw)
+invokeAgent :: (AgentBehavior p duty) => duty -> B (S p ()) (S p ())
+invokeAgent duty = fix $ \ b -> invokeDutyAR (getAR duty b)
 
-invokeDutyAR :: IO (AR p duty) -> B (S p ()) (S p ())
+invokeDutyAR :: (PCX W -> IO (AR p duty)) -> B (S p ()) (S p ())
 invokeDutyAR findAR = bvoid (unsafeLinkB lnInvoke) where
-    lnInvoke ln = assert (ln_dead ln) $ 
-        findAR >>= \ ar ->
+    lnInvoke cw ln = assert (ln_dead ln) $ 
+        findAR cw >>= \ ar ->
         newDemandLnk (ar_daggr ar) >>= \ lu ->
         return (LnkSig lu)
 
 getAR :: (AgentBehavior p duty) 
-      => duty -> BCX w (S p ()) (S p ()) 
-      -> PCX w -> IO (AR p duty)
+      => duty -> B (S p ()) (S p ()) -> PCX W -> IO (AR p duty)
 getAR _ _ = findInPCX
 
 

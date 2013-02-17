@@ -27,8 +27,7 @@ import Data.Typeable
 import Sirea.Signal
 import Sirea.Behavior
 import Sirea.B
-import Sirea.BCX
-import Sirea.Link
+import Sirea.UnsafeLink
 import Sirea.Partition
 import Sirea.PCX
 import Sirea.DemandMonitor (DemandMonitor)
@@ -40,27 +39,24 @@ import Sirea.Internal.DemandMonitorData
 -- may contain duplicates. However, to support RDP's invariants it
 -- is essential to not observe those duplicates, i.e. to treat this
 -- as a set. 
-class HasDemandListMonitor b p where 
-    demandListMonitor :: (Typeable e) => String -> DemandMonitor b p e [e]
-
-instance (Partition p) => HasDemandListMonitor (BCX w) p where
-    demandListMonitor = demandListMonitorBCX
-
-demandListMonitorBCX :: (Partition p, Typeable e) => String -> DemandMonitor (BCX w) p e [e]
-demandListMonitorBCX nm = fix $ \ dm ->
+demandListMonitor :: (Partition p, Typeable e) => String -> DemandMonitor B p e [e]
+demandListMonitor nm = fix $ \ dm ->
     let cwToDMD cw = getPCX dm cw >>= fmap getDMD . findByNameInPCX nm in
-    let d = wrapBCX $ demandFacetB . fmap fst . cwToDMD in
-    let m = wrapBCX $ monitorFacetB  . fmap snd . cwToDMD in
+    let d = demandFacetB $ fmap fst . cwToDMD in
+    let m = monitorFacetB $ fmap snd . cwToDMD in
     (d,m)
 
+
+
 -- load PCX for correct partition (type system tricks)
-getPCX :: (Partition p) => DemandMonitor b p e z -> PCX w -> IO (PCX p)
+getPCX :: (Partition p) => DemandMonitor b p e z -> PCX W -> IO (PCX p)
 getPCX _ = findInPCX
 
 newtype UDMD e = UDMD { getDMD :: (DemandAggr e [e], MonitorDist [e]) } deriving (Typeable)
 
 instance (Partition p, Typeable e) => Resource p (UDMD e) where
     locateResource _ cp = UDMD <$> newUDMD cp
+instance (Partition p, Typeable e) => NamedResource p (UDMD e)
  
 -- newDMD will return a coupled DemandAggr and MonitorDist pair.
 newUDMD :: (Partition p) => PCX p -> IO (DemandAggr e [e], MonitorDist [e])
@@ -69,18 +65,18 @@ newUDMD cp =
     newDemandAggr cp (primaryMonitorLnk md) sigZipLists >>= \ d ->
     return (d,md)
 
-demandFacetB :: IO (DemandAggr e z) -> B (S p e) (S p ())
+demandFacetB :: (PCX W -> IO (DemandAggr e z)) -> B (S p e) (S p ())
 demandFacetB getDA = bvoid (unsafeLinkB lnDem) >>> bconst ()
-    where lnDem ln = assert (ln_dead ln) $ 
-                getDA >>= \ da ->
+    where lnDem cw ln = assert (ln_dead ln) $ 
+                getDA cw >>= \ da ->
                 newDemandLnk da >>= \ lu' ->
                 return (LnkSig lu')
 
-monitorFacetB :: IO (MonitorDist z) -> B (S p ()) (S p z)
+monitorFacetB :: (PCX W -> IO (MonitorDist z)) -> B (S p ()) (S p z)
 monitorFacetB getMD = unsafeLinkB lnMon
-    where lnMon LnkDead = return LnkDead -- dead code elim.
-          lnMon (LnkSig lu) = 
-                getMD >>= \ md ->
+    where lnMon _ LnkDead = return LnkDead -- dead code elim.
+          lnMon cw (LnkSig lu) = 
+                getMD cw >>= \ md ->
                 newMonitorLnk md lu >>= \ lu' ->
                 return (LnkSig lu')
 

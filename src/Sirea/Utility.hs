@@ -8,12 +8,13 @@ module Sirea.Utility
 
 import Sirea.Behavior
 import Sirea.B (B)
+import Sirea.Internal.B0
 import Sirea.Partition (P0)
 import Sirea.UnsafeOnUpdate 
 import Sirea.PCX 
 import Sirea.Time
-import Sirea.Link
 import Sirea.Signal
+import Sirea.UnsafeLink
 
 import Sirea.Internal.Tuning (dtPrintExpire)
 import Data.Typeable
@@ -37,6 +38,7 @@ import Control.Monad (when, liftM)
 -- inject bprint into a behavior for debugging.
 bprint :: (Show a) => B (S P0 a) (S P0 a)
 bprint showFn = bvoid $ bfmap show >>> bprint_
+
   -- TODO: switch to demand monitor + agent resource 
   -- for console printing
 bprint_ :: B (S P0 String) (S P0 String)
@@ -69,44 +71,50 @@ instance Resource P0 PrintBuffer where
     locateResource _ _ = liftM PrintBuffer $ newIORef [] 
            
 
--- | BUndefined - exploratory programming often involves incomplete
+-- | bundefined - exploratory programming often involves incomplete
 -- behaviors. `bundefined` serves a similar role to `undefined` in
--- Haskell. Direct use of `undefined` might fail when compiling the
--- behavior even if embedded in dead code. bundefined fails only if
--- there is stable, active input signal, and a consumer for the 
--- undefined result.
--- 
+-- pure Haskell functions, but can work with RDP's compilation and
+-- anticipation models.
 bundefined :: (SigInP p y) => B (S p x) y
 bundefined = bconst () >>> undefinedB
 
 -- undefinedB is only live code if there is demand on `y`.
 -- This would be unsafe without `y` being entirely in p.
 -- 
--- Here `undefinedIO` basically kills the process if we stabilize on an
--- active input signal, but it's okay so long as we don't stabilize an
--- active signal to the undefined behavior. (It's also okay if we never
+-- Here `undefinedB` fails if it ever stabilizes on an active input
+-- signal, but can accept temporary activity so long as it's in the
+-- unstable future. undefinedB will not block dead code elimination.
 -- 
 undefinedB :: (SigInP p y) => B (S p ()) y 
-undefinedB = unsafeOnUpdateBL (const $ return undefinedIO) >>> unsafeLinkB mkKeepAlive
-    where mkKeepAlive = return . sendNothing
-          undefinedIO _ Nothing = return () -- inactive signal is okay
-          undefinedIO _ (Just _) = undefined {- Haskell's undefined IO op -}
+undefinedB = unsafeOnUpdateBL (const $ return undefinedIO) >>> 
+             (wrapB . const) nullB0
+    where undefinedIO _ Nothing = return () -- inactive signals are okay
+          undefinedIO _ (Just _) = fail "undefined behavior activated!"
+
+-- nullB0 will idle instead of update, promising inactivity to all
+-- downstream components. Since undefinedB will fail before this
+-- promise is ever broken, it's actually a valid promise.
+nullB0 :: (Monad m, SigInP p y) => B0 m (S p ()) y
+nullB0 = B0_mkLnk lc_dupCaps (return . sendNothing)
 
 -- undefinedB is a bit more sophisticated than just dropping signal.
--- Need to send an inactive signal, properly, in order to perform 
--- any merges further on. 
-sendNothing :: Lnk y -> Lnk (S p ())
+-- Instead, it forwards an idling operation to downstream clients.
+sendNothing :: (Monad m) => Lnk m y -> Lnk m (S p ())
 sendNothing LnkDead = LnkDead
 sendNothing (LnkProd x y) = (sendNothing x) `lnPlus` (sendNothing y)
 sendNothing (LnkSum x y)  = (sendNothing x) `lnPlus` (sendNothing y)
-sendNothing (LnkSig lu) = LnkSig (LnkUp touch update idle) where
+sendNothing (LnkSig lu) = LnkSig (LnkUp touch update idle cycle) where
     touch = ln_touch lu 
-    update tS tU _ = ln_update lu tS tU s_never
-    idle tS = ln_idle lu tS
+    update tS _ _ = ln_idle lu tS
+    idle = ln_idle lu
+    cycle = ln_cycle lu
 
-lnPlus :: Lnk (S p a) -> Lnk (S p a) -> Lnk (S p a)
+lnPlus :: (Monad m) => Lnk m (S p a) -> Lnk m (S p a) -> Lnk m (S p a)
 lnPlus LnkDead y = y
 lnPlus x LnkDead = x
 lnPlus x y = LnkSig (ln_lnkup x `ln_append` ln_lnkup y)
+
+
+
 
 

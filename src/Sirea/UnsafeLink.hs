@@ -1,59 +1,38 @@
-{-# LANGUAGE GADTs, TypeOperators #-}
+{-# LANGUAGE TypeOperators, GADTs #-}
 
 -- | New behavior primitives for Sirea.
 --
 -- These shouldn't be necessary often, since it will only take a few
 -- common abstractions to support most new ideas and resources. But 
--- `unsafeLinkB` ensures that any corner cases can be handled.
+-- unsafeLinkB ensures that unforseen corner cases can be handled.
 --
-module Sirea.Link 
+module Sirea.UnsafeLink 
     ( unsafeLinkB
-    , unsafeLinkBCX
-    -- the following are re-exported from LTypes
-    , MkLnk, Lnk, LnkW(..), LnkUp(..), StableT(..)
+    , Lnk, LnkW(..), LnkUp(..), StableT(..)
     , ln_zero, ln_lnkup, ln_fst, ln_snd, ln_left, ln_right, ln_dead
     , ln_sfmap, ln_lumap, ln_append
     ) where
 
-import Sirea.Internal.LTypes -- includes MkLnk, etc.
-import Sirea.Internal.BTypes
-import Sirea.Internal.BImpl (forceDelayB)
+import Sirea.Internal.LTypes
+import Sirea.Internal.B0Type (B0_mkLnk)
+import Sirea.Internal.B0Impl (forceDelayB)
+import Sirea.Internal.B0
 import Sirea.Behavior
-import Sirea.B()
-import Sirea.BCX
+import Sirea.B
 import Sirea.PCX
+import Sirea.Partition (W)
 
--- TODO: Consider combining unsafeLinkB with unsafeLinkBCX.
---       Also, consider switch to a 1:1 model
+-- | unsafeLinkB supports development of new primitive behaviors. It
+-- should very rarely be necessary, since a few patterns can cover
+-- many FFI adapters. Careful discipline is necessary to ensure that
+-- unsafeLinkB preserves RDP's invariants (spatial commutativity and 
+-- idempotence, duration coupling, locally stateless, eventless).
+unsafeLinkB :: (SigInP p x, SigInP p y) 
+            => (PCX W -> Lnk IO y -> IO (Lnk IO x)) -> B x y
+unsafeLinkB = wrapB . (unsafeLinkB0 .)
 
--- | unsafeLinkB can represent new primitive behaviors. Often, it is
--- unnecessary; even for FFI and legacy adapters, support for a few
--- common patterns would be sufficient.
---
--- unsafeLinkB is unsafe. Discipline is necessary to avoid violating 
--- RDP invariants: spatial commutativity and idempotence, duration
--- coupling, locally stateless and eventless behavior. 
---
--- Construction of links should have no observable side effects. Any
--- observable effect should wait for active signal. At construction,
--- IO is used to create local state for caches or connections with
--- external resources. (Proxy resources should be accessed via PCX.)
---
--- Note: unsafeLinkB might be called from any thread, potentially at
--- any time (due to compilation of dynamic behaviors). IO must not
--- be specific to any partition. (Partition-specific IO should wait 
--- for a link update.)
-unsafeLinkB :: MkLnk x y -> B x y
-unsafeLinkB ln = bsynch >>> forceDelayB >>> B_mkLnk tr_unit ln
-
-
--- | unsafeLinkBCX provides access to PCX, which models resources
--- that may be shared between links. If otherwise you would need 
--- global state, please use unsafeLinkBCX and put state in the PCX. 
-unsafeLinkBCX :: (PCX w -> MkLnk x y) -> BCX w x y
-unsafeLinkBCX = wrapBCX . (unsafeLinkB .)
-
-
-
+unsafeLinkB0 :: (Monad m, SigInP p x, SigInP p y) 
+             => (Lnk m y -> m (Lnk m x)) -> B0 m x y
+unsafeLinkB0 ln = bsynch >>> forceDelayB >>> B0_mkLnk lc_dupCaps (const ln)
 
 

@@ -33,7 +33,7 @@
 --
 module Sirea.DemandMonitor 
     ( DemandMonitor
-    , HasDemandMonitor(..)
+    , demandMonitor
     , activityMonitor   
     ) where
 
@@ -52,74 +52,69 @@ import Data.Typeable
 import Sirea.Signal
 import Sirea.Behavior
 import Sirea.B
-import Sirea.BCX
-import Sirea.Link
+import Sirea.UnsafeLink
 import Sirea.Partition
 import Sirea.PCX
 import Sirea.Internal.DemandMonitorData
-import Sirea.Internal.BImpl (wrapEqFilter)
+import Sirea.Internal.B0Impl (wrapEqFilter)
 import Sirea.Internal.Tuning (dtEqf)
 
 -- | DemandMonitor is a synonym for the (demand,monitor) facet pair 
 type DemandMonitor b p e z = (b (S p e) (S p ()), b (S p ()) (S p z))
 
--- | Obtain ambient instances of demand-monitors by type and name.
--- The output list will be sorted (ascending), without duplicates.
-class HasDemandMonitor b p where 
-    demandMonitor :: (Ord e, Typeable e) => String -> DemandMonitor b p e [e]
-
--- | An activityMonitor is simply a demand monitor that reports only
--- whether any activity is present. Note that if you're always going
--- to perform the same action when active, an AgentResource would be
--- more appropriate.
-activityMonitor :: (HasDemandMonitor b p, BFmap b) => String -> DemandMonitor b p () Bool
-activityMonitor nm = (d',m') where
-    (d,m) = demandMonitor nm
-    d' = bfmap AM >>> d
-    m' = m >>> bfmap (not . null)
-
-newtype AM = AM () deriving (Typeable, Eq, Ord) -- to separate activityMonitor instances
-
-instance (Partition p) => HasDemandMonitor (BCX w) p where
-    demandMonitor = demandMonitorBCX
-
-demandMonitorBCX :: (Partition p, Typeable e, Ord e) => String -> DemandMonitor (BCX w) p e [e]
-demandMonitorBCX nm = fix $ \ dm ->
+-- | Obtain a demand monitor resource, as a (demand,monitor) pair.
+demandMonitor :: (Ord e, Typeable e, Partition p) => String -> DemandMonitor B p e [e]
+demandMonitor nm = fix $ \ dm ->
     let cwToDMD cw = getPCX dm cw >>= fmap getDMD . findByNameInPCX nm in
-    let d = wrapBCX $ demandFacetB . fmap fst . cwToDMD in
-    let m = wrapBCX $ monitorFacetB . fmap snd . cwToDMD in
+    let d = demandFacetB $ fmap fst . cwToDMD in
+    let m = monitorFacetB $ fmap snd . cwToDMD in
     (d,m)
 
+-- | An activityMonitor is a simple wrapper for a demand monitor on
+-- a unit signal, to change the result to a boolean. (For unit, the
+-- only monitored values would be [] or [()].)
+activityMonitor :: String -> DemandMonitor B p () Bool 
+activityMonitor nm = (d,m') where
+    (d,m) = demandMonitor nm
+    m' = m >>> bfmap (not . null)
+
 -- load PCX for correct partition (type system tricks)
-getPCX :: (Partition p) => DemandMonitor b p e z -> PCX w -> IO (PCX p)
+getPCX :: (Partition p) => DemandMonitor b p e z -> PCX W -> IO (PCX p)
 getPCX _ = findInPCX
 
 newtype DMD e = DMD { getDMD :: (DemandAggr e [e], MonitorDist [e]) } deriving (Typeable)
 
 instance (Partition p, Typeable e, Ord e) => Resource p (DMD e) where
     locateResource _ cp = DMD <$> newDMD cp
+instance (Partition p, Typeable e, Ord e) => NamedResource p (DMD e)
  
 -- newDMD will return a coupled DemandAggr and MonitorDist pair.
+--   
 newDMD  :: (Partition p, Ord e) => PCX p -> IO (DemandAggr e [e], MonitorDist [e])
 newDMD cp =     
     newMonitorDist cp (s_always []) >>= \ md ->
     wrapEqFilter dtEqf (==) (primaryMonitorLnk md) >>= \ lnMon ->
-    newDemandAggr cp lnMon (sigMergeSortSet compare) >>= \ d ->
+    newDemandAggr cp lnMon dmdZip >>= \ d ->
     return (d,md)
 
+-- Zip function for demand monitors, will provide sorted lists in
+-- each instant then filter equivalent instants over time. This is
+-- further combined with a state-based choke and equality filter.
+dmdZip :: (Ord e) => [Sig e] -> Sig [e]
+dmdZip = s_adjeqf (==) . sigMergeSortSet compare
 
-demandFacetB :: IO (DemandAggr e z) -> B (S p e) (S p ())
+demandFacetB :: (PCX W -> IO (DemandAggr e z)) -> B (S p e) (S p ())
 demandFacetB getDA = bvoid (unsafeLinkB lnDem) >>> bconst ()
-    where lnDem ln = assert (ln_dead ln) $ 
-                getDA >>= \ da ->
+    where lnDem cw ln = assert (ln_dead ln) $ 
+                getDA cw >>= \ da ->
                 newDemandLnk da >>= \ lu' ->
                 return (LnkSig lu')
 
-monitorFacetB :: IO (MonitorDist z) -> B (S p ()) (S p z)
+monitorFacetB :: (PCX W -> IO (MonitorDist z)) -> B (S p ()) (S p z)
 monitorFacetB getMD = unsafeLinkB lnMon
-    where lnMon LnkDead = return LnkDead -- dead code elim.
-          lnMon (LnkSig lu) = 
-            getMD >>= \ md ->
+    where lnMon _ LnkDead = return LnkDead -- dead code elim.
+          lnMon cw (LnkSig lu) = 
+            getMD cw >>= \ md ->
             newMonitorLnk md lu >>= \ lu' ->
             return (LnkSig lu')
 
@@ -127,6 +122,7 @@ monitorFacetB getMD = unsafeLinkB lnMon
 -- My (unproven) intuition is that a merge-sort in this manner will
 -- be able to reuse some of the computation when there are only a
 -- few updates.
+--
 sigMergeSortSet :: (e -> e -> Ordering) -> [Sig e] -> Sig [e]
 sigMergeSortSet _ [] = s_always []
 sigMergeSortSet _ (s:[]) = s_full_map (Just . maybeToList) s

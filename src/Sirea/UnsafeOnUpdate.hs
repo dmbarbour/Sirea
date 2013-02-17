@@ -36,14 +36,14 @@ import Data.Typeable
 import Data.List (takeWhile)
 import Control.Monad (unless)
 import Control.Exception (assert)
-import Sirea.Link
+import Sirea.UnsafeLink
 import Sirea.Signal
 import Sirea.Time
 import Sirea.Behavior
 import Sirea.B
 import Sirea.PCX
 import Sirea.Partition
-import Sirea.Internal.BImpl (undeadB, keepAliveB)
+import Sirea.Internal.B0Impl (undeadB0, keepAliveB0)
 import Sirea.Internal.Tuning (dtFinalize, tAncient)
 
 --import Debug.Trace
@@ -56,7 +56,8 @@ import Sirea.Internal.Tuning (dtFinalize, tAncient)
 unsafeOnUpdateB :: (Eq a, Partition p) 
                 => (PCX p -> IO (T -> Maybe a -> IO ()))
                 -> B (S p a) (S p a)
-unsafeOnUpdateB mkOp = unsafeOnUpdateBL mkOp >>> undeadB
+unsafeOnUpdateB mkOp = unsafeOnUpdateBL mkOp >>> 
+                       (wrapB . const) undeadB0
 
 
 -- | unsafeOnUpdateBL - a variation of unsafeOnUpdateB that does not
@@ -67,9 +68,10 @@ unsafeOnUpdateBL :: (Eq a, Partition p)
                  -> B (S p a) (S p a)
 unsafeOnUpdateBL mkOp = unsafeLinkB build
     where build _ LnkDead = return LnkDead
-          build cp (LnkSig lu) =
-            mkOp cp >>= \ op ->
+          build cw (LnkSig lu) =
+            findInPCX cw >>= \ cp ->
             getPSched cp >>= \ pd ->
+            mkOp cp >>= \ op ->
             newIORef (s_never, tAncient) >>= \ rfSig ->
             newIORef Nothing >>= \ rfA ->
             let lu' = luOnUpdate pd op rfSig rfA lu in
@@ -86,8 +88,9 @@ luOnUpdate  :: (Eq a)
             -> IORef (Maybe a)  -- last reported value
             -> LnkUp a -- output sink (just forward input, but AFTER running)
             -> LnkUp a -- input source
-luOnUpdate pd op rfSig rfA lu = LnkUp touch update idle where
+luOnUpdate pd op rfSig rfA lu = LnkUp touch update idle cycle where
     touch = ln_touch lu
+    cycle = ln_cycle lu
     idle tS =
         readIORef rfSig >>= \ (s0,tLo) ->
         let sCln = gcSig tS s0 in
@@ -129,7 +132,7 @@ luOnUpdate pd op rfSig rfA lu = LnkUp touch update idle where
 unsafeOnUpdateBLN :: (Eq a, Partition p)  
                   => (PCX p -> IO (T -> Maybe a -> IO ())) 
                   -> B (S p a :&: x) (S p a :&: x)
-unsafeOnUpdateBLN mkOp = bfirst (unsafeOnUpdateBL mkOp) >>> keepAliveB
-
+unsafeOnUpdateBLN mkOp = bfirst (unsafeOnUpdateBL mkOp) >>> 
+                         (wrapB . const) keepAliveB0
 
 

@@ -5,7 +5,7 @@
 -- precise, logical mechanism to express such queries, assuming
 -- you can provide a timestamp to test against:
 -- 
---   btimeTrigger :: b (S p T) (S p Bool)
+--   btimeTrigger :: B (S p T) (S p Bool)
 --
 -- This behavior will output True when logical time is greater than
 -- or equal to the time indicated in signal. The time signal will
@@ -15,14 +15,13 @@
 -- is expected to cheat for performance.
 -- 
 module Sirea.TimeTrigger
-    ( HasTimeTrigger(..)
+    ( btimeTrigger
     , s_timeTrigger
     ) where
 
 import Sirea.B
-import Sirea.BCX
 import Sirea.Time
-import Sirea.Link
+import Sirea.UnsafeLink
 import Sirea.Behavior
 import Sirea.Signal
 import Sirea.Clock
@@ -30,22 +29,13 @@ import Sirea.Clock
 import Sirea.Internal.SigType
 import Sirea.Internal.DiscreteTimedSeq
 
-
--- | A btimeTrigger returns True if the real time is greater than or
--- equal to the time parameter. This can help control behaviors with
--- queries like: "Has it been less than three seconds since foo?"
---
--- btimeTrigger is precise and works on discrete varying signals.
--- 
-class (HasClock b) => HasTimeTrigger b where
-    btimeTrigger :: b (S p T) (S p Bool)
-
-instance HasTimeTrigger (BCX w) where
-    btimeTrigger = (wrapBCX . const) timeTriggerB
-
-timeTriggerB :: B (S p T) (S p Bool)
-timeTriggerB = unsafeLinkB mkLn where
-    mkLn = return . (ln_lumap . ln_sfmap) s_timeTrigger
+-- | btimeTrigger returns True whenever logical time is greater than
+-- or equal to the signaled time. This supports time-based triggers.
+-- It is more efficient and precise than use of Sirea.Clock with 
+-- explicit comparisons.
+btimeTrigger :: (Partition p) => B (S p T) (S p Bool)
+btimeTrigger = unsafeLinkB mkLn where
+    mkLn _ = return . (ln_lumap . ln_sfmap) s_timeTrigger
 
 -- time trigger 0 assumes there is no pending trigger
 dsTimeTrigger0 :: DSeq (Maybe T) -> DSeq (Maybe Bool)

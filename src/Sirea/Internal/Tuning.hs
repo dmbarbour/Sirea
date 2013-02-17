@@ -2,10 +2,12 @@
 -- A single module for all those configuration tuning variables used by Sirea.
 module Sirea.Internal.Tuning
     ( dtRestart, dtStability, dtHeartbeat, dtGrace
-    , dtInsigStabilityUp, dtFutureChoke
-    , dtEqf, dtSeq
+    , dtInsigStabilityUp
+    , dtFutureChoke
+    , dtEqShift, dtEqShiftAlign
+    , dtTouch
     , dtCompileFuture
-    , batchesInFlight
+    , batchesInFlight    
     , dtDaggrHist, dtMdistHist
     , dtFinalize
     , dtPrintExpire  
@@ -16,38 +18,48 @@ import Sirea.Time (T,DT,mkTime)
 
 -- The main Sirea application has a few tuning parameters related to
 -- periodic updates, heartbeats, graceful startup and shutdown. Also
--- a reset period - if the main thread seems frozen too long.
+-- a reset period - if the main thread seems frozen too long, we'll
+-- model this in the activity signal.
 dtRestart, dtStability, dtHeartbeat, dtGrace :: DT
-dtRestart   = 3.00   -- how long a pause to cause a restart
+dtRestart   = 2.00   -- how long a pause to cause a restart
 dtStability = 0.30   -- stability of main signal (affects halting time)
 dtHeartbeat = 0.06   -- heartbeat and periodic increase of stability
 dtGrace     = dtHeartbeat -- time allotted for graceful start and stop
 
--- At certain locations, where updates are delivered via partition
--- stepper, we have opportunity to block or delay some updates. This
--- can help regulate behavior in case of cyclic feedback systems. 
---
--- A more explicit choke may also be useful, in cases where we want
--- block updates that apply too far in the future.
-dtInsigStabilityUp, dtFutureChoke :: DT
-dtInsigStabilityUp = dtHeartbeat - 0.001 -- largest insignificant pure-stability update
-dtFutureChoke      = 15 * dtHeartbeat    -- slow down updates if far beyond stability
+-- A small update to stability is not always worth sending. It must
+-- be sent within a partition (after ln_touch, to indicate there is
+-- no update), but across partitions or steps we are free to drop a
+-- few if we deem them insignificant for GC purposes. 
+dtInsigStabilityUp :: DT
+dtInsigStabilityUp = dtHeartbeat * 0.85 -- largest insignificant pure-stability update
 
--- There are several cases where we'll want to evaluate signals into
--- their near future. For `bseq` we simply want to flatten signals 
--- to control performance. For equality filters, we want to seek the
--- first difference between two signals so we can tweak update times
--- accordingly and avoid rework downstream.
-dtEqf, dtSeq :: DT
-dtEqf   = dtRestart   -- when seeking first difference in a signal
-dtSeq   = dtHeartbeat -- when simply evaluating a signal ahead
+-- The bfchoke behavior may delay updates that do not result in any
+-- near-term updates. This hurts consistency of anticipated values,
+-- but can help regulate computation costs. 
+dtFutureChoke :: DT
+dtFutureChoke = 6 * dtHeartbeat
+
+-- For badjeqf and bconst, how far do we peek to find a first point
+-- of non-equivalence? If we find no difference, how much further do
+-- we seek for a point of ideal alignment to 'swap in' the updated
+-- signal?
+dtEqShift, dtEqShiftAlign :: DT
+dtEqShift = 10 * dtHeartbeat -- comparison of values
+dtEqShiftAlign = dtEqShift -- extra search for alignment
+
+
+-- When we 'btouch', how far (relative to stability) do we enforce
+-- that the signal is evaluated?
+dtTouch :: DT
+dtTouch = dtHeartbeat
 
 -- For dynamic behaviors, it's best to install behaviors a little 
 -- before they're necessary. Doing so can improve system latency and
 -- support better speculative evaluation downstream. The tradeoff is
--- potentially much more rework when signals change.
+-- potentially much more rework when signals change. I plan to make
+-- this more adaptive, eventually.
 dtCompileFuture :: DT
-dtCompileFuture = dtFutureChoke -- how far to anticipate dynamic behaviors
+dtCompileFuture = dtEqShift -- how far to anticipate dynamic behaviors
 
 -- Communication between partitions in Sirea occurs via bcross, and
 -- uses coarse-grained batches to support snapshot consistency and
@@ -61,9 +73,16 @@ dtCompileFuture = dtFutureChoke -- how far to anticipate dynamic behaviors
 -- A small number of batches will require more thread switching but
 -- may result in tighter tolerances.
 --
--- Bounded buffers between partitions are the only waits in Sirea.
--- Sirea is potentially wait-free if threads keep up with workloads.
--- This can also be understood as a basis for fair scheduling.
+-- Bounded buffers provide synchronization and fair scheduling for
+-- Sirea partition threads. By themselves, they cannot deadlock. All
+-- incoming batches are processed in each 'step' so each step breaks
+-- potential deadlocks. However, developers must avoid use of other
+-- synchronization mechanisms between threads.
+--
+-- Sirea's parallelism is designed to be self-regulating, i.e. the
+-- relative efficiency increases when a partition falls behind and
+-- has a lot of batches to process. But regulation from batching and
+-- piggybacking is soft and subtle compared to bounded buffers.
 --
 batchesInFlight :: Int
 batchesInFlight = 6

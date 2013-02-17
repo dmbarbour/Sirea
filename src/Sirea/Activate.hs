@@ -20,9 +20,8 @@ import Control.Concurrent.MVar
 import Control.Monad (unless, when, void, liftM)
 import Control.Exception (catch, assert, AsyncException)
 import Control.Concurrent (myThreadId, forkIO, killThread, threadDelay)
-import Sirea.Internal.B0Type
 import Sirea.Internal.LTypes
-import Sirea.Internal.BCompile(compileB)
+import Sirea.Internal.B0Compile (compileB0)
 import Sirea.Internal.PTypes
 import Sirea.Internal.BCross
 import Sirea.Internal.Thread
@@ -32,7 +31,7 @@ import Sirea.Behavior
 import Sirea.Partition
 import Sirea.UnsafeOnUpdate
 import Sirea.PCX
-import Sirea.BCX
+import Sirea.B
 import Sirea.Time
 import Sirea.Signal
 
@@ -118,12 +117,15 @@ buildSireaApp app =
     getPCX0 cw >>= \ cp0 -> -- partition context P0
     findInPCX cp0 >>= \ tc0 ->
     writeIORef (tc_init tc0) True >>
+    getPSched cp0 >>= \ pd ->
     -- compute behavior in the new context
     -- add a phase delay for consistency with bcross updates
     let bcx = wrapB phaseDelayB >>> app in
     let b   = unwrapB bcx cw in
-    -- compile behavior, dropping response
-    let (_, mkLn) = compileB b (LnkDUnit ldt_zero) LnkDead in
+    let cc0 = CC { cc_getSched = return pd, cc_newRef = newRefIO } in
+    let lc0 = LC { lc_dtCurr = 0, lc_dtGoal = 0, lc_cc = cc0 } in
+    let lcaps = LnkSig (LCX lc0) in
+    let (_, mkLn) = compileB0 b lcaps LnkDead in
     mkLn >>= \ lnk0 ->
     let bDead = ln_dead lnk0 in
     let lu = ln_lnkup lnk0 in

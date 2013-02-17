@@ -18,10 +18,11 @@ module Sirea.Prelude
 import Sirea.Behavior 
 import Sirea.Activate (runSireaApp, pulseSireaApp)
 import Sirea.B (B)
-import Sirea.BCX (BCX, wrapBCX)
 import Sirea.Partition (BCross(..),Partition(..), Pt, P0)
 import Sirea.BDeep
 import Sirea.Time (T,DT)
 import Sirea.DemandMonitor (demandMonitor)
 import Sirea.Utility (bprint)
+import Sirea.Clock (bclockHours, bclockMinutes, bclockSeconds)
+import Sirea.TimeTrigger 
 

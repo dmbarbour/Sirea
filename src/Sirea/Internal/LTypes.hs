@@ -3,32 +3,37 @@
 -- | This module provides the concrete datatypes and organization of
 -- Sirea's implementation. Specific behavior logic is in B0Impl. 
 module Sirea.Internal.LTypes 
-    ( LnkW(..), Lnk, LnkUp, LCC, LCaps
+    ( LnkW(..)
+    , LnkUp(..), Lnk
+    , LC(..), LCX(..), LCaps
     , StableT(..), isDoneT, fromStableT, maybeStableT
-    , ln_left, ln_right, ln_fst, ln_snd, ln_dead
+    , ln_left, ln_right, ln_fst, ln_snd, ln_toList, ln_dead
     , ln_zero, ln_lnkup, ln_append
     , ln_lumap, ln_sfmap
-    , lc_
+    , lc_anyCap, lc_dupCaps, lc_map, lc_fwd
+    , lc_minGoal, lc_maxGoal, lc_minCurr, lc_maxCurr, lc_valid
     , SigSt(..), st_zero, st_poke, st_clear, st_update, st_idle
     , monotonicStability, respectsStability
     , SigM(..), sm_zero
     , sm_update_l, sm_poke_l, sm_idle_l
     , sm_update_r, sm_poke_r, sm_idle_r 
     , sm_waiting, sm_stable, sm_emit, sm_cleanup
-    , ln_forEach, ln_freeze, ln_touchAll, ln_withSigM
+    , ln_forEach, ln_freeze, ln_touchAll
+    , ln_withSigM
     , adjStableTime
+    , module Sirea.Internal.CC
     ) where
 
+import Prelude hiding (cycle)
 import Sirea.Internal.STypes
+import Sirea.Internal.CC
 import Sirea.Time
 import Sirea.Signal
 import Sirea.Internal.Tuning (tAncient)
 import Control.Exception (assert)
-import Control.Monad (unless)
-import Control.Applicative
+import Control.Monad (unless, liftM2)
 import Data.Monoid
-import Data.IORef
-import Data.Typeable
+import Data.Maybe (listToMaybe)
 import Data.Unique (Unique)
 import Data.Set (Set)
 
@@ -92,23 +97,21 @@ data LnkUp m a = LnkUp
     , ln_cycle  :: !((Set Unique) -> m ())
     }
 
-instance Monoid (LnkUp a) where
+instance (Monad m) => Monoid (LnkUp m a) where
     mempty  = ln_zero
     mappend = ln_append
 
 newtype LCX m x = LCX { getLC :: LC m }
-data LC m =
+data LC m = LC
     { lc_cc      :: !(CC m)
     , lc_dtCurr  :: {-# UNPACK #-} !DT
     , lc_dtGoal  :: {-# UNPACK #-} !DT
     }
 type LCaps m x = LnkW (LCX m) x
 
-lc_map :: (LC m -> LC m) -> LCX m x -> LCX m y
-lc_map fn = LCX . fn . getLC
-
-lc_fwd :: LCX m x -> LCX m y
-lc_fwd = LCX . getLC
+-- Thoughts: It might be worth adding some path descriptors to LC
+-- for debugging purposes, i.e. to answer: "Where am I?" Could do
+-- this from both sides.
 
 
 -- | StableT describes a stability value for a signal. This is a
@@ -154,14 +157,15 @@ adjStableTime fn (StableT tm) = StableT (fn tm)
 
 
 -- | ln_zero is a trivial LnkUp state, like LnkDead but opaque.
-ln_zero :: LnkUp a
-ln_zero = LnkUp touch update idle where
+ln_zero :: (Monad m) => LnkUp m a
+ln_zero = LnkUp touch update idle cycle where
     touch = return ()
     update _ _ _ = return ()
     idle _ = return ()
+    cycle _ = return ()
 
 -- duplicate touches and updates.
-ln_append :: LnkUp a -> LnkUp a -> LnkUp a
+ln_append :: (Monad m) => LnkUp m a -> LnkUp m a -> LnkUp m a
 ln_append x y = LnkUp touch update idle cycle where
     touch = ln_touch x >> ln_touch y
     idle t = ln_idle x t >> ln_idle y t
@@ -169,7 +173,7 @@ ln_append x y = LnkUp touch update idle cycle where
     cycle cs = ln_cycle x cs >> ln_cycle y cs
 
 -- | ln_lnkup extracts LnkUp (from LnkSig or ln_zero from LnkDead)
-ln_lnkup  :: Lnk (S p a) -> (LnkUp a)
+ln_lnkup  :: (Monad m) => Lnk m (S p a) -> (LnkUp m a)
 ln_lnkup (LnkSig lu) = lu
 ln_lnkup _ = ln_zero
 
@@ -178,7 +182,6 @@ ln_left   :: LnkW s (a :|: b) -> LnkW s a
 ln_right  :: LnkW s (a :|: b) -> LnkW s b
 ln_fst    :: LnkW s (a :&: b) -> LnkW s a
 ln_snd    :: LnkW s (a :&: b) -> LnkW s b
-ln_dead   :: LnkW s a -> Bool
 
 ln_left (LnkSum a _) = a
 ln_left _ = LnkDead
@@ -192,10 +195,20 @@ ln_fst _ = LnkDead
 ln_snd (LnkProd _ b) = b
 ln_snd _ = LnkDead
 
-ln_dead LnkDead = True
-ln_dead (LnkSig _) = False
-ln_dead (LnkProd a b) = ln_dead a && ln_dead b
-ln_dead (LnkSum a b) = ln_dead a && ln_dead b
+-- | extract a list of elements from a link
+ln_toList :: (forall z . s z -> a) -> LnkW s x -> [a]
+ln_toList fn l = ln_toList' fn l []
+
+-- extend a list of elements from a link
+ln_toList' :: (forall z . s z -> a) -> LnkW s x -> [a] -> [a]
+ln_toList' _ LnkDead xs = xs
+ln_toList' fn (LnkSig s) xs = (fn s):xs
+ln_toList' fn (LnkProd x y) xs = ln_toList' fn x (ln_toList' fn y xs)
+ln_toList' fn (LnkSum x y) xs = ln_toList' fn x (ln_toList' fn y xs)
+
+-- | Compute whether all elements of a link are dead.
+ln_dead :: LnkW s x -> Bool
+ln_dead = null . ln_toList (const ()) 
 
 -- | simple link update from a signal update transformer
 --
@@ -203,7 +216,7 @@ ln_dead (LnkSum a b) = ln_dead a && ln_dead b
 -- means protecting all of RDP's invariants, especially duration 
 -- coupling (which supports composable resource management).
 --
-ln_sfmap :: (Sig x -> Sig y) -> LnkUp y -> LnkUp x
+ln_sfmap :: (Sig x -> Sig y) -> LnkUp m y -> LnkUp m x
 ln_sfmap fn ln = LnkUp touch update idle cycle where
     touch = ln_touch ln
     idle = ln_idle ln
@@ -211,26 +224,83 @@ ln_sfmap fn ln = LnkUp touch update idle cycle where
     cycle = ln_cycle ln
 
 -- | simple transformer from LnkUp to Lnk
-ln_lumap :: (LnkUp x -> LnkUp y) -> Lnk (S p x) -> Lnk (S p y)
+ln_lumap :: (LnkUp m x -> LnkUp m y) -> Lnk m (S p x) -> Lnk m (S p y)
 ln_lumap _ LnkDead = LnkDead
 ln_lumap fn (LnkSig l) = LnkSig (fn l)
 
 -- | apply operation over each element.
-ln_forEach :: (Applicative m, Monoid a) => (forall x . s x -> m a) -> LnkW s y -> m a
-ln_forEach _ LnkDead = pure mempty
-ln_forEach fn (LnkProd x y) = mappend <$> ln_forEach fn x <*> ln_forEach fn y
-ln_forEach fn (LnkSum x y) = mappend <$> ln_forEach fn x <*> ln_forEach fn y
+ln_forEach :: (Monad m, Monoid a) => (forall x . s x -> m a) -> LnkW s y -> m a
+ln_forEach _ LnkDead = return mempty
+ln_forEach fn (LnkProd x y) = liftM2 mappend (ln_forEach fn x) (ln_forEach fn y)
+ln_forEach fn (LnkSum x y) = liftM2 mappend (ln_forEach fn x) (ln_forEach fn y)
 ln_forEach fn (LnkSig lu) = fn lu
 
 -- | freeze the current signals on a link
-ln_freeze :: Lnk x -> IO ()
+ln_freeze :: (Monad m) => Lnk m x -> m ()
 ln_freeze = ln_forEach freeze
 
-freeze :: LnkUp x -> IO ()
+freeze :: LnkUp m x -> m ()
 freeze lu = ln_idle lu DoneT -- idle forever...
 
-ln_touchAll :: Lnk x -> IO ()
+ln_touchAll :: (Monad m) => Lnk m x -> m ()
 ln_touchAll = ln_forEach ln_touch
+
+lc_minGoal, lc_maxGoal, lc_minCurr, lc_maxCurr :: LCaps m x -> DT
+
+lc_minGoal = foldOr min 0 . ln_toList (lc_dtGoal . getLC)
+lc_maxGoal = foldOr max 0 . ln_toList (lc_dtGoal . getLC)
+lc_minCurr = foldOr min 0 . ln_toList (lc_dtCurr . getLC)
+lc_maxCurr = foldOr max 0 . ln_toList (lc_dtCurr . getLC)
+
+-- fold with alternative.
+foldOr :: (a -> a -> a) -> a -> [a] -> a
+foldOr fn _ (x:xs) = foldr fn x xs
+foldOr _ s [] = s
+
+-- test LCaps valid with regards to latency and liveness.
+lc_valid :: LCaps m x -> Bool
+lc_valid LnkDead = True
+lc_valid (LnkSig (LCX lc)) = (lc_dtGoal lc >= lc_dtCurr lc)
+lc_valid (LnkSum x y) = lc_valid x && lc_valid y
+lc_valid (LnkProd x y) = lc_valid x && lc_valid y && (ln_dead x == ln_dead y)
+
+-- | if the caps are from the same partition and synch'd, it is
+-- okay to just take one. The same-partition requirement is not
+-- validated here, and should be enforced at a higher layer.
+-- 'Nothing' is returned if the link is dead.
+lc_anyCap :: LCaps m x -> Maybe (LC m)
+lc_anyCap lcx = 
+    assert (lc_minGoal lcx == lc_maxGoal lcx) $
+    assert (lc_minCurr lcx == lc_maxCurr lcx) $
+    listToMaybe (ln_toList getLC lcx)
+
+-- DupCaps supports typeful construction of a constant capability
+data DupCaps m x = DupCaps { dupCaps :: LC m -> LCaps m x }
+instance BuildMembr (DupCaps m) where
+    buildSigMembr  = DupCaps $ LnkSig . LCX
+    buildSumMembr dcx dcy = DupCaps $ \ lc ->
+        LnkSum (dupCaps dcx lc) (dupCaps dcy lc) 
+    buildProdMembr dcx dcy = DupCaps $ \ lc -> 
+        LnkProd (dupCaps dcx lc) (dupCaps dcy lc)
+
+-- | duplicate an input capability to an output capability
+-- Note: this is unsafe unless caps are from a common partition
+-- and are already synchronized. 
+lc_dupCaps :: (SigMembr y) => LCaps m x -> LCaps m y
+lc_dupCaps = maybe LnkDead (dupCaps buildMembr) . lc_anyCap
+
+
+-- | Map a function to every cap.
+lc_map :: (LC m -> LC m) -> LCaps m x -> LCaps m x
+lc_map _ LnkDead = LnkDead
+lc_map fn (LnkSig (LCX lc)) = LnkSig (LCX (fn lc))
+lc_map fn (LnkProd x y) = LnkProd (lc_map fn x) (lc_map fn y)
+lc_map fn (LnkSum x y) = LnkSum (lc_map fn x) (lc_map fn y)
+
+-- | common caps update is irrelevant change in datatype.
+lc_fwd :: LCaps m (S p x) -> LCaps m (S p y)
+lc_fwd LnkDead = LnkDead
+lc_fwd (LnkSig (LCX lc)) = LnkSig (LCX lc)
 
 ---------------------------------------------------------
 -- SigSt represents the state of one signal.
@@ -265,7 +335,7 @@ st_update :: StableT -> T -> Sig a -> SigSt a -> SigSt a
 st_update tS tU su st =
     assert (respectsStability (st_stable st) tU) $
     assert (monotonicStability (st_stable st) tS) $
-    let sf = s_switch (st_signal st) tU su in
+    let sf = s_switch' (st_signal st) tU su in
     SigSt sf tS False
 
 st_idle :: StableT -> SigSt a -> SigSt a
@@ -327,9 +397,7 @@ sm_idle_r tS sm = sm { sm_rsig = rsig } where
     rsig = assert (sm_expect_r sm) $ st_idle tS (sm_rsig sm)
 
 sm_waiting :: SigM x y -> Bool
-sm_waiting sm = waitL || waitR where
-    waitL = (st_expect . sm_lsig) sm
-    waitR = (st_expect . sm_rsig) sm
+sm_waiting sm = sm_expect_l sm || sm_expect_r sm where
 
 sm_stable :: SigM x y -> StableT
 sm_stable sm = min tL tR where
@@ -337,7 +405,7 @@ sm_stable sm = min tL tR where
     tR = (st_stable . sm_rsig) sm
 
 -- process link updates based on a SigM combiner function
-sm_emit :: (Sig a -> Sig b -> Sig c) -> LnkUp c -> SigM a b -> IO ()
+sm_emit :: (Monad m) => (Sig a -> Sig b -> Sig c) -> LnkUp m c -> SigM a b -> m ()
 sm_emit fn lu sm = maybe idle update (sm_tmup sm) where
     idle = ln_idle lu (sm_stable sm)
     update tUp = 
@@ -352,162 +420,46 @@ sm_cleanup tCut sm = SigM lsig rsig Nothing where
     lsig = st_clear tCut (sm_lsig sm)
     rsig = st_clear tCut (sm_rsig sm)
 
+
 -- | SigM is a utility type for combining two input signals. (Other
 -- than DemandAggr, most RDP signal processing involves one or two
 -- signals.) This wraps update operations with a signal handler for
 -- updates on left and right branches. 
 --
---     ln_withSigM onTouch onEmit
---
-ln_withSigM :: IO () -> (SigM x y -> IO ()) -> IO (LnkUp x, LnkUp y)
-ln_withSigM onTouch onEmit = 
-    newIORef sm_zero >>= \ rfSigM ->
-    return $ ln_withSigM' rfSigM onTouch onEmit
+ln_withSigM :: (Monad m) 
+            => CC m                    -- common caps
+            -> m ()                    -- onTouch
+            -> (SigM x y -> m ())      -- on emit
+            -> (Set Unique -> m ())    -- on cycle
+            -> m (LnkUp m x, LnkUp m y)
+ln_withSigM cc onTouch onEmit onCycle = 
+    cc_newRef cc sm_zero >>= \ rfSigM ->
+    return $ ln_withSigM' rfSigM onTouch onEmit onCycle
 
-ln_withSigM' :: IORef (SigM x y) -> IO () -> (SigM x y -> IO ()) 
-             -> (LnkUp x, LnkUp y)
-ln_withSigM' rf onTouch onEmit = (lux,luy)
-    where pokeX = readIORef rf >>= \ sm ->
-                  writeIORef rf (sm_poke_l sm) >>
-                  unless (sm_waiting sm) onTouch
-          idleX tS = modifyIORef rf (sm_idle_l tS) >> emit
-          updX tS tU sX = modifyIORef rf (sm_update_l tS tU sX) >> emit
-          pokeY = readIORef rf >>= \ sm ->
-                  writeIORef rf (sm_poke_r sm) >>
-                  unless (sm_waiting sm) onTouch
-          idleY tS = modifyIORef rf (sm_idle_r tS) >> emit
-          updY tS tU sY = modifyIORef rf (sm_update_r tS tU sY) >> emit
-          emit =  readIORef rf >>= \ sm ->
-                  unless (sm_waiting sm) $
-                    let sm' = sm_cleanup (sm_stable sm) sm in
-                    sm' `seq` writeIORef rf sm' >>
-                    onEmit sm
-          lux = LnkUp pokeX updX idleX
-          luy = LnkUp pokeY updY idleY
-
-{-
-
----------------------------------------------------------
--- A simple model for time-shifts. We have a current delay and a
--- goal delay. A time-shift can move either or both. Differences
--- in current delay can be turned into a final behavior - i.e. 
--- we compare ldt_curr before and after, and delay accordingly. 
---
--- TR does not cause time-shifts, but controls how timing info is
--- preserved across MkLnk behaviors. Only a few special behaviors,
--- such as bdisjoin, need other than tr_unit, id, or tr_fwd.
-type TR x y = LnkD LDT x -> LnkD LDT y
-type TS x = TR x x
-data LDT = LDT 
-    { ldt_curr :: !DT   -- actual delay from start of behavior
-    , ldt_goal :: !DT   -- aggregated but unapplied logical delay
-    , ldt_live :: !Bool -- is this a live branch (not binl or binr?)
-    }
-
-ldt_maxGoal, ldt_minGoal, ldt_maxCurr, ldt_minCurr :: LnkD LDT x -> DT
-ldt_maxGoal = lnd_aggr max . lnd_fmap ldt_goal
-ldt_minGoal = lnd_aggr min . lnd_fmap ldt_goal
-ldt_maxCurr = lnd_aggr max . lnd_fmap ldt_curr
-ldt_minCurr = lnd_aggr min . lnd_fmap ldt_curr
-
--- ldt_anyLive returns true if ANY inputs are alive.
-ldt_anyLive :: LnkD LDT x -> Bool
-ldt_anyLive = lnd_aggr (||) . lnd_fmap ldt_live
-
--- simple validation on LnkD LDT structure
--- not very efficient, but okay for assert
-ldt_valid :: LnkD LDT x -> Bool
-ldt_valid (LnkDUnit ldt) = (ldt_goal ldt >= ldt_curr ldt)
-ldt_valid (LnkDSum x y) = ldt_valid x && ldt_valid y
-ldt_valid (LnkDProd x y) = ldt_valid x && ldt_valid y && 
-    (ldt_anyLive x == ldt_anyLive y)
-
--- tr_unit validates an assumption that all inputs have uniform
--- timing properties. It is the normal timing translator for MkLnk.
-tr_unit :: TR x y
-tr_unit x =
-    assert (ldt_valid x) $
-    assert (ldt_maxGoal x == ldt_minGoal x) $
-    assert (ldt_maxCurr x == ldt_minCurr x) $
-    LnkDUnit $ LDT 
-        { ldt_curr = ldt_maxCurr x
-        , ldt_goal = ldt_maxGoal x
-        , ldt_live = ldt_anyLive x
-        }
-
-tr_fwd :: TR (S p1 x1) (S p2 x2)
-tr_fwd = LnkDUnit . lnd_sig
-
-tr_dead :: LnkD LDT x -> LnkD LDT y
-tr_dead x = LnkDUnit ldtDead
-    where ldtDead = LDT { ldt_curr = ldt_maxCurr x
-                        , ldt_goal = ldt_maxGoal x
-                        , ldt_live = False 
-                        }
-
-
-----------------------------------------------------------
--- LnkD is a more generic version of LnkW for metadata.
--- It allows a single value to represent a group. Usefully
--- it can be propagated even if the type is unknown.
-data LnkD d x where
-    LnkDUnit :: d -> LnkD d x
-    LnkDProd :: (LnkD d x) -> (LnkD d y) -> LnkD d (x :&: y)
-    LnkDSum  :: (LnkD d x) -> (LnkD d y) -> LnkD d (x :|: y)
-
-lnd_fst :: LnkD d (x :&: y) -> LnkD d x
-lnd_snd :: LnkD d (x :&: y) -> LnkD d y
-lnd_left :: LnkD d (x :|: y) -> LnkD d x
-lnd_right :: LnkD d (x :|: y) -> LnkD d y
-lnd_sig  :: LnkD d (S p x) -> d
-
-lnd_fst (LnkDUnit d) = LnkDUnit d
-lnd_fst (LnkDProd x _) = x
-lnd_snd (LnkDUnit d) = LnkDUnit d
-lnd_snd (LnkDProd _ y) = y
-lnd_left (LnkDUnit d) = LnkDUnit d
-lnd_left (LnkDSum x _) = x
-lnd_right (LnkDUnit d) = LnkDUnit d
-lnd_right (LnkDSum _ y) = y 
-lnd_sig (LnkDUnit d) = d
-
--- map a simple operation across all elements independently. 
-lnd_fmap :: (a -> b) -> LnkD a x -> LnkD b x
-lnd_fmap fn (LnkDUnit d) = LnkDUnit (fn d)
-lnd_fmap fn (LnkDProd l r) = LnkDProd (lnd_fmap fn l) (lnd_fmap fn r)
-lnd_fmap fn (LnkDSum l r) = LnkDSum (lnd_fmap fn l) (lnd_fmap fn r)
-
--- aggregate a value. Note that the aggregation function should be
--- idempotent and commutative. There aren't many applicable 
--- functions that are meaningful, except min and max.
-lnd_aggr :: (b -> b -> b) -> LnkD b x -> b
-lnd_aggr _ (LnkDUnit b) = b
-lnd_aggr fn (LnkDProd l r) = fn (lnd_aggr fn l) (lnd_aggr fn r)
-lnd_aggr fn (LnkDSum l r) = fn (lnd_aggr fn l) (lnd_aggr fn r)
-
--- apply a function pairwise between matching elements in structure.
-lnd_zip :: (a -> b -> c) -> LnkD a x -> LnkD b x -> LnkD c x
-lnd_zip fn (LnkDUnit a) (LnkDUnit b) = 
-    LnkDUnit (fn a b)
-lnd_zip fn (LnkDSum al ar) blr = 
-    let cl = lnd_zip fn al (lnd_left blr) in
-    let cr = lnd_zip fn ar (lnd_right blr) in
-    LnkDSum cl cr
-lnd_zip fn alr (LnkDSum bl br) =
-    let cl = lnd_zip fn (lnd_left alr) bl in
-    let cr = lnd_zip fn (lnd_right alr) br in
-    LnkDSum cl cr
-lnd_zip fn (LnkDProd a1 a2) b12 =
-    let c1 = lnd_zip fn a1 (lnd_fst b12) in
-    let c2 = lnd_zip fn a2 (lnd_snd b12) in
-    LnkDProd c1 c2
-lnd_zip fn a12 (LnkDProd b1 b2) =
-    let c1 = lnd_zip fn (lnd_fst a12) b1 in
-    let c2 = lnd_zip fn (lnd_snd a12) b2 in
-    LnkDProd c1 c2
--}
-
-
-
+ln_withSigM' :: (Monad m) 
+             => Ref m (SigM x y) 
+             -> m () 
+             -> (SigM x y -> m ())
+             -> (Set Unique -> m ()) 
+             -> (LnkUp m x, LnkUp m y)
+ln_withSigM' rf onTouch onEmit onCycle = (lux,luy) where
+    touchX = doTouch sm_poke_l
+    idleX = doUpdate . sm_idle_l
+    updateX tS tU sX = doUpdate (sm_update_l tS tU sX)        
+    touchY = doTouch sm_poke_r
+    idleY = doUpdate . sm_idle_r
+    updateY tS tU sY = doUpdate (sm_update_r tS tU sY)
+    doTouch fn = 
+        readRef rf >>= \ sm ->
+        writeRef rf (fn sm) >>
+        unless (sm_waiting sm) onTouch 
+    doUpdate fn = readRef rf >>= maybeEmit . fn
+    maybeEmit sm = 
+        if (sm_waiting sm) then writeRef rf sm else
+        let smCln = sm_cleanup (sm_stable sm) sm in
+        writeRef' rf smCln >>
+        onEmit sm 
+    lux = LnkUp touchX updateX idleX onCycle
+    luy = LnkUp touchY updateY idleY onCycle
 
 

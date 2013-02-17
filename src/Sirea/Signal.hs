@@ -110,16 +110,13 @@ s_trim s0 tm =
 s_sample_d :: Sig a -> T -> T -> (Maybe (T, Maybe a), Sig a)
 s_sample_d s0 tLower tUpper =
     assert (tLower < tUpper) $
-    let x  = s_head s0 in
-    let xs = s_tail s0 in
+    let (x,xs) = ds_query (s_head s0) tLower (s_tail s0) in
     case dstep xs tUpper of
         DSDone -> (Nothing, mkSig x ds_done)
         DSWait xs' -> (Nothing, mkSig x xs')
-        DSNext tx x' xs' ->
-            if tLower < tx
-                then (Just (tx,x'), mkSig x' xs')
-                else s_sample_d (mkSig x' xs') tLower tUpper
-
+        DSNext tx x' xs' -> 
+            assert (tLower < tx) $ -- true if signal well formed
+            (Just (tx,x'), mkSig x' xs')
 
 -- | sigToList will obtain the [(T,Maybe a)] states in a given time
 -- range, similar to s_sample_d. Note that there will always be at
@@ -142,7 +139,7 @@ s_always c = mkSig (Just c) ds_done
 
 -- | replace all values in a signal with a constant c, such that the
 -- signal varies between Just c and Nothing. This will also filter 
--- unnecessary updates from values that are now known to be equal.
+-- unnecessary updates from values now trivially known to be equal.
 s_const :: c -> Sig a_ -> Sig c
 s_const c s0 = 
     case s_head s0 of
@@ -246,8 +243,8 @@ s_switch s0 t sf =
     mkSig (s_head s0) (ds_sigup (s_tail s0) t (s_head sf) (s_tail sf))
 
 -- | Switch but with slightly stricter semantics - ensures that the
--- spine of the signal up to T is evaluated. Intention to simplify
--- GC of values that are no longer applicable. 
+-- structure of the signal up to T is flat, i.e. so we don't keep
+-- keep now defunct future values in memory. This can improve GC.
 s_switch' :: Sig a -> T -> Sig a -> Sig a
 s_switch' s0 t sf =
     mkSig (s_head s0) (ds_sigup' (s_tail s0) t (s_head sf) (s_tail sf))

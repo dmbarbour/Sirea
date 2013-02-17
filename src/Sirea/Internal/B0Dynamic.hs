@@ -4,8 +4,8 @@
 -- Evaluation will logically sync the inputs, then 
 -- physically sync the outputs (y). The inputs are not
 -- immediately 
-module Sirea.Internal.BDynamic 
-    ( evalB
+module Sirea.Internal.B0Dynamic 
+    ( evalB0
     ) where
 
 import Prelude hiding(id,(.),drop)
@@ -19,11 +19,11 @@ import Data.List (foldl')
 import Data.Maybe (isNothing, fromMaybe, mapMaybe)
 import Data.Unique
 import qualified Data.Map.Strict as M
-import Sirea.Internal.BTypes
+import Sirea.Internal.B0Type
 import Sirea.Internal.STypes
 import Sirea.Internal.LTypes
-import Sirea.Internal.BImpl 
-import Sirea.Internal.BCompile
+import Sirea.Internal.B0Impl 
+import Sirea.Internal.B0Compile
 import Sirea.Internal.Tuning (dtCompileFuture, dtFinalize, tAncient)
 import Sirea.Time
 import Sirea.Signal
@@ -54,105 +54,86 @@ import Sirea.Signal
 --   cannot predict dead sink in x based on dead sink in y
 -- consequently, eval tends to hinder optimizations.
 -- 
-evalB :: (SigInP p x) => DT -> B (S p (B x y) :&: x) (y :|: (S p () :&: x))
-evalB dt = --trace "evalB" $
-    -- synchronization and preparation (& initial compile step)
-    synchB >>> forceDelayB >>> evalPrepB dt >>>
-    -- after evalPrep, have (S p (Either (B w x y) ()) :&: x)
-    B_first (splitB >>> mirrorB >>> B_left dupB) >>> swapB >>>
-    -- have (x :&: ((S p () :&: S p ()) :|: S p (B w x y)))
-    disjoinB >>>
-    -- have ((x :&: S p ()) :|: (x :&: S p (B w x y))
-    B_left swapB >>> mirrorB >>> B_left swapB >>> 
-    -- now have (S p (B w x y) :&: x) :|: (S p () :&: x); will eval on left
-    B_left (evalFinalB dt)
+evalB0 :: (SigInP p x, Monad m) => DT 
+       -> B0 m (S p (B0 m x y) :&: x) (y :|: (S p () :&: x))
+evalB0 dt = --trace "evalB" $
+    -- synchronization and preparation (including stage 1 compile)
+    synchB0 >>> forceDelayB0 >>> evalPrepB0 dt >>>
+    -- after evalPrep, have (S p (Either (B0s1 m x y) ()) :&: x)
+    firstB0 (splitB0 >>> mirrorB0 >>> leftB0 dupB0) >>> swapB0 >>>
+    -- have (x :&: ((S p () :&: S p ()) :|: S p (B0s1 m x y)))
+    disjoinB0 >>>
+    -- have ((x :&: S p ()) :|: (x :&: S p (B0s1 m x y))
+    leftB0 swapB0 >>> mirrorB0 >>> leftB0 swapB0 >>> 
+    -- now have (S p (B0s1 m x y) :&: x) :|: (S p () :&: x); will eval on left
+    leftB0 (evalFinalB0 dt)
 
 -- apply first compilation stage to the input behavior, and filter
 -- behaviors that won't fit into given time `dt`.
-evalPrepB :: DT -> B (S p (B x y) :&: x) ((S p (Either (B x y) ())) :&: x)
-evalPrepB dt = B_latent $ \ tbx ->
-    assert (evalSynched tbx) $
-    let tx = lnd_snd tbx in
-    B_first (fmapB (evalPrep dt tx))
+evalPrepB0 :: (Monad m) => DT 
+           -> B0 m (S p (B0 m x y) :&: x) (S p (Either (B0s1 m x y) ()) :&: x)
+evalPrepB0 dt = mkLnkB0 lcPrep mkLnEvalPrep where
+    lcPrep lcbx = LnkProd ((lc_fwd . ln_fst) lcbx) (ln_snd lcbx)
 
--- final evaluation step; assumes input B is valid at this point.
-evalFinalB :: (SigMembr x) => DT -> B (S p (B x y) :&: x) y
-evalFinalB dt = B_latent $ \ tbx ->
-    let tx = lnd_snd tbx in
-    B_mkLnk (trEval dt) (buildEval tx)
-
--- trEval reports the delay incurred by the eval process
--- i.e. so that operations using `y` are timed properly.
--- (actually causing this delay is left to evalFinalB.
--- Here, the delay is only reported.)
-trEval :: DT -> LnkD LDT x -> LnkD LDT y
-trEval dt t0 = 
-    assert (evalSynched t0) $
-    let dt0 = ldt_maxCurr t0 in
-    let dtf = dt0 + dt in
-    trDTF dtf t0
+mkLnEvalPrep :: (Monad m) 
+             => DT -> LCaps m (S p (B0 m x y)) 
+             -> Lnk m (S p (Either (B0 m x y) ()) :&: x)
+             -> m (Lnk m (S p (B0 m x y) :&: x))
+mkLnEvalPrep dt lcbx lnbx = return (LnkProd lnb' lnx) where
+    lcb = ln_fst lcbx
+    lcx = ln_snd lcbx
+    lnb = ln_fst lnbx
+    lnx = ln_snd lnbx
+    dtFit = assert (evalSynched lcbx) $ dt + lc_maxCurr lcb
+    lnb' = ln_lumap (ln_sfmap (fnEvalPrep dtFit lcx)) lnb
 
 -- evalPrep will partially evaluate the inner behaviors, and decide 
 -- whether they can be evaluated further (e.g. if they do not fit in
 -- the alloted timeslot, they cannot be evaluated).
---
--- The output `B` is not quite the same as the input `B` due to the
--- first compilation phase eliminating B_latent expressions, and
--- applying any fixed delays and dead-code-on-input optimizations.
--- Basically, the `B` after this point is highly context dependent.
-evalPrep :: DT -> LnkD LDT x -> B x y -> Either (B x y) ()
-evalPrep dt ldtx =
-    assert (evalSynched ldtx) $
-    evalFitDelay dtf . precompile
-    where dt0 = ldt_maxCurr ldtx
-          dtf = dt0 + dt 
-          precompile = flip compileBC0 ldtx
+fnEvalPrep :: (Monad m) => DT -> LCaps m x -> B0 m x y -> Either (B0s1 m x y) ()
+fnEvalPrep dtGoal lcx = evalFitDelay dtGoal . flip compileB0s1 lcx
 
 -- evalFitDelay is applied to each dynamic behavior. If it succeeds,
--- we can guarantee the resulting delay is equal to dtf on every value
--- entering `y`. It may fail if the behavior is too large for dtf.
-evalFitDelay :: DT -> (B x y, LnkD LDT y) -> Either (B x y) ()
-evalFitDelay dtf (b,t0) =
-    assert (ldt_valid t0) $
-    if (ldt_maxGoal t0 > dtf) 
-        then Right () -- cannot fit to delay
-        else Left (b >>> delayToFit) 
-    where tfn = trDTF dtf
-          delayToFit = B_mkLnk tfn lnkDTF
-          lnkDTF = return . buildTshift t0 (tfn t0)
+-- we can guarantee the resulting delay is equal to dtGoal on every 
+-- signal in y. If the behavior is too large to fit, we'll return
+-- the '()' value indicating failure.
+evalFitDelay :: (Monad m) => DT -> (B0s1 m x y, LCaps m y) -> Either (B0s1 m x y) ()
+evalFitDelay dtGoal (b,lcy) = 
+    if (lc_maxGoal lcy > dtGoal)
+        then Right ()
+        else Left (b >>> B0s1_mkLnk (return . fitGoal))
+    where fitGoal = buildTshift lcy (lc_map toGoal lcy)
+          toGoal lc = lc { lc_dtCurr = dtGoal, lc_dtGoal = dtGoal }
 
--- "delay to fit" a particular time
-trDTF :: DT -> LnkD LDT x -> LnkD LDT y
-trDTF dtf t0 = 
-    assert (ldt_valid t0) $
-    assert (dtf >= ldt_maxGoal t0) $
-    LnkDUnit $ LDT { ldt_curr = dtf
-                   , ldt_goal = dtf
-                   , ldt_live = ldt_anyLive t0 }
+-- final evaluation step; assumes input B is valid at this point.
+-- Will also add the delays.
+evalFinalB0 :: (SigMembr x) => DT -> B0 m (S p (B0s1 m x y) :&: x) y
+evalFinalB0 dt = mkLnkB0 lcEval buildEval where
+    lcEval lcbx = 
+        assert (evalSynched lcbx) $
+        let dtInit = lc_maxCurr (ln_fst lcbx) in
+        let dtFini = dtInit + dt in
+        lc_map (setDelay dtFini) (lc_dupCaps lcbx)
+    setDelay dt lc = lc { lc_dtCurr = dt, lc_dtGoal = dt }
 
--- a sanity test for assertions; eval has some stringent
--- synchronization requirements, but should achieve them
--- internally. 
-evalSynched :: LnkD LDT x -> Bool
-evalSynched ldt =
-    (ldt_valid ldt) &&
-    (ldt_maxGoal ldt == ldt_minGoal ldt) &&
-    (ldt_maxCurr ldt == ldt_minCurr ldt) &&
-    (ldt_maxGoal ldt == ldt_minCurr ldt)
+-- are we synched for eval?
+evalSynched :: LCaps m x -> Bool
+evalSynched lc = (lc_valid lc) && (lc_maxGoal lc == lc_minCurr lc)
 
 -- Data needed for the dynamic evaluator source
-data Evaluator x y = Evaluator 
-    { ev_data     :: !(IORef (EVD x y)) -- mutable state
-    , ev_mergeLnk :: !(Unique -> Lnk y) -- remote links
+data Evaluator m x y = Evaluator 
+    { ev_data     :: !(Ref m (EVD x y)) -- mutable state
+    , ev_mergeLnk :: !(Int -> Lnk m y) -- remote links
     , ev_dynX     :: !(LnkW Dyn x) -- source links
     }
 data EVD x y = EVD 
     { evd_signal   :: !(SigSt (B x y)) -- signal of dynamic behaviors
     , evd_compileT :: {-# UNPACK #-} !T -- how much of the signal has been compiled?
+    , evd_nextKey  :: {-# UNPACK #-} !Int
     }
 
 -- buildEval prepares the evaluator to receive and process inputs.
-buildEval :: (SigMembr x) => LnkD LDT x -> Lnk y -> IO (Lnk (S p (B x y) :&: x))
+buildEval :: (SigMembr x, Monad m) => LCaps m x -> Lnk m y -> m (Lnk m (S p (B x y) :&: x))
 buildEval dtx lnyFinal =
     assert (evalSynched dtx) $
     let evd0 = EVD st_zero tAncient in

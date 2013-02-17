@@ -7,7 +7,6 @@
 --   SRefO provides one-to-many communication from a partition.
 --   SRefI provides many-to-one communication to the partition.
 --
--- 
 module Sirea.SRef 
     ( SRefO, getSRefO, writeSRef, bwatchSRef
     , SRefI, getSRefI, readSRef, addSRefEvent, bsignalSRef
@@ -23,10 +22,9 @@ import Sirea.Signal
 import Sirea.Behavior
 import Sirea.Time
 import Sirea.PCX
-import Sirea.BCX
 import Sirea.B
 import Sirea.Partition
-import Sirea.Link
+import Sirea.UnsafeLink
 
 import Sirea.Internal.Tuning (dtDaggrHist)
 import Sirea.Internal.DemandMonitorData
@@ -37,6 +35,7 @@ data SRefO z = SRefO !(MonitorDist (Maybe z)) !(T -> Sig z -> IO())
 
 instance (Partition p, Typeable z) => Resource p (SRefO z) where 
     locateResource _ = newSRefO
+instance (Partition p, Typeable z) => NamedResource p (SRefO z)
 
 newSRefO :: (Partition p) => PCX p -> IO (SRefO z)
 newSRefO cp = 
@@ -63,7 +62,7 @@ newSRefO' pd md rf lu = SRefO md write where
             Just (tU0,su0) ->
                 if (tU0 >= tU) 
                     then writeIORef rf (Just (tU,su)) 
-                    else writeIORef rf (Just (tU0, s_switch su0 tU su))
+                    else writeIORef rf (Just (tU0, s_switch' su0 tU su))
     activate = -- touch and update (SRef never idles)
         readIORef rf >>= \ mbup ->
         writeIORef rf Nothing >>
@@ -82,6 +81,7 @@ data SRefI z = SRefI !(DemandAggr z [z]) !(IORef (T -> Sig [z] -> IO ()))
 
 instance (Partition p, Typeable z) => Resource p (SRefI z) where
     locateResource _ cp = newSRefI cp
+instance (Partition p, Typeable z) => NamedResource p (SRefI z)
 
 newSRefI :: (Partition p) => PCX p -> IO (SRefI z)
 newSRefI cp = 
@@ -91,13 +91,14 @@ newSRefI cp =
     return (SRefI da rf) 
 
 lnkSRefI :: PSched -> IORef (T -> Sig zs -> IO ()) -> LnkUp zs
-lnkSRefI pd rf = LnkUp touch update idle where
+lnkSRefI pd rf = LnkUp touch update idle cycle where
     touch = return ()
     idle _ = return ()
-    update _ tU su = p_onStepEnd pd $
+    cycle _ = return () 
+    update _ tU su = onStepEnd pd $
         readIORef rf >>= \ eventHandler ->
         eventHandler tU su
-    
+
 sigListZip :: [Sig a] -> Sig [a]
 sigListZip = foldr (s_full_zip jf) (s_always [])
   where jf (Just x) (Just xs) = Just (x:xs)
@@ -139,7 +140,7 @@ writeSRef (SRefO _ write) = write
 --
 -- NOTE: the list of values [z] should be treated as a set, i.e. any
 -- duplicate values and ordering should not affect behavior of the
--- application. (It is provided as a list to avoid Ord constraint.)
+-- application. It is provided as a list to avoid Ord constraints.
 readSRef :: SRefI z -> IO (Sig [z])
 readSRef (SRefI da _) = pollDemandAggr da
 
@@ -153,7 +154,7 @@ readSRef (SRefI da _) = pollDemandAggr da
 --
 -- NOTE: the list of values [z] should be treated as a set, i.e. any
 -- duplicate values and ordering should not affect behavior of the
--- application. (It is provided as a list to avoid Ord constraint.)
+-- application. It is provided as a list to avoid Ord constraints.
 addSRefEvent :: SRefI z -> (T -> Sig [z] -> IO ()) -> IO ()
 addSRefEvent (SRefI _ rf) ev = modifyIORef rf addEv where
     addEv oldOps su = (oldOps su) >> ev su
@@ -166,37 +167,33 @@ addSRefEvent (SRefI _ rf) ev = modifyIORef rf addEv where
 -- | Observe the signal from an output SRef managed by a partition.
 -- If the signal is not set by the partition for a period, watch 
 -- will report an active Nothing signal.
-bwatchSRef :: (Partition p, Typeable z) => String -> BCX w (S p ()) (S p (Maybe z))
-bwatchSRef nm = fix $ \ b -> wrapBCX $ \ cw ->
-    let getMD = getPCX b cw >>= \ cp -> 
-                getSRefO cp nm >>= \ (SRefO md _) ->
-                return md
-    in
-    monitorFacetB getMD
+bwatchSRef :: (Partition p, Typeable z) => String -> B (S p ()) (S p (Maybe z))
+bwatchSRef nm = fix $ \ b -> monitorFacetB $ \ cw ->
+    getPCX b cw >>= \ cp ->
+    getSRefO cp nm >>= \ (SRefO md _) ->
+    return md
 
 -- | Send a signal to an input SRef to be observed in partition.
 -- Mutiple signals may be sent and processed concurrently.
-bsignalSRef :: (Partition p, Typeable z) => String -> BCX w (S p z) (S p ())
-bsignalSRef nm = fix $ \ b -> wrapBCX $ \ cw ->
-    let getDA = getPCX b cw >>= \ cp -> 
-                getSRefI cp nm >>= \ (SRefI da _) -> 
-                return da 
-    in
-    demandFacetB getDA 
+bsignalSRef :: (Partition p, Typeable z) => String -> B (S p z) (S p ())
+bsignalSRef nm = fix $ \ b -> demandFacetB $ \ cw ->
+    getPCX b cw >>= \ cp -> 
+    getSRefI cp nm >>= \ (SRefI da _) -> 
+    return da 
 
-getPCX :: (Partition p) => BCX w (S p a) z -> PCX w -> IO (PCX p)
+getPCX :: (Partition p) => B (S p a) z -> PCX W -> IO (PCX p)
 getPCX _ = findInPCX
 
-monitorFacetB :: IO (MonitorDist z) -> B (S p ()) (S p z)
+monitorFacetB :: (PCX W -> IO (MonitorDist z)) -> B (S p ()) (S p z)
 monitorFacetB getMD = unsafeLinkB lnMon
-    where lnMon LnkDead = return LnkDead -- dead code elim.
-          lnMon (LnkSig lu) = 
-            getMD >>= \ md ->
+    where lnMon _ LnkDead = return LnkDead -- dead code elim.
+          lnMon cw (LnkSig lu) = 
+            getMD cw >>= \ md ->
             LnkSig <$> newMonitorLnk md lu
 
-demandFacetB :: IO (DemandAggr e z) -> B (S p e) (S p ())
+demandFacetB :: (PCX W -> IO (DemandAggr e z)) -> B (S p e) (S p ())
 demandFacetB getDA = bvoid (unsafeLinkB lnDem) >>> bconst ()
-    where lnDem ln = assert (ln_dead ln) $
-            getDA >>= \ da -> 
+    where lnDem cw ln = assert (ln_dead ln) $
+            getDA cw >>= \ da -> 
             LnkSig <$> newDemandLnk da
 

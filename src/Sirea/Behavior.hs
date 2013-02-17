@@ -14,7 +14,7 @@ module Sirea.Behavior
     ( (:&:), (:|:), S, S0, S1, SigInP
     , (>>>) -- from Control.Category
     , bfwd
-    , BFmap(..), bforce, bspark, bstratf
+    , BFmap(..), bfseq, bseq, bspark, bstratf
     , BProd(..), bfst, bsecond, bsnd, bassocrp, (***), (&&&)
     , bvoid, (|*|)
     , BSum(..), binl, bright, binr, bassocrs, (+++), (|||)
@@ -60,30 +60,23 @@ bfwd :: (Category b) => b x x
 bfwd = id
 
 -- | BFmap - pure operations on concrete signals. Includes common
--- performance annotations. BFmap supports arbitrary Haskell 
--- functions. 
--- 
--- Some useful properties:
---    bfmap f >>> bfmap g = bfmap (f >>> g)
---    bconst c >>> bfmap f = bconst (f c)
---    bconst c >>> bconst d = bconst d
---
--- The bfmap behavior serves the role of `arr` in Control.Arrow, but
--- it cannot operate across asynchronous signals or partitions.
+-- performance annotations. BFmap lifts Haskell functions to process
+-- signals, serving the role of `arr` from Control.Arrow. But bfmap
+-- is constrained to operating on one concrete signal; functions 
+-- cannot operate on asynchronous signals or across partitions.
 --
 class (Category b) => BFmap b where
     -- | bfmap applies a function to a concrete signal. This allows
-    -- arbitrary Haskell functions to integrate with RDP. Lazy.
+    -- arbitrary Haskell functions to integrate with RDP.
     bfmap :: (x -> y) -> b (S p x) (S p y)
 
     -- | bconst maps a constant to the signal. The resulting signal
-    -- is still non-trivial, varying between active and inactive as
-    -- did the input signal. 
+    -- will vary between active and inactive on the same schedule as
+    -- the input signal, but its active value will be constant.
     --   bconst = bfmap . const
-    -- It may be specialized easily for performance, e.g. eliminate
-    -- most redundant updates like badjeqf.
+    -- This may be specialized for performance, like badjeqf.
     bconst :: y -> b (S p x) (S p y)
-    bconst = bfmap . const
+    -- bconst = bfmap . const
 
     -- | bstrat provides developers great control of when and where
     -- computations occur. Control.Parallel.Strategies can specify
@@ -97,53 +90,57 @@ class (Category b) => BFmap b where
     -- kickstart the computation, and bfmap will provide the `Eval` 
     -- structure in the first place. 
     bstrat :: b (S p (Eval x)) (S p x)
-    bstrat = bfmap runEval
+    -- bstrat = bfmap runEval
 
-    -- | bseq annotates that a signal should be computed as it 
-    -- updates, generally based on stability of the signal's value
-    -- (see FRP.Sirea.Link for more about stability). The signal is
-    -- computed up to `Just x | Nothing`; x is not observed. 
+    -- | btouch will compute the signal slightly ahead of stability, 
+    -- eliminating lazy thunks up to the Just x | Nothing spine of
+    -- the signal. Compose with bstrat so evaluating `Just` will 
+    -- evaluate parts of x.
     --
-    -- This is a performance annotation. Behaviors are not obligated
-    -- to implement it fully (or at all). Sirea implements it for B
-    -- and BCX, at least for regular (not final) signal updates. 
-    --
-    -- This is meant for use in tandem with bstrat to lift desired
-    -- computations to occur prior observing the `Just` constructor.
-    bseq :: b (S p x) (S p x)
-    bseq = bfwd
+    -- This is a performance annotation, with no semantic effect on
+    -- the signal or behavior. Developers shouldn't have divergent
+    -- signal values.
+    btouch :: b (S p x) (S p x)
+    -- btouch = bfwd
 
-    -- | Types that can be tested for equality can be filtered to
-    -- eliminate redundant updates. Redundant updates are common if
-    -- mapping lossy functions (like `x->Bool`) to signals. badjeqf,
-    -- for "behavior adjacent equality filter", annotates the RDP
-    -- computation to perform such filtering.
+    -- | The badjeqf behavior helps with stability in case of false
+    -- updates, i.e. where the signal indicates a possible change,
+    -- but the values are equivalent. (This is a common consequence
+    -- of lossy functions, e.g. `Foo -> Bool`.) 
     --
-    -- The reason to eliminate redundant updates is to eliminate
-    -- redundant computations further down the line, eg. at `bzip`.
-    -- This is a valuable, safe performance optimization, though it
-    -- must be used judiciously (or badjeqf could itself become the
-    -- redundant computation).
+    -- The signal values will be merged within each update; further,
+    -- updates may be shifted into the future if there was no change
+    -- in the observed values in the near term. The future cannot be
+    -- tested indefinitely, so the update will be delivered. It may
+    -- occasionally be useful to compose this with bfchoke.
     --
-    -- You are not guaranteed that all redundant updates will be 
-    -- eliminated. Treat this as a performance annotation; the 
-    -- semantic content is equivalent to id.
+    -- badjeqf should have no effect on the signal's semantic value,
+    -- and should be considered a performance annotation.
     badjeqf :: (Eq x) => b (S p x) (S p x)
-    badjeqf = bfwd -- semantic effect is identity
+    -- badjeqf = bfwd
 
--- | bforce will sequence evaluation when the signal update occurs,
--- according to a provided sequential strategy. Useful idiom:
+-- | bfseq will sequence evaluation when the signal update occurs,
+-- according to a provided sequential strategy. A useful idiom:
 --   > import Control.DeepSeq (rnf)
---   > bforce rnf
+--   > bfseq rnf
 -- This would reduce a signal to normal form before further progress 
 -- in the partition's thread. This can improve data parallelism by
 -- making more efficient use of partition threads, can help control
 -- memory overheads, and can achieve more predictable performance.
-bforce :: (BFmap b) => (x -> ()) -> b (S p x) (S p x)
-bforce f = bfmap seqf >>> bstrat >>> bseq
+bfseq :: (BFmap b) => (x -> ()) -> b (S p x) (S p x)
+bfseq f = bfmap seqf >>> bstrat >>> btouch
     where seqf x = (f x) `pseq` return x
 
--- | `bspark` is the similar to `bforce` except that it sparks each
+-- | bseq applies the normal Haskell sequence operator (`seq`) to
+-- reduce elements in a signal to weak head normal form. 
+--    bseq = bfseq (`seq` ())
+-- In many cases, weak head normal form is insufficient. But it is
+-- useful for strict data types, and easy access to bseq can be
+-- convenient.
+bseq :: (BFmap b) => b (S p x) (S p x)
+bseq = bfseq (`seq` ())
+
+-- | `bspark` is the similar to `bfseq` except that it sparks each
 -- computation rather than running it in the partition thread, and 
 -- does not wait for the computation to complete. 
 --
@@ -161,7 +158,7 @@ bforce f = bfmap seqf >>> bstrat >>> bseq
 -- directly use bstrat or bstratf, and btouch.
 --
 bspark :: (BFmap b) => (x -> ()) -> b (S p x) (S p x)
-bspark f = bfmap sparkf >>> bstrat >>> bseq
+bspark f = bfmap sparkf >>> bstrat >>> btouch
     where sparkf x = 
             let d = f x in 
             d `par` return (d `pseq` x)
@@ -177,6 +174,8 @@ bspark f = bfmap sparkf >>> bstrat >>> bseq
 -- observed when sampling the signal, i.e. when signal is touched,
 -- begin computing `x` value in parallel. (NOTE: it would be unsafe 
 -- to leak IVars from a Par computation.)
+--
+-- Use with btouch to initiate computation relative to stability.
 --
 bstratf :: (BFmap b, Functor f) => (forall e . (f e -> e)) 
         -> b (S p (f x)) (S p x)
@@ -528,7 +527,7 @@ bsplitBool = bsplitWith b2e
           b2e True = Left ()
 
 -- | BTemporal - operations for orchestrating signals in time.
--- (For spatial orchestration, see FRP.Sirea.Partition.)
+-- (For spatial orchestration, see Sirea.Partition.)
 --
 -- For arrow laws, it would be ideal to model timing properties of
 -- signals in the type system. But doing so in Haskell is awkward.
