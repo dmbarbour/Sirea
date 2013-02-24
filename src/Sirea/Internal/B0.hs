@@ -10,12 +10,11 @@ import Sirea.Behavior
 import Sirea.Internal.B0Type (B0)
 import Sirea.Internal.B0Impl
 import Sirea.Internal.B0Dynamic
-import Control.Monad
 import Data.Typeable
 
 instance (Typeable1 m) => Typeable2 (B0 m) where
     typeOf2 b = mkTyConApp tcB0 [typeOf1 (getM b)]
-        where tcB = mkTyCon3 "sirea-core" "Sirea.Internal.B0" "B0"
+        where tcB0 = mkTyCon3 "sirea-core" "Sirea.Internal.B0" "B0"
 
 getM :: B0 m x y -> m ()
 getM _ = undefined
@@ -65,7 +64,7 @@ instance (Monad m) => Behavior (B0 m)
 -- a problem (since it can lead to premature updates).
 --
 instance (Monad m) => BDynamic (B0 m) (B0 m) where
-    beval dt = evalB0 dt >>> bright bfst
+    bevalx = evalB0
 
 
 

@@ -777,34 +777,46 @@ luEqShift eq rf lu = LnkUp touch update idle cycle where
     idle tS = 
         modifyRef' rf (gcSig tS) >>
         ln_idle lu tS
-    update tS@DoneT tU su =
-        writeRef rf s_never >>
-        ln_update lu tS tU su
-    update tS@(StableT tNow) tU su =
-        let tSeek = tNow `addTime` dtEqShift in
+    update tS tU su =
+        let tSeek = (fromStableT tU tS) `addTime` dtEqShift in
         readRef rf >>= \ s0 -> -- old signal for comparison
-        let tU' = firstDiffT eq s0 su tU tSeek in
-        let su' = s_trim su tU' in
-        let s' = s_switch' s0 tU' su' in
-        let sCln = gcSig tS s' in
-        writeRef' rf sCln >>
-        ln_update lu tS tU' su'
+        let mbDiffT = firstDiffT eq s0 su tU tSeek in
+        case mbDiffT of
+            Nothing -> -- signals are equal forever
+                writeRef' rf (gcSig tS s0) >>
+                ln_idle lu tS
+            Just tU' -> 
+                let su' = s_trim su tU' in
+                let sf = s_switch' s0 tU' su' in
+                writeRef' rf (gcSig tS sf) >>
+                ln_update lu tS tU' su'
 
 -- find time of first difference between two signals in a region. OR
 -- if we don't find a difference, seek any existing point of change 
 -- in the signals to get an 'aligned' update. An aligned update will
 -- avoid increasing frequency of updates within limits of a search.
-firstDiffT :: (a -> b -> Bool) -> Sig a -> Sig b -> T -> T -> T
+-- 
+-- If there is no aligned update, this will test for a final state.
+-- If the signals are equal up to the final state (not just queried
+-- domain) then this will return Nothing; otherwise, it returns the
+-- alignment time up to which the signals are known to be equal.
+firstDiffT :: (a -> b -> Bool) -> Sig a -> Sig b -> T -> T -> Maybe T
 firstDiffT eq as bs tLower tUpper =
-    if (tLower >= tUpper) then tLower else -- aligned on tLower
+    if (tLower >= tUpper) then Just tLower else -- aligned on tLower
     let sigEq = s_full_zip activeWhileEq as bs in -- compare signals
     let sigEqList = sigToList sigEq tLower tUpper in 
     let cutL = L.dropWhile sampleActive sigEqList in
     case cutL of
-        (x:_) -> fst x -- found a difference
+        (x:_) -> Just $! fst x -- found a difference
         [] -> let tAlign = tUpper `addTime` dtEqShiftAlign in
-              let (x,_) = s_sample_d sigEq tUpper tAlign in
-              maybe tAlign fst x
+              let (x,xs) = s_sample_d sigEq tUpper tAlign in
+              case x of
+                Just (tU,_) -> Just tU -- align with an update
+                Nothing ->
+                    -- final test for whether signal is constant
+                    if s_is_final xs tAlign 
+                        then Nothing 
+                        else Just tAlign 
     where activeWhileEq (Just x) (Just y) = 
                 if (eq x y) then Just () 
                             else Nothing

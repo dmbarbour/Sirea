@@ -53,16 +53,16 @@ import Control.Concurrent.MVar
 import Control.Monad (join, unless, when)
 
 import Sirea.Internal.B0Type
+import Sirea.Internal.B0Impl()
 import Sirea.Internal.STypes
 import Sirea.Internal.LTypes
 import Sirea.Internal.PTypes
-import Sirea.Internal.B0Impl (phaseUpdateB0)
 import Sirea.Internal.PulseSensor (initPulseListener)
 import Sirea.Internal.Tuning ( batchesInFlight, tAncient, dtInsigStabilityUp)
 import Sirea.Partition
 import Sirea.PCX
 import Sirea.Behavior
-
+import Sirea.Signal
 import Sirea.Time
 
 type Event = IO ()
@@ -83,11 +83,11 @@ crossB0 cw = fix $ \ b ->
 -- falseCross is called when crossB start and stop partitions are
 -- the same. Basically, it is an id function. 
 falseCrossB0 :: (Monad m) => B0 m (S p1 x) (S p2 x)
-falseCrossB0 = B0_mkLnk lcX lnX
-    lcX (LnkSig (LCX lc)) = (LnkSig (LCX lc)) -- type change
-    lcX LnkDead = LnkDead
-    lnX _ (LnkSig lu) = return (LnkSig lu) -- type change
-    lnX _ LnkDead = return LnkDead
+falseCrossB0 = B0_mkLnk falseCross (const (return . falseCross))
+
+falseCross :: LnkW s (S p x) -> LnkW s (S p' x)
+falseCross (LnkSig sa) = LnkSig sa
+falseCross ln = assert (ln_dead ln) LnkDead
 
 -- this is a total hack in haskell to access typesystem data
 getPartitions :: (Partition p1, Partition p2) 
@@ -169,7 +169,7 @@ mkLuPhase rf pd lu = LnkUp touch update idle cycle where
 --
 sendB0 :: (Partition p1, Partition p2) 
       => PCX W -> p1 -> p2 -> B0 IO (S p1 x) (S p2 x)
-sendB0 cw p1 p2 = wrapB $ \ cw -> B0_mkLnk lcSend lnSend where
+sendB0 cw p1 p2 = B0_mkLnk lcSend lnSend where
     lcSend LnkDead = LnkDead
     lcSend (LnkSig (LCX lc)) =
         -- primarily just need to change schedulers
@@ -186,32 +186,33 @@ sendB0 cw p1 p2 = wrapB $ \ cw -> B0_mkLnk lcSend lnSend where
         let lu' = luSend rfT obSend lu in
         return (LnkSig lu')
 
-luSend :: IORef StableT -> OBSend -> LnkUp m x -> LnkUp m x
+luSend :: IORef StableT -> OBSend -> LnkUp IO x -> LnkUp IO x
 luSend rfT obSend lu = LnkUp touch update idle cycle where
     touch = return () -- touches stop at partition boundary
     cycle _ = return () -- cycles are partition-local
     idle tS =
-        readIORed rfT >>= \ tS0 ->
+        readIORef rfT >>= \ tS0 ->
         when (urgentStability tS0 tS) $
             writeIORef rfT tS >>
             obSend (ln_idle lu tS)
     update tS tU su =
         tS `seq` writeIORef rfT tS >>
-        obSend (ln_update tS tU su)
+        obSend (ln_update lu tS tU su)
 
 -- | stability updates are pretty much all or nothing; a minor
 -- stability update can be ignored, but a big one needs to be
 -- processed to support GC.
 urgentStability :: StableT -> StableT -> Bool
-urgentStability DoneT tf = False
+urgentStability DoneT tf = assert (isDoneT tf) False
 urgentStability _ DoneT = True
 urgentStability (StableT t0) (StableT tf) =
+    assert (tf >= t0) $
     (tf > (t0 `addTime` dtInsigStabilityUp))
 
 getTC :: (Partition p) => PCX p -> IO TC
 getTC = findInPCX 
 
-getPCX :: (Typeable p) => p -> PCX W -> IO (PCX p)
+getPCX :: (Partition p) => p -> PCX W -> IO (PCX p)
 getPCX _ = findInPCX
 
 -- | the GobStopper is collection of all the Stopper values in an
@@ -220,7 +221,7 @@ getPCX _ = findInPCX
 newtype GobStopper = Gob { unGob :: IORef [Stopper] }
     deriving (Typeable)
 
-instance Resource w GobStopper where
+instance Resource W GobStopper where
     locateResource _ _ = Gob <$> newIORef []
 
 -- | runGobStopper will:
@@ -260,10 +261,10 @@ initPartition p cw =
         atomicModifyIORef gs (\stoppers->(stopper:stoppers,()))
         -- TODO: add support to receive pulse.
 
-getPCX0 :: PCX w -> IO (PCX P0) 
+getPCX0 :: PCX W -> IO (PCX P0) 
 getPCX0 = findInPCX
 
-getGS :: PCX w -> IO (GobStopper)
+getGS :: PCX W -> IO (GobStopper)
 getGS cw = findInPCX cw
 
 -- | OutBox - output from Sirea thread.
@@ -302,7 +303,7 @@ instance (Partition p0, Partition p) => Resource p0 (OutBox p) where
 -- batch level enables  
 --
 type OBSend = Work -> IO ()
-getOBSend :: (Partition p1, Partition p2) => PCX w -> p1 -> p2 -> IO OBSend
+getOBSend :: (Partition p1, Partition p2) => PCX W -> p1 -> p2 -> IO OBSend
 getOBSend cw p1 p2 = getOBSend' <$> tc1 <*> ob <*> tc2 where    
     tc1 = getPCX p1 cw >>= getTC
     ob  = getOB cw p1 p2
@@ -326,7 +327,7 @@ getOBSend' tc1 ob tc2 = obwAddWork where
 
 -- | obtain the outbox resource p1->p2 starting from the world context
 --   (Each partition has a set of outboxes for each other partition)
-getOB :: (Partition p1, Partition p2) => PCX w -> p1 -> p2 -> IO (OutBox p2)
+getOB :: (Partition p1, Partition p2) => PCX W -> p1 -> p2 -> IO (OutBox p2)
 getOB cw p1 _ = getPCX p1 cw >>= findInPCX
 
 -- | a simple semaphore to model bounded-buffers between partitions. 

@@ -37,14 +37,14 @@ dtInsigStabilityUp = dtHeartbeat * 0.85 -- largest insignificant pure-stability 
 -- near-term updates. This hurts consistency of anticipated values,
 -- but can help regulate computation costs. 
 dtFutureChoke :: DT
-dtFutureChoke = 6 * dtHeartbeat
+dtFutureChoke = 4 * dtHeartbeat
 
 -- For badjeqf and bconst, how far do we peek to find a first point
 -- of non-equivalence? If we find no difference, how much further do
 -- we seek for a point of ideal alignment to 'swap in' the updated
 -- signal?
 dtEqShift, dtEqShiftAlign :: DT
-dtEqShift = 10 * dtHeartbeat -- comparison of values
+dtEqShift = 6 * dtHeartbeat -- comparison of values
 dtEqShiftAlign = dtEqShift -- extra search for alignment
 
 
@@ -106,7 +106,6 @@ dtMdistHist = dtHeartbeat -- how long to tolerate late-arriving observers
 -- is used to ensure any remaining values are processed.
 dtFinalize :: DT
 dtFinalize = dtRestart
-
 
 -- For console printing, currently I use a simple expiration model
 -- for old sentences. (I'd like to eventually develop a rigorous

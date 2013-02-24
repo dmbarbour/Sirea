@@ -4,11 +4,11 @@
 -- Sirea's implementation. Specific behavior logic is in B0Impl. 
 module Sirea.Internal.LTypes 
     ( LnkW(..)
-    , LnkUp(..), Lnk
+    , LnkUp(..), CycleSet, Lnk
     , LC(..), LCX(..), LCaps
     , StableT(..), isDoneT, fromStableT, maybeStableT
-    , ln_left, ln_right, ln_fst, ln_snd, ln_toList, ln_dead
-    , ln_zero, ln_lnkup, ln_append
+    , ln_left, ln_right, ln_fst, ln_snd, ln_toList, ln_toMaybe
+    , ln_dead, ln_zero, ln_lnkup, ln_append
     , ln_lumap, ln_sfmap
     , lc_anyCap, lc_dupCaps, lc_map, lc_fwd
     , lc_minGoal, lc_maxGoal, lc_minCurr, lc_maxCurr, lc_valid
@@ -88,14 +88,15 @@ type Lnk m = LnkW (LnkUp m)
 --
 --      Only IO resources have cycles, so they can access newUnique.
 --      Only cycles within a partition, where ln_touch is used, need
---      to be broken this way.
+--      to be broken this way. 
 --
 data LnkUp m a = LnkUp
     { ln_touch  :: !(m ())
     , ln_update :: !(StableT -> T -> Sig a -> m ())
     , ln_idle   :: !(StableT -> m ())
-    , ln_cycle  :: !((Set Unique) -> m ())
+    , ln_cycle  :: !(CycleSet -> m ())
     }
+type CycleSet = Set Unique
 
 instance (Monad m) => Monoid (LnkUp m a) where
     mempty  = ln_zero
@@ -210,6 +211,11 @@ ln_toList' fn (LnkSum x y) xs = ln_toList' fn x (ln_toList' fn y xs)
 ln_dead :: LnkW s x -> Bool
 ln_dead = null . ln_toList (const ()) 
 
+-- | Generic access to a link
+ln_toMaybe :: LnkW s (S p a) -> Maybe (s a)
+ln_toMaybe (LnkSig sa) = Just sa
+ln_toMaybe _ = Nothing
+
 -- | simple link update from a signal update transformer
 --
 -- NOTE: Most Signal functions aren't safe for RDP, where 'safe'
@@ -252,10 +258,10 @@ lc_maxGoal = foldOr max 0 . ln_toList (lc_dtGoal . getLC)
 lc_minCurr = foldOr min 0 . ln_toList (lc_dtCurr . getLC)
 lc_maxCurr = foldOr max 0 . ln_toList (lc_dtCurr . getLC)
 
--- fold with alternative.
+-- fold with alternative. 
 foldOr :: (a -> a -> a) -> a -> [a] -> a
 foldOr fn _ (x:xs) = foldr fn x xs
-foldOr _ s [] = s
+foldOr _ alt [] = alt
 
 -- test LCaps valid with regards to latency and liveness.
 lc_valid :: LCaps m x -> Bool

@@ -95,7 +95,7 @@ undefinedB = unsafeOnUpdateBL (const $ return undefinedIO) >>>
 -- downstream components. Since undefinedB will fail before this
 -- promise is ever broken, it's actually a valid promise.
 nullB0 :: (Monad m, SigInP p y) => B0 m (S p ()) y
-nullB0 = B0_mkLnk lc_dupCaps (return . sendNothing)
+nullB0 = mkLnkB0 lc_dupCaps (return . sendNothing)
 
 -- undefinedB is a bit more sophisticated than just dropping signal.
 -- Instead, it forwards an idling operation to downstream clients.

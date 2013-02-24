@@ -26,15 +26,14 @@ module Sirea.Behavior
     , BZip(..), bzip, bzipWith, bunzip
     , BSplit(..), bsplitWith, bsplitOn, bunsplit, bsplitMaybe, bsplitBool
     , BTemporal(..), BPeek(..)
-    , BDynamic(..), bexec, bevalOrElse
-    , bevalb, bexecb, bevalbOrElse
+    , BDynamic(..), beval, bexec, bbevalx, bbeval, bbexec
     , Behavior
     ) where
 
 import Prelude hiding (id,(.))
 import Control.Category
 import Control.Parallel (pseq, par)
-import Control.Parallel.Strategies (Eval, runEval)
+import Control.Parallel.Strategies (Eval)
 import Sirea.Internal.STypes 
 import Sirea.Time (DT)
 
@@ -466,7 +465,6 @@ bWhen cond action = bvoid $
     -- at (x :&: S1) :|: (x :&: S p ())
     bleft (bfirst action)
 
-
 -- | BZip is a behavior for combining elements of an asynchronous 
 -- product. The main purpose is to combine them to apply a Haskell
 -- function. The arguments must already be in the same partition to
@@ -614,34 +612,20 @@ class (BTemporal b) => BPeek b where
 -- live programming, staged computations (compilation, linking), and
 -- capability security patterns (behaviors as capabilities). 
 --
--- Dynamic behaviors provide alternative to large (:|:) structures.
--- This is analogous to using objects instead of case dispatch. Best
--- practices will eventually exist for selecting between dynamic and
--- choice behaviors.
+-- Old dynamic behaviors are continuously expiring. If the behavior
+-- is no longer provided by a signal, it will soon be disabled. A
+-- good type-system would reflect this, ensuring dynamic behaviors
+-- are used before they expire (relative to some latency from their
+-- source). Behaviors should not be represented in persistent state.
+-- This constraint simplifies RDP with respect to security, garbage 
+-- collection, and resilience patterns after disruption. (Developers
+-- can always use a script if they need persistent representation of
+-- dynamic behaviors.)
 --
--- Dynamic behaviors cannot be stored long-term. The idea is that 
--- old dynamic behaviors are continuously expiring. If the behavior
--- is no longer provided by a signal, it will soon be disabled. 
--- Behaviors may be shared through demand monitors and stateless
--- models. Avoiding stateful aliasing simplifies RDP with respect to
--- security, garbage collection, and resilience patterns during
--- disruption. (Idiom to support non-volatile dynamic behavior: use
--- a script or value that can be kept statefully; build behavior as
--- needed; use rsynch or mirroring patterns to update state.)
---
--- Dynamic behaviors are expensive. Every change in dynamic behavior
--- requires compile and install. Further, they imply requirement
--- for every value in `x` even if those aren't used by some or most
--- of the dynamic behaviors. (Idioms to avoid paying for everything
--- a dynamic behavior might need: treat `x` as a context object with
--- other dynamic behaviors for dependency injection. Or build more
--- into the dynamic behavior so a simpler `x` type can be used.)
--- Despite their expense, dynamic behaviors (with the right idioms
--- and good stability) can be cheaper than a large number of rarely 
--- used (:|:) choices.
--- 
--- All arguments for dynamic behaviors are implicitly synchronized.
--- The `y` results are also synchronized, with a constant DT. 
+-- In Sirea, dynamic behaviors are constrained to either operate in
+-- one partition or cross a partition (point to point). The latter
+-- is useful for dynamic networking. Since Sirea lacks type safety
+-- for latency, an error signal is admitted.
 --
 -- NOTE: BDynamic has two behavior types, b b'. This is primarily
 -- to support arrow transforms; not every transformed behavior type
@@ -650,46 +634,36 @@ class (BTemporal b) => BPeek b where
 -- E.g. compile to `B w x y`, compose further if desired, then use
 -- `beval` to execute.  
 class (Behavior b, Behavior b') => BDynamic b b' where
-    -- | evaluate a dynamic behavior and obtain the response. The DT
-    -- argument indicates the maximum latency for dynamic behaviors,
-    -- and the latency for beval as a whole. 
-    --
-    -- If there are any problems with the dynamic behavior, e.g. if
-    -- too large for DT, the error path is selected. (If I could 
-    -- statically enforce valid beval, I'd favor that option.)
-    -- 
-    beval :: (SigInP p x) => DT -> b (S p (b' x y) :&: x) (y :|: S p ())
+    -- | continuously install and evaluate dynamic behaviors that
+    -- may cross partitions. The first argument supports static 
+    -- metadata about crossing and latency (it's a hack; a richer
+    -- type system should be able to avoid it).
+    bevalx :: (SigInP p x, SigInP p' y) => b' (S p ()) (S p' ())
+           -> b (S p (b' x y) :&: x) (y :|: S p ())
 
--- | provides the `x` signal again for use with a fallback behavior.
-bevalOrElse :: (BDynamic b b', SigInP p x) => DT -> b (S p (b' x y) :&: x) (y :|: (S p () :&: x))
-bevalOrElse dt = bsynch >>> bsecond bdup >>> bassoclp >>> bfirst (beval dt)
-             -- now have (y :|: S p ()) :&: x 
-             >>> bfirst (bmirror >>> bleft bdup) >>> bswap 
-             -- now have x :&: ((S p () :&: S p ()) :|: y)
-             >>> bdisjoin
-             -- now have ((x :&: S p ()) :|: (x :&: y))
-             >>> bleft bswap >>> bmirror >>> bleft bsnd
-             -- now have (y :|: (S p () :&: x))
+-- | common case: install and evaluate in a single partition, given
+-- a fixed latency budget for each behavor. Dynamic behaviors that 
+-- don't fit the latency have the unit result.
+beval :: (BDynamic b b', SigInP p x, SigInP p y) 
+      => DT -> b (S p (b' x y) :&: x) (y :|: S p ())
+beval = bevalx . bdelay
 
--- | evaluate, but drop the result. This is a common pattern with an
--- advantage of not needing a DT estimate. The response is reduction 
--- from the signal carrying b'. 
-bexec :: (BDynamic b b', SigInP p x) => b (S p (b' x y_) :&: x) (S p ())
-bexec = (exec &&& ignore) >>> bsnd
-    where exec = bsynch >>> bprep >>> beval 0
-          ignore = bfst >>> bconst ()
-          bprep = bfirst (bfmap modb &&& bconst ()) >>> bassocrp 
-          modb b' = bsecond b' >>> bfst
+-- | apply a dynamic behavior, but drop the result. Conveniently, 
+-- this is independent of latency.
+bexec :: (BDynamic b b', SigInP p x) => b (S p (b' x y_) :&: x) S1
+bexec = bfirst (bfmap (>>> btrivial)) >>> bevalx btrivial >>> btrivial
 
--- | bevalb, bexecb, bevalbOrElse simply constrain the BDynamic type
--- a little. These are useful because Haskell type inference has...
--- issues with inferring the `w` world type for evaluating B and BCX.
-bevalb :: (BDynamic b b, SigInP p x) => DT -> b (S p (b x y) :&: x) (y :|: S p ())
-bexecb :: (BDynamic b b, SigInP p x) => b (S p (b x y_) :&: x) (S p ())
-bevalbOrElse :: (BDynamic b b, SigInP p x) => DT -> b (S p (b x y) :&: x) (y :|: (S p () :&: x))
-bevalb = beval
-bexecb = bexec
-bevalbOrElse = bevalOrElse
+-- | bbevalx, bbeval, bbexec simply constrain the BDynamic type to
+-- simplify type inference in the common case where the host type is
+-- the same as the hosted behavior.
+bbevalx :: (BDynamic b b, SigInP p x, SigInP p' y) 
+        => b (S p ()) (S p' ()) -> b (S p (b x y) :&: x) (y :|: S p ())
+bbeval :: (BDynamic b b, SigInP p x, SigInP p y) 
+        => DT -> b (S p (b x y) :&: x) (y :|: S p ())
+bbexec :: (BDynamic b b, SigInP p x) => b (S p (b x y_) :&: x) S1
+bbevalx = bevalx
+bbeval = beval
+bbexec = bexec
 
 -- WISHLIST: a behavior-level map operation.
 --

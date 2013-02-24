@@ -1,4 +1,5 @@
-{-# LANGUAGE EmptyDataDecls, DeriveDataTypeable #-}
+{-# LANGUAGE EmptyDataDecls, DeriveDataTypeable, 
+             FlexibleInstances, MultiParamTypeClasses #-}
 
 -- | Reactive Demand Programming (RDP) design is for open, scalable,
 -- distributed systems. Sirea is much more humble: just one Haskell
@@ -80,7 +81,7 @@ class (Typeable p) => Partition p where
     newPartitionThread :: PCX p -> Stepper -> IO Stopper
 
 -- We need a child PCX for each partition.
-instance (Partition p) => Resource W p where 
+instance (Partition p) => Resource W (PCX p) where 
     locateResource rp _ = newPCX rp
 
 -- | The W type represents the toplevel PCX. Each thread partition 
@@ -97,7 +98,7 @@ getPSched :: (Partition p) => PCX p -> IO PSched
 getPSched cp = 
     findInPCX cp >>= \ tc ->
     getPulseScheduler cp >>= \ onPulse ->
-    return $! PSched 
+    return $! Sched 
         { stepTime   = getTCTime tc
         , onNextStep = addTCRecv tc
         , onUpdPhase = addTCWork tc

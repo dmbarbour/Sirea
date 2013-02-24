@@ -1,44 +1,71 @@
 {-# LANGUAGE TypeOperators, GADTs #-}
 
--- | Implementation of the Dynamic behavior type for B.
--- Evaluation will logically sync the inputs, then 
--- physically sync the outputs (y). The inputs are not
--- immediately 
+-- | The implementation of dynamic behaviors is one of the complex
+-- features for RDP and Sirea. Not only must the current dynamic
+-- value be installed, so must values for the recent past (since
+-- there may be straggling updates on the other input signals) and
+-- the near future (for anticipation and speculative evaluation).
+-- Further, when switching from one behavior to another, there is
+-- a brief transition period where both are active.
+--
+-- One beval might be evaluating dozens of behaviors in parallel. 
+--
+-- Anticipation is essential for dynamic behaviors to work well in
+-- RDP and Sirea, enabling behaviors to be installed and initialized
+-- in advance of any absolute requirement for them. However, dynamic
+-- behaviors are consequently very sensitive to instability. Their
+-- role in RDP is mostly for staged programming, configurations, and
+-- linking - places where stability is easy to achieve in practice.
+-- 
 module Sirea.Internal.B0Dynamic 
     ( evalB0
     ) where
 
-import Prelude hiding(id,(.),drop)
+import Prelude hiding(id,(.),drop,IO)
 import Control.Category
 import Control.Monad (unless, when)
 import Control.Applicative
 import Control.Exception (assert)
 import Control.Arrow (second)
-import Data.IORef
 import Data.List (foldl')
 import Data.Maybe (isNothing, fromMaybe, mapMaybe)
-import Data.Unique
 import qualified Data.Map.Strict as M
 import Sirea.Internal.B0Type
 import Sirea.Internal.STypes
 import Sirea.Internal.LTypes
 import Sirea.Internal.B0Impl 
 import Sirea.Internal.B0Compile
-import Sirea.Internal.Tuning (dtCompileFuture, dtFinalize, tAncient)
+import Sirea.Internal.Tuning (dtCompileFuture, dtInsigStabilityUp
+                             ,dtFinalize, tAncient)
 import Sirea.Time
 import Sirea.Signal
 
 --import Debug.Trace
+
+type Key = Int
+
+-- ISSUE: I can't produce the 'y' type capabilities from the 'x'
+-- type caps unless I have a constraint on partitions, which would
+-- hinder dynamic routing
+--
+-- IDEA: Delay construction of remote link until first dynamic
+-- behavior is compiled. PROBLEM: I need caps statically to 
+-- construct everything.
+--
+-- IDEA2: Require a static `S p' ()` signal and require SigInP p' y
+--
+-- IDEA3: Require a B (S p ()) (S p' ()) link to indicate delay and
+-- so on.
+
 
 -- TODO: Shift dynamic behavior updates into a future cycle (i.e. the
 -- next step). This can allow compile and touch in the opening phase.
 
 -- Evaluate a behavior provided dynamically.
 --
--- If the evaluated behavior does not fit into dt seconds, it is
--- rejected and the error signal is returned. evalB reports a 
--- delay of dt seconds between inputs and y outputs, and a delay
--- of 0 between inputs and error.
+-- A coordination behavior is provided to compute latency and caps.
+-- If an evaluated behavior does not fit into the latency, evalB0
+-- will respond with error for that duration.
 --
 -- Multiple dynamic behaviors are maintained in parallel, i.e. both
 -- present and future. Ability to anticipate and compile behaviors
@@ -54,131 +81,178 @@ import Sirea.Signal
 --   cannot predict dead sink in x based on dead sink in y
 -- consequently, eval tends to hinder optimizations.
 -- 
-evalB0 :: (SigInP p x, Monad m) => DT 
-       -> B0 m (S p (B0 m x y) :&: x) (y :|: (S p () :&: x))
-evalB0 dt = --trace "evalB" $
+evalB0 :: (Monad m, SigInP p x, SigInP p' y) 
+       => B0 m (S p ()) (S p' ()) 
+       -> B0 m (S p (B0 m x y) :&: x) (y :|: S p ())
+evalB0 bdt = --trace "evalB" $
     -- synchronization and preparation (including stage 1 compile)
-    synchB0 >>> forceDelayB0 >>> evalPrepB0 dt >>>
+    synchB0 >>> forceDelayB0 >>> evalPrepB0 flc >>>
     -- after evalPrep, have (S p (Either (B0s1 m x y) ()) :&: x)
     firstB0 (splitB0 >>> mirrorB0 >>> leftB0 dupB0) >>> swapB0 >>>
     -- have (x :&: ((S p () :&: S p ()) :|: S p (B0s1 m x y)))
-    disjoinB0 >>>
-    -- have ((x :&: S p ()) :|: (x :&: S p (B0s1 m x y))
-    leftB0 swapB0 >>> mirrorB0 >>> leftB0 swapB0 >>> 
-    -- now have (S p (B0s1 m x y) :&: x) :|: (S p () :&: x); will eval on left
-    leftB0 (evalFinalB0 dt)
+    disjoinB0 >>> 
+    -- have (x :&: S p ()) :|: (x :&: S p (B0s1 m x y))
+    leftB0 (firstB0 trivialB0 >>> s1eB0) >>> mirrorB0 >>> 
+    -- now have (x :&: S p (B0s1 m x y)) :|: S p ()
+    leftB0 (swapB0 >>> evalFinalB0 flc)
+
+    where flc = bdtToFLC bdt
+
+-- extract some useful metadata from a coordination behavior.
+bdtToFLC :: (Monad m) => B0 m (S p a) (S p' b) -> (LC m -> LC m)
+bdtToFLC bdt lc =
+    let (_,lcy) = compileB0s1 bdt (LnkSig (LCX lc)) in
+    assert ((not . ln_dead) lcy) $
+    fromMaybe lc (getLC <$> ln_toMaybe lcy)
 
 -- apply first compilation stage to the input behavior, and filter
 -- behaviors that won't fit into given time `dt`.
-evalPrepB0 :: (Monad m) => DT 
+evalPrepB0 :: (Monad m) 
+           => (LC m -> LC m)
            -> B0 m (S p (B0 m x y) :&: x) (S p (Either (B0s1 m x y) ()) :&: x)
-evalPrepB0 dt = mkLnkB0 lcPrep mkLnEvalPrep where
+evalPrepB0 = mkLnkB0 lcPrep . mkLnEvalPrep where
     lcPrep lcbx = LnkProd ((lc_fwd . ln_fst) lcbx) (ln_snd lcbx)
 
 mkLnEvalPrep :: (Monad m) 
-             => DT -> LCaps m (S p (B0 m x y)) 
-             -> Lnk m (S p (Either (B0 m x y) ()) :&: x)
+             => (LC m -> LC m)
+             -> LCaps m (S p (B0 m x y) :&: x) 
+             -> Lnk m (S p (Either (B0s1 m x y) ()) :&: x)
              -> m (Lnk m (S p (B0 m x y) :&: x))
-mkLnEvalPrep dt lcbx lnbx = return (LnkProd lnb' lnx) where
-    lcb = ln_fst lcbx
-    lcx = ln_snd lcbx
-    lnb = ln_fst lnbx
-    lnx = ln_snd lnbx
-    dtFit = assert (evalSynched lcbx) $ dt + lc_maxCurr lcb
-    lnb' = ln_lumap (ln_sfmap (fnEvalPrep dtFit lcx)) lnb
+mkLnEvalPrep flc lcbx@(LnkProd (LnkSig (LCX lcb)) lcx) lnb0s1x =
+    assert (lc_maxGoal lcbx == lc_minCurr lcbx) $
+    let lnb0s1 = ln_fst lnb0s1x in
+    let lnx = ln_snd lnb0s1x in
+    let lcTgt = flc lcb in    
+    let dtf = lc_dtGoal lcTgt - lc_dtGoal lcb in
+    let lnb = (ln_lumap $ ln_sfmap $ s_fmap $ fnEvalPrep dtf lcx) lnb0s1 in
+    return (LnkProd lnb lnx)
+mkLnEvalPrep _ lcbx _ = assert (ln_dead lcbx) $ return LnkDead
 
 -- evalPrep will partially evaluate the inner behaviors, and decide 
 -- whether they can be evaluated further (e.g. if they do not fit in
 -- the alloted timeslot, they cannot be evaluated).
 fnEvalPrep :: (Monad m) => DT -> LCaps m x -> B0 m x y -> Either (B0s1 m x y) ()
-fnEvalPrep dtGoal lcx = evalFitDelay dtGoal . flip compileB0s1 lcx
+fnEvalPrep dtf lcx = evalFitDelay dtf . flip compileB0s1 lcx
 
 -- evalFitDelay is applied to each dynamic behavior. If it succeeds,
 -- we can guarantee the resulting delay is equal to dtGoal on every 
 -- signal in y. If the behavior is too large to fit, we'll return
 -- the '()' value indicating failure.
 evalFitDelay :: (Monad m) => DT -> (B0s1 m x y, LCaps m y) -> Either (B0s1 m x y) ()
-evalFitDelay dtGoal (b,lcy) = 
-    if (lc_maxGoal lcy > dtGoal)
+evalFitDelay dtf (b,lcy) = 
+    if (lc_maxGoal lcy > dtf)
         then Right ()
         else Left (b >>> B0s1_mkLnk (return . fitGoal))
     where fitGoal = buildTshift lcy (lc_map toGoal lcy)
-          toGoal lc = lc { lc_dtCurr = dtGoal, lc_dtGoal = dtGoal }
+          toGoal lc = lc { lc_dtCurr = dtf, lc_dtGoal = dtf }
 
 -- final evaluation step; assumes input B is valid at this point.
 -- Will also add the delays.
-evalFinalB0 :: (SigMembr x) => DT -> B0 m (S p (B0s1 m x y) :&: x) y
-evalFinalB0 dt = mkLnkB0 lcEval buildEval where
-    lcEval lcbx = 
-        assert (evalSynched lcbx) $
-        let dtInit = lc_maxCurr (ln_fst lcbx) in
-        let dtFini = dtInit + dt in
-        lc_map (setDelay dtFini) (lc_dupCaps lcbx)
-    setDelay dt lc = lc { lc_dtCurr = dt, lc_dtGoal = dt }
-
--- are we synched for eval?
-evalSynched :: LCaps m x -> Bool
-evalSynched lc = (lc_valid lc) && (lc_maxGoal lc == lc_minCurr lc)
+evalFinalB0 :: (Monad m, SigMembr x, SigMembr y) => (LC m -> LC m) 
+            -> B0 m (S p (B0s1 m x y) :&: x) y
+evalFinalB0 flc = mkLnkB0 lcEval lnEval where
+    lcEval = lc_dupCaps . lc_map flc . ln_fst
+    lnEval = buildEval flc
 
 -- Data needed for the dynamic evaluator source
 data Evaluator m x y = Evaluator 
-    { ev_data     :: !(Ref m (EVD x y)) -- mutable state
-    , ev_mergeLnk :: !(Int -> Lnk m y) -- remote links
-    , ev_dynX     :: !(LnkW Dyn x) -- source links
+    { ev_data     :: !(Ref m (EVD m x y)) -- primary state
+    , ev_keys     :: !(Ref m Key)         -- key source (per compile)
+    , ev_sched    :: !(Sched m)
+    , ev_mergeLnk :: !(Key -> Lnk m y) -- remote links
+    , ev_dynX     :: !(LnkW (Dyn m) x) -- source links
     }
-data EVD x y = EVD 
-    { evd_signal   :: !(SigSt (B x y)) -- signal of dynamic behaviors
+data EVD m x y = EVD 
+    { evd_signal   :: !(SigSt (B0s1 m x y)) -- signal of dynamic behaviors
     , evd_compileT :: {-# UNPACK #-} !T -- how much of the signal has been compiled?
-    , evd_nextKey  :: {-# UNPACK #-} !Int
     }
+
+evdZero :: EVD m x y 
+evdZero = EVD st_zero tAncient 
+
+evdModSig :: (SigSt (B0s1 m x y) -> SigSt (B0s1 m x y)) 
+          -> (EVD m x y -> EVD m x y)
+evdModSig fn evd = evd { evd_signal = fn (evd_signal evd) }
 
 -- buildEval prepares the evaluator to receive and process inputs.
-buildEval :: (SigMembr x, Monad m) => LCaps m x -> Lnk m y -> m (Lnk m (S p (B x y) :&: x))
-buildEval dtx lnyFinal =
-    assert (evalSynched dtx) $
-    let evd0 = EVD st_zero tAncient in
-    newIORef evd0 >>= \ rfEVD ->
-    mkFullDyn dtx >>= \ dynX -> 
-    mkMergeLnkFactory lnyFinal >>= \ mergeLnkY ->
-    let ev = Evaluator rfEVD mergeLnkY dynX in
-    let luB = LnkUp (touchEV ev) (updateEV ev) (idleEV ev) in
+buildEval :: (SigMembr x, Monad m) 
+          => (LC m -> LC m)
+          -> LCaps m (S p (B0s1 m x y) :&: x)
+          -> Lnk m y 
+          -> m (Lnk m (S p (B0s1 m x y) :&: x))
+buildEval flc lcbx@(LnkProd (LnkSig (LCX lcb)) lcx) lny =
+    assert (lc_minCurr lcbx == lc_maxGoal lcbx) $
+    let ccx = lc_cc lcb in
+    let ccy = lc_cc (flc lcb) in
+    cc_newRef ccx evdZero >>= \ rfEVD ->
+    cc_newRef ccx 10000 >>= \ rfKeys ->
+    cc_getSched ccx >>= \ sched ->
+    mkFullDyn lcx >>= \ dynX ->
+    mkMergeLnkFactory ccy lny >>= \ mergeLnkY ->
+    let ev = Evaluator rfEVD rfKeys sched mergeLnkY dynX in
+    let luB = lnkEvalB0 ev in
     let xLnk = fullDynToLnk (ev_dynX ev) in
     return (LnkProd (LnkSig luB) xLnk)
+buildEval _ lcbx lny = assert allDead $ return LnkDead where
+    allDead = ln_dead lcbx && ln_dead lny
+
+-- The main eval link delays most operations to the next step. This
+-- was actually the primary motivation for threading the 'CC' type.
+-- The reason for delay is to ensure 'touches' on the new dynamic
+-- behaviors are processed in the touch phase, which in turn is
+-- necessary for the ln_cycle mechanisms to operate reliably.
+lnkEvalB0 :: (Monad m) => Evaluator m x y -> LnkUp m (B0s1 m x y)
+lnkEvalB0 ev = LnkUp touch update idle cyc where
+    touch = return () -- dynamic behavior updates delay to next step
+    cyc _ = return () -- cycles are broken by the automatic delay
+    update tS tU su = 
+        onNextStep (ev_sched ev) (updateEV ev tS tU su)
+    idle tS =
+        readRef (ev_data ev) >>= \ evd ->
+        let tS0 = (st_stable . evd_signal) evd in
+        when (urgentStability tS0 tS) $
+            onNextStep (ev_sched ev) (idleEV ev tS)
+
+-- TODO: Change the above to perform updates at the end of the step,
+-- though idle can still delay to next step. Note that I can touch
+-- and update GC'd behaviors independently, so they won't contribute
+-- to cycles. (Or at least those GC'd through switching.)
+--
+-- Structure: at end of current step
+--   update the behavior lists
+--   compute the touch and update operations to cleanup old links
+    
+-- test whether an update to stability is urgent
+urgentStability :: StableT -> StableT -> Bool
+urgentStability DoneT _ = False
+urgentStability _ DoneT = True
+urgentStability (StableT t0) (StableT tf) =
+    (tf > (t0 `addTime` dtInsigStabilityUp))
 
 
-touchEV :: Evaluator x y -> IO ()
-touchEV ev =
-    readIORef (ev_data ev) >>= \ evd ->
-    let st = evd_signal evd in
-    unless (st_expect st) $
-        let st' = st_poke st in
-        let evd' = evd { evd_signal = st' } in
-        writeIORef (ev_data ev) evd' >>
-        dynBTouch (ev_dynX ev)
-
-idleEV :: Evaluator x y -> StableT -> IO ()
+-- idleEV is called at the beginning of a step, after a significant
+-- stability update for dynamic behaviors in the prior step.
+idleEV :: (Monad m) => Evaluator m x y -> StableT -> m ()
 idleEV ev tS = 
-    readIORef (ev_data ev) >>= \ evd ->
-    let st = evd_signal evd in
-    assert (st_expect st) $
-    let st' = st_idle tS st in
-    let evd' = evd { evd_signal = st' } in
-    writeIORef (ev_data ev) evd' >>
+    modifyRef (ev_data ev) (evdModSig (st_idle tS)) >>    
     updateDynamicsEV ev Nothing
 
-updateEV :: Evaluator x y -> StableT -> T -> Sig (B x y) -> IO ()
+-- updateEV is called at the beginning of a step, after any update
+-- to dynamic behaviors in a prior step. Updating at the beginning
+-- of a step is essential, since that is when we'll need to compile
+-- and touch the new dynamic behaviors.
+updateEV :: (Monad m) => Evaluator m x y -> StableT 
+         -> T -> Sig (B0s1 m x y) -> m ()
 updateEV ev tS tU su =
-    readIORef (ev_data ev) >>= \ evd ->
-    let st = evd_signal evd in
-    assert (st_expect st) $
-    let st' = st_update tS tU su st in
-    let evd' = evd { evd_signal = st' } in
-    writeIORef (ev_data ev) evd' >>
+    modifyRef (ev_data ev) (evdModSig (st_update tS tU su)) >>
     updateDynamicsEV ev (Just tU)
 
 -- The majority of the dynamic behavior logic is handled here, on
 -- updating the signal that contains dynamic behaviors, or on the
 -- remote end merging multiple signals that vary in time. 
+--
+-- Note that, at this point, we're still in the 'touch' phase of
+-- the current step. 
 --
 -- The `Maybe T` value here indicates whether there was a recent
 -- update to the signals list. If so, we might need to replaces the
@@ -186,27 +260,46 @@ updateEV ev tS tU su =
 -- already processing their speculative signals. If not, we still
 -- must provide updates to dynamic behaviors that become visible due
 -- to new stability updates. 
---
+-- 
 -- This operation will also perform GC of the behaviors signal.
-updateDynamicsEV :: Evaluator x y -> Maybe T -> IO ()
-updateDynamicsEV ev mbTU = updateBehaviors where
-    updateBehaviors = 
+updateDynamicsEV :: (Monad m) => Evaluator m x y -> Maybe T -> m ()
+updateDynamicsEV ev mbTU = initUpdate where
+    initUpdate = 
         getBuildRangeEV ev mbTU >>= \ (tS,range) -> -- [(T,Maybe(B x y))]
         mapM compileE range >>= \ dynLnks -> -- [(T,Lnk x)]
-        mapM_ (ln_touchAll . snd) dynLnks >> -- block premature merge
-        dynBUpdate tS dynLnks (ev_dynX ev) -- update signal sources in x
+        schedUpdate tS dynLnks >>         -- update in next phase
+        dynBTouch (ev_dynX ev) >>         -- touch the old links
+        mapM_ (ln_touchAll . snd) dynLnks -- touch the new links
+    schedUpdate tS dynLnks = 
+        onUpdPhase (ev_sched ev) $
+            dynBUpdate tS dynLnks (ev_dynX ev)
     compileE (t,mb) =
         maybe (return LnkDead) compile mb >>= \ lnx ->
         return (t,lnx)
-    compile b = newUnique >>= compileBC1 b . (ev_mergeLnk ev)
+    compile b =
+        newKey >>= compileB0s2 b . (ev_mergeLnk ev)
+    newKey = 
+        readRef (ev_keys ev) >>= \ k0 ->
+        let k = succ k0 in
+        writeRef' (ev_keys ev) k >>
+        return k
+
+-- TODO: there are some difficulties with the current design, for
+-- how 'cycle' interacts with the new/upcoming behaviors. Perhaps I
+-- should update the recorded dynamic behaviors at the *end* of the 
+-- current step, 
 
 -- this operation will compute which behaviors need to be compiled
 -- and installed. This set can be adjusted due to stability or to
 -- an update. Will also perform GC and report stability, to reduce
 -- state mutations
-getBuildRangeEV :: Evaluator x y -> Maybe T -> IO (StableT,[(T,Maybe (B x y))])
+--
+-- TODO: consider aligning updates, or a 'cutoff' based on upcoming
+-- signals. 
+getBuildRangeEV :: (Monad m) => Evaluator m x y -> Maybe T 
+                -> m (StableT,[(T,Maybe (B0s1 m x y))])
 getBuildRangeEV ev mbTU =
-    readIORef (ev_data ev) >>= \ evd ->
+    readRef (ev_data ev) >>= \ evd ->
     let st = evd_signal evd in
     let tS = st_stable st in 
     let stCln = st_clear tS st in
@@ -222,40 +315,37 @@ getBuildRangeEV ev mbTU =
     let slR = sigToList (st_signal st) tLo tHi in
     assert ((not . null) slR) $
     let range = if bRebuildFirst then slR else tail slR in
-    evd' `seq` writeIORef (ev_data ev) evd' >>
+    evd' `seq` writeRef (ev_data ev) evd' >>
     return (tS,range)
-  
--- filter x membrane for liveness of input source. (It is possible
--- that some inputs are dead, due to binl/binr upstream, though this
--- should be rare for dynamic behaviors.)
-filterLS :: LnkD LDT x -> LnkW dd x -> LnkW dd x
-filterLS (LnkDProd dt1 dt2) xy =
-    let x' = filterLS dt1 $ ln_fst xy in
-    let y' = filterLS dt2 $ ln_snd xy in
-    LnkProd x' y'
-filterLS (LnkDSum dtl dtr) xy =
-    let x' = filterLS dtl $ ln_left xy in
-    let y' = filterLS dtr $ ln_right xy in
-    LnkSum x' y'
-filterLS (LnkDUnit dtx) x =
-    if (ldt_live dtx) then x else LnkDead
 
 -- build a complex dynamic behavior state that reflects the signal type
 -- (including LnkDead for cases where the input signal is dead-on-input)
-mkFullDyn :: (SigMembr x) => LnkD LDT x -> IO (LnkW Dyn x)
-mkFullDyn dtx = filterLS dtx <$> runMkDyn buildMembr
+mkFullDyn :: (Monad m) => LCaps m x -> m (LnkW (Dyn m) x)
+mkFullDyn LnkDead = return LnkDead
+mkFullDyn (LnkSig (LCX lc)) = 
+    cc_newRef (lc_cc lc) dyn_zero >>= \ rf ->
+    return (LnkSig (Dyn rf))
+mkFullDyn (LnkProd x y) =
+    mkFullDyn x >>= \ dx ->
+    mkFullDyn y >>= \ dy ->
+    return (LnkProd dx dy)
+mkFullDyn (LnkSum x y) =
+    mkFullDyn x >>= \ dx ->
+    mkFullDyn y >>= \ dy ->
+    return (LnkSum dx dy)
 
-fullDynToLnk :: LnkW Dyn x -> Lnk x
+fullDynToLnk :: (Monad m) => LnkW (Dyn m) x -> Lnk m x
 fullDynToLnk LnkDead = LnkDead
 fullDynToLnk (LnkProd x y) = LnkProd (fullDynToLnk x) (fullDynToLnk y)
 fullDynToLnk (LnkSum x y) = LnkSum (fullDynToLnk x) (fullDynToLnk y)
 fullDynToLnk (LnkSig x) = LnkSig (dynToLnkUp x)
 
-dynToLnkUp :: Dyn x -> LnkUp x
-dynToLnkUp dyn = LnkUp touch update idle where
+dynToLnkUp :: (Monad m) => Dyn m x -> LnkUp m x
+dynToLnkUp dyn = LnkUp touch update idle cyc where
     touch = dynSigTouch dyn
     update = dynSigUpdate dyn
     idle = dynSigIdle dyn
+    cyc = dynSigCycle dyn
 
 -- Dyn and DynSt are internal structures used for dynamic behaviors.
 -- Each Dyn will join the input signal `x` with the active dynamic
@@ -263,82 +353,80 @@ dynToLnkUp dyn = LnkUp touch update idle where
 --
 -- TODO: consider an alternative structure for dyn_blink to simplify
 -- the operations on it. 
-newtype Dyn a = Dyn (IORef (DynSt a))
-data DynSt a = DynSt 
+newtype Dyn m a = Dyn (Ref m (DynSt m a))
+data DynSt m a = DynSt 
     { dyn_signal :: !(SigSt a)   -- concrete input signal
     , dyn_tmup   :: !(Maybe T)   -- earliest update time (signal or behavior)
-    , dyn_blink  :: ![(T,LnkUp a)] -- links prepared to receive signals.
+    , dyn_blink  :: ![(T,LnkUp m a)] -- links prepared to receive signals.
     , dyn_bstable:: !StableT     -- stability of dynamic behavior
     , dyn_btouch :: !Bool        -- still expecting update to active links?
     }
 
-dyn_zero :: DynSt a
+dyn_zero :: DynSt m a
 dyn_zero = DynSt { dyn_signal   = st_zero 
                  , dyn_tmup     = Nothing
                  , dyn_blink    = []
                  , dyn_bstable  = StableT tAncient
                  , dyn_btouch   = False 
                  }
-newDyn :: IO (Dyn a)
-newDyn = Dyn <$> newIORef dyn_zero
-
-newtype MkDyn a = MkDyn { runMkDyn :: IO (LnkW Dyn a) }
-instance BuildMembr MkDyn where
-    buildSigMembr = MkDyn $ LnkSig <$> newDyn
-    buildSumMembr (MkDyn x) (MkDyn y) = MkDyn $ LnkSum <$> x <*> y
-    buildProdMembr (MkDyn x) (MkDyn y) = MkDyn $ LnkProd <$> x <*> y
 
 -- touch all signals in a complex dynamic behavior
-dynBTouch :: LnkW Dyn a -> IO ()
+dynBTouch :: (Monad m) => LnkW (Dyn m) a -> m ()
 dynBTouch = ln_forEach $ \ (Dyn rf) ->
-    readIORef rf >>= \ dyn ->
+    readRef rf >>= \ dyn ->
     unless (dyn_btouch dyn) $
         let bTouchedX = st_expect (dyn_signal dyn) in
         let dyn' = dyn { dyn_btouch = True } in
-        writeIORef rf dyn' >>
+        writeRef rf dyn' >>
         unless bTouchedX (touchBL (dyn_blink dyn'))
 
 -- touch for signal updates in dynamic behavior
-dynSigTouch :: Dyn a -> IO ()
+dynSigTouch :: (Monad m) => Dyn m a -> m ()
 dynSigTouch (Dyn rf) = 
-    readIORef rf >>= \ dyn ->
+    readRef rf >>= \ dyn ->
     let st = dyn_signal dyn in
     unless (st_expect st) $
         let st' = st_poke st in
         let bTouchedB = dyn_btouch dyn in
         let dyn' = dyn { dyn_signal = st' } in
-        writeIORef rf dyn' >>
+        writeRef rf dyn' >>
         unless bTouchedB (touchBL (dyn_blink dyn'))
 
-touchBL :: [(T,LnkUp a)] -> IO ()
+touchBL :: (Monad m) => [(T,LnkUp m a)] -> m ()
 touchBL bl = mapM_ (ln_touch . snd) bl
 
-dynSigIdle :: Dyn a -> StableT -> IO ()
-dynSigIdle (Dyn rf) tS =
-    readIORef rf >>= \ dyn ->
+dynSigCycle :: (Monad m) => Dyn m a -> CycleSet -> m ()
+dynSigCycle (Dyn rf) n =
+    error "TODO"
+
+dynSigIdle :: (Monad m) => Dyn m a -> StableT -> m ()
+dynSigIdle d@(Dyn rf) tS =
+    readRef rf >>= \ dyn ->
     let st = dyn_signal dyn in
     assert (st_expect st) $
     let st' = st_idle tS st in
     let dyn' = dyn { dyn_signal = st' } in
-    writeIORef rf dyn' >>
-    dynMaybeEmit rf
+    writeRef rf dyn' >>
+    dynMaybeEmit d
 
-dynSigUpdate :: Dyn a -> StableT -> T -> Sig a -> IO ()
-dynSigUpdate (Dyn rf) tS tU su =
-    readIORef rf >>= \ dyn ->
+dynSigUpdate :: (Monad m) => Dyn m a -> StableT -> T -> Sig a -> m ()
+dynSigUpdate d@(Dyn rf) tS tU su =
+    readRef rf >>= \ dyn ->
     let st = dyn_signal dyn in
     assert (st_expect st) $
     let st' = st_update tS tU su st in
     let tmup' = Just $! maybe tU (min tU) (dyn_tmup dyn) in
     let dyn' = dyn { dyn_signal = st', dyn_tmup = tmup' } in
-    writeIORef rf dyn' >>
-    dynMaybeEmit rf
+    writeRef rf dyn' >>
+    dynMaybeEmit d
 
 -- update the dynamic behaviors. The links specific to each
 -- concrete underlying signal are stored with that signal. 
 -- The important argument is [(T,Lnk x)] - a list of compiled
 -- links with the times they are supposed to receive information.
-dynBUpdate :: StableT -> [(T,Lnk x)] -> LnkW Dyn x -> IO ()
+--
+-- TODO: return touch&cleanup operations for dead links in next phase.
+dynBUpdate :: (Monad m) => StableT -> [(T,Lnk m x)] -> LnkW (Dyn m) x -> m ()
 dynBUpdate tm bl (LnkProd dynX dynY) =
     let blX = map (second ln_fst) bl in
     let blY = map (second ln_snd) bl in
@@ -349,24 +437,24 @@ dynBUpdate tm bl (LnkSum dynX dynY) =
     let blY = map (second ln_right) bl in
     dynBUpdate tm blX dynX >>
     dynBUpdate tm blY dynY
-dynBUpdate tm bl (LnkSig (Dyn rf)) =
+dynBUpdate tm bl (LnkSig dyn) =
     let blu = map (second ln_lnkup) bl in
-    dynUpdateLinks rf tm blu >>
-    dynMaybeEmit rf
+    dynUpdateLinks dyn tm blu >>
+    dynMaybeEmit dyn
 dynBUpdate _ bl LnkDead =
-    -- we've touched these but won't update them; freeze them! 
-    mapM_ (ln_freeze . snd) bl 
+    assert (all (ln_dead . snd) bl) $
+    return ()
 
 -- when we update the links associated with a behavior, we may need
 -- to kill prior links associated with this behavior. 
-dynUpdateLinks :: IORef (DynSt a) -> StableT -> [(T,LnkUp a)] -> IO ()
-dynUpdateLinks rf tS [] =
-    readIORef rf >>= \ dyn ->
+dynUpdateLinks :: (Monad m) => Dyn m a -> StableT -> [(T,LnkUp m a)] -> m ()
+dynUpdateLinks (Dyn rf) tS [] =
+    readRef rf >>= \ dyn ->
     assert (dyn_btouch dyn) $
     let dyn' = dyn { dyn_bstable = tS, dyn_btouch = False } in
-    writeIORef rf dyn'
-dynUpdateLinks rf tS blu@(b:_) =
-    readIORef rf >>= \ dyn ->
+    writeRef' rf dyn'
+dynUpdateLinks (Dyn rf) tS blu@(b:_) =
+    readRef rf >>= \ dyn ->
     assert (dyn_btouch dyn) $
     --traceIO ("dynUpdateLinks: " ++ show (map fst blu)) >>
     let tU = fst b in
@@ -376,19 +464,19 @@ dynUpdateLinks rf tS blu@(b:_) =
     let dyn' = dyn { dyn_bstable = tS, dyn_btouch = False
                    , dyn_blink = blink', dyn_tmup = tmup' } 
     in
-    writeIORef rf dyn' >>
+    writeRef rf dyn' >>
     mapM_ (terminate tU . snd) blKill -- destroy replaced behaviors
 
 -- when we switch to a new dynamic behavor, we kill behaviors that
 -- are no longer relevant. This recants signals starting at time tm.
-terminate :: T -> LnkUp a -> IO ()
+terminate :: T -> LnkUp m a -> m ()
 terminate tCut lu = ln_update lu DoneT tCut s_never
 
 -- decision point for processing updates. The actual updates are not
 -- trivial, mostly due to the finalization semantics for old links.
-dynMaybeEmit :: IORef (DynSt a) -> IO ()
-dynMaybeEmit rf = 
-    readIORef rf >>= \ dyn ->
+dynMaybeEmit :: (Monad m) => Dyn m a -> m ()
+dynMaybeEmit (Dyn rf) = 
+    readRef rf >>= \ dyn ->
     unless (dynExpect dyn) $
         let tS    = dynStable dyn in
         let bl0   = dyn_blink dyn in
@@ -402,29 +490,29 @@ dynMaybeEmit rf =
         let dyn' = dyn { dyn_signal = stCln, dyn_blink = blCln
                        , dyn_tmup = Nothing }
         in
-        dyn' `seq` writeIORef rf dyn' >>
+        writeRef' rf dyn' >>
         mapM_ bl_task blUpd
 
-dynExpect :: DynSt a -> Bool
+dynExpect :: DynSt m a -> Bool
 dynExpect dyn = dyn_btouch dyn || st_expect (dyn_signal dyn)
 
-dynStable :: DynSt a -> StableT
+dynStable :: DynSt m a -> StableT
 dynStable dyn = min (dyn_bstable dyn) ((st_stable . dyn_signal) dyn)
 
-data BLUP x = BLUP 
-    { bl_link :: !(T,LnkUp x) 
+data BLUP m x = BLUP 
+    { bl_link :: !(T,LnkUp m x) 
     , bl_drop :: !Bool
-    , bl_task :: (IO ())
+    , bl_task :: (m ())
     }
 
 -- GC the blUpd list
-cleanBl :: [BLUP x] -> [(T,LnkUp x)]
+cleanBl :: [BLUP m x] -> [(T,LnkUp m x)]
 cleanBl = map bl_link . dropWhile bl_drop
 
 -- Stability isn't entirely trivial, mostly because some elements 
 -- become "permanently" stable once stability surpasses the start
 -- of the next element's term. (I.e. they become inactive forever.)
-loadStable :: StableT -> [(T,LnkUp x)] -> [BLUP x]
+loadStable :: StableT -> [(T,LnkUp m x)] -> [BLUP m x]
 loadStable DoneT = map drop 
     where drop x = BLUP x True (ln_idle (snd x) DoneT)
 loadStable tS@(StableT tm) = fn
@@ -441,7 +529,7 @@ loadStable tS@(StableT tm) = fn
 -- compute the signal updates for elements in a list. As a special
 -- case, we'll send a cutoff signal if the update occurs on a change
 -- in behavior. This is necessary in case of changes in B.
-loadUpdate :: StableT -> T -> Sig x -> [(T,LnkUp x)] -> [BLUP x]
+loadUpdate :: StableT -> T -> Sig x -> [(T,LnkUp m x)] -> [BLUP m x]
 loadUpdate _ _ _ [] = []
 loadUpdate tS tu sf (x:[]) = 
     let tt  = max tu (fst x) in
@@ -488,36 +576,35 @@ loadUpdate tS tu s0 (lo:hi:xs) =
 -- expirations for those links could be achieved by HMAC provided on
 -- establishing the merge-link. (RDP is intended to set up without 
 -- any round-trip handshaking.)
-mkMergeLnkFactory :: Lnk y -> IO (Unique -> Lnk y)
-mkMergeLnkFactory LnkDead = 
+mkMergeLnkFactory :: (Monad m) => CC m -> Lnk m y -> m (Key -> Lnk m y)
+mkMergeLnkFactory _ LnkDead = 
     return (const LnkDead)
-mkMergeLnkFactory (LnkProd f s) = 
-    mkMergeLnkFactory f >>= \ mkF ->
-    mkMergeLnkFactory s >>= \ mkS ->
+mkMergeLnkFactory cc (LnkProd f s) = 
+    mkMergeLnkFactory cc f >>= \ mkF ->
+    mkMergeLnkFactory cc s >>= \ mkS ->
     let mkProd k = LnkProd (mkF k) (mkS k) in
     return mkProd
-mkMergeLnkFactory (LnkSum l r) =
-    mkMergeLnkFactory l >>= \ mkL ->
-    mkMergeLnkFactory r >>= \ mkR ->
+mkMergeLnkFactory cc (LnkSum l r) =
+    mkMergeLnkFactory cc l >>= \ mkL ->
+    mkMergeLnkFactory cc r >>= \ mkR ->
     let mkSum k = LnkSum (mkL k) (mkR k) in
     return mkSum
-mkMergeLnkFactory (LnkSig lu) =
-    mkMergeLnk >>= \ mln -> -- state to perform the merges.
+mkMergeLnkFactory cc (LnkSig lu) =
+    cc_newRef cc mldZero >>= \ rf ->
+    let mln = MergeLnk rf in
     let mkLnk = LnkSig . fnMergeEval mln lu in
     return mkLnk
 
 -- MergeLnk is the state to perform merges of results from multiple
 -- behaviors. It uses a hashtable internally, and counts touches, to
 -- keep algorithmic costs down.
-newtype MergeLnk a = MergeLnk { mln_data :: IORef (MLD a) }
+newtype MergeLnk m a = MergeLnk { mln_data :: Ref m (MLD a) }
 data MLD a = MLD
     { mld_touchCt  :: {-# UNPACK #-} !Int
-    , mld_table    :: !(M.Map Unique (SigSt a))
+    , mld_table    :: !(M.Map Key (SigSt a))
     , mld_tmup     :: !(Maybe T)
     }
 
-mkMergeLnk :: IO (MergeLnk a)
-mkMergeLnk = MergeLnk <$> newIORef mldZero
 
 mldZero :: MLD a
 mldZero = MLD 
@@ -526,11 +613,11 @@ mldZero = MLD
     , mld_tmup    = Nothing
     }
 
-mld_getSt :: MLD a -> Unique -> SigSt a
+mld_getSt :: MLD a -> Key -> SigSt a
 mld_getSt mld k = fromMaybe st_zero $ M.lookup k (mld_table mld)
 
 -- touch key (if not already touched)
-mld_touch :: MLD a -> Unique -> MLD a
+mld_touch :: MLD a -> Key -> MLD a
 mld_touch mld k =
     let st = mld_getSt mld k in
     if st_expect st then mld else 
@@ -539,7 +626,7 @@ mld_touch mld k =
     let tc' = succ (mld_touchCt mld) in
     mld { mld_touchCt = tc', mld_table = tbl' }
 
-mld_idle :: MLD a -> Unique -> StableT -> MLD a
+mld_idle :: MLD a -> Key -> StableT -> MLD a
 mld_idle mld k tS =
     let st = mld_getSt mld k in
     assert (st_expect st) $
@@ -548,7 +635,7 @@ mld_idle mld k tS =
     let tc' = pred (mld_touchCt mld) in
     mld { mld_touchCt = tc', mld_table = tbl' }
 
-mld_update :: MLD a -> Unique -> StableT -> T -> Sig a -> MLD a
+mld_update :: MLD a -> Key -> StableT -> T -> Sig a -> MLD a
 mld_update mld k tS tU su =
     let st = mld_getSt mld k in
     assert (st_expect st) $
@@ -573,25 +660,26 @@ mld_update mld k tS tU su =
 -- signals, which is proportional to update frequency for the dynamic
 -- behavior.
 --
-fnMergeEval :: MergeLnk a -> LnkUp a -> Unique -> LnkUp a
-fnMergeEval mln lu k = LnkUp touch update idle where
+fnMergeEval :: (Monad m) => MergeLnk m a -> LnkUp m a -> Key -> LnkUp m a
+fnMergeEval mln lu k = LnkUp touch update idle cyc where
+    cyc = ln_cycle lu
     touch = 
-        readIORef (mln_data mln) >>= \ mld ->
+        readRef (mln_data mln) >>= \ mld ->
         let bFirstTouch = (0 == mld_touchCt mld) in 
         let mld' = mld_touch mld k in
-        writeIORef (mln_data mln) mld' >>
+        writeRef (mln_data mln) mld' >>
         when bFirstTouch (ln_touch lu)
     idle tS =
-        readIORef (mln_data mln) >>= \ mld ->
+        readRef (mln_data mln) >>= \ mld ->
         let mld' = mld_idle mld k tS in
         let bLastUpdate = (0 == mld_touchCt mld') in
-        writeIORef (mln_data mln) mld' >>
+        writeRef (mln_data mln) mld' >>
         when bLastUpdate emit
     update tS tU su = 
-        readIORef (mln_data mln) >>= \ mld ->
+        readRef (mln_data mln) >>= \ mld ->
         let mld' = mld_update mld k tS tU su in
         let bLastUpdate = (0 == mld_touchCt mld') in
-        writeIORef (mln_data mln) mld' >>
+        writeRef (mln_data mln) mld' >>
         when bLastUpdate emit
     emit = emitMergedSignal mln lu
 
@@ -603,9 +691,9 @@ fnMergeEval mln lu k = LnkUp touch update idle where
 -- TODO: POTENTIAL BUG! Might report `DoneT` when a short-route
 -- dynamic behavior is replaced by a long-route behavior across
 -- partitions. No easy fix; partitions block most hacks.
-emitMergedSignal :: MergeLnk a -> LnkUp a -> IO ()
+emitMergedSignal :: (Monad m) => MergeLnk m a -> LnkUp m a -> m ()
 emitMergedSignal mln lu =
-    readIORef (mln_data mln) >>= \ mld ->
+    readRef (mln_data mln) >>= \ mld ->
     assert (0 == mld_touchCt mld) $
     let lst  = M.toAscList (mld_table mld) in
     let tS = foldl' min DoneT $ map (st_stable . snd) lst in
@@ -620,7 +708,7 @@ emitMergedSignal mln lu =
                 ln_update lu tS tU sMrg 
     in
     let mld' = MLD { mld_table = tbl', mld_touchCt = 0, mld_tmup = Nothing } in
-    mld' `seq` writeIORef (mln_data mln) mld' >>
+    writeRef' (mln_data mln) mld' >>
     performUpdateAction
    
 -- need to GC the table. An element can be removed once it no longer
