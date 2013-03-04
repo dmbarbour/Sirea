@@ -64,9 +64,6 @@ instance (BSplit b, Applicative f) => BSplit (StaticB f b) where
 instance (BTemporal b, Applicative f) => BTemporal (StaticB f b) where
     bdelay  = liftStatic . bdelay
     bsynch  = liftStatic bsynch
-    bfchoke = liftStatic bfchoke
-instance (BPeek b, Applicative f) => BPeek (StaticB f b) where
-    bpeek   = liftStatic . bpeek
 instance (Behavior b, Applicative f) => Behavior (StaticB f b)
 
 -- Static cannot evaluate itself, in general, but may evaluate any

@@ -25,8 +25,8 @@ import Sirea.Internal.LTypes
 -- coupling. Developers cannot apply Haskell functions at arbitrary
 -- points, nor are all functions on signals valid for RDP.
 data B0 m x y where
-  B0_mkLnk   :: (LCaps m x -> LCaps m y) 
-             -> (LCaps m x -> Lnk m y -> m (Lnk m x))
+  B0_mkLnk   :: (LCapsM m x -> LCapsM m y) 
+             -> (LCapsM m x -> LnkM m y -> m (LnkM m x))
              -> B0 m x y
   B0_pipe    :: B0 m x y -> B0 m y z -> B0 m x z
   B0_first   :: B0 m x x' -> B0 m (x :&: y) (x' :&: y)

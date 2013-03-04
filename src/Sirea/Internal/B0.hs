@@ -53,9 +53,6 @@ instance (Monad m) => BDisjoin (B0 m) where
 instance (Monad m) => BTemporal (B0 m) where
     bdelay   = delayB0
     bsynch   = synchB0
-    bfchoke  = fchokeB0
-instance (Monad m) => BPeek (B0 m) where
-    bpeek    = peekB0
 instance (Monad m) => Behavior (B0 m) 
 
 -- Unfortunately, we can't have dynamic behaviors for type B

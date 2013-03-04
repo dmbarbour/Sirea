@@ -37,12 +37,11 @@ module Sirea.DemandMonitor
     , activityMonitor   
     ) where
 
--- TODO: partition IO access into the partition's demand monitors (SRef-like?)
--- TODO: decide how to handle opaque non-Ord demand types
---   option 1: via dedicated class 
---   option 2: via dedicated BCX instance
---   option 3: using semantic hack like StableName (..I'd rather not..)
---   option 4: developing a PartialOrd class?
+-- TODO: Consider making DemandMonitor more compositional, by having
+-- a set for input as well as for output. I.e. `Set a ~> Set a` with
+-- the input set containing a few elements and the output containing
+-- a union of all elements. This would make it easier to work with
+-- collections in general.
 
 import Control.Applicative
 import Control.Exception (assert)

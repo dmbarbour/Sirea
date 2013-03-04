@@ -14,7 +14,7 @@
 -- behavior is non-idempotent if it is invoked as a singleton.
 --
 -- Communication with the invoked behaviors is performed through
--- demand monitors or shared state (blackboard metaphors).
+-- demand monitors or shared state (blackboard metaphors). 
 --
 module Sirea.AgentResource
     ( invokeAgent
@@ -54,6 +54,9 @@ import Sirea.Internal.Tuning (dtEqf, dtDaggrHist)
 --
 -- Recommendation is to keep the `duty` types hidden, and export the
 -- behaviors that use invokeAgent directly. This ensures uniqueness.
+--
+-- Caution: AgentBehavior should not be cyclic; an agent shoud not 
+-- invoke itself even indirectly, or it might keep itself active. 
 --
 class (Partition p, Typeable duty) => AgentBehavior p duty where
     -- | This should be instantiated as: agentBehaviorSpec _ = ...

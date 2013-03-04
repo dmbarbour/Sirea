@@ -32,8 +32,6 @@ module Sirea.UnsafeOnUpdate
     ) where
 
 import Data.IORef
-import Data.Typeable
-import Data.List (takeWhile)
 import Control.Monad (unless)
 import Control.Exception (assert)
 import Sirea.UnsafeLink
@@ -43,7 +41,6 @@ import Sirea.Behavior
 import Sirea.B
 import Sirea.PCX
 import Sirea.Partition
-import Sirea.Internal.B0Impl (undeadB0, keepAliveB0)
 import Sirea.Internal.Tuning (dtFinalize, tAncient)
 
 --import Debug.Trace
@@ -56,9 +53,7 @@ import Sirea.Internal.Tuning (dtFinalize, tAncient)
 unsafeOnUpdateB :: (Eq a, Partition p) 
                 => (PCX p -> IO (T -> Maybe a -> IO ()))
                 -> B (S p a) (S p a)
-unsafeOnUpdateB mkOp = unsafeOnUpdateBL mkOp >>> 
-                       (wrapB . const) undeadB0
-
+unsafeOnUpdateB = unsafeLinkB . mkOnUpdate
 
 -- | unsafeOnUpdateBL - a variation of unsafeOnUpdateB that does not
 -- prevent dead-code elimination. The behavior will be dropped if 
@@ -66,20 +61,27 @@ unsafeOnUpdateB mkOp = unsafeOnUpdateBL mkOp >>>
 unsafeOnUpdateBL :: (Eq a, Partition p) 
                  => (PCX p -> IO (T -> Maybe a -> IO ())) 
                  -> B (S p a) (S p a)
-unsafeOnUpdateBL mkOp = unsafeLinkB build
-    where build _ LnkDead = return LnkDead
-          build cw (LnkSig lu) =
-            findInPCX cw >>= \ cp ->
-            getPSched cp >>= \ pd ->
-            mkOp cp >>= \ op ->
-            newIORef (s_never, tAncient) >>= \ rfSig ->
-            newIORef Nothing >>= \ rfA ->
-            let lu' = luOnUpdate pd op rfSig rfA lu in
-            return (LnkSig lu')
+unsafeOnUpdateBL = unsafeLinkBL . mkOnUpdate
 
-gcSig :: StableT -> Sig x -> Sig x
-gcSig DoneT _ = s_never
-gcSig (StableT tm) s0 = s_trim s0 tm
+-- | unsafeOnUpdateBLN - perform IO effects on the first signal if
+-- any of the signals are used in the pipeline. This is useful to
+-- debug a behavior without preventing dead-code elimination. 
+unsafeOnUpdateBLN :: (Eq a, Partition p)  
+                  => (PCX p -> IO (T -> Maybe a -> IO ())) 
+                  -> B (S p a :&: x) (S p a :&: x)
+unsafeOnUpdateBLN = unsafeLinkBLN . mkOnUpdate
+
+mkOnUpdate :: (Eq a, Partition p) 
+           => (PCX p -> IO (T -> Maybe a -> IO ()))
+           -> PCX W -> LnkUp a -> IO (LnkUp a)
+mkOnUpdate mkOp cw lu =
+    findInPCX cw >>= \ cp ->
+    getPSched cp >>= \ pd ->
+    mkOp cp >>= \ op ->
+    newIORef (s_never, tAncient) >>= \ rfSig ->
+    newIORef Nothing >>= \ rfA ->
+    let lu' = luOnUpdate pd op rfSig rfA lu in
+    return lu'
 
 luOnUpdate  :: (Eq a) 
             => PSched -- to run actions at end of step
@@ -88,9 +90,9 @@ luOnUpdate  :: (Eq a)
             -> IORef (Maybe a)  -- last reported value
             -> LnkUp a -- output sink (just forward input, but AFTER running)
             -> LnkUp a -- input source
-luOnUpdate pd op rfSig rfA lu = LnkUp touch update idle cycle where
+luOnUpdate pd op rfSig rfA lu = LnkUp touch update idle cyc where
     touch = ln_touch lu
-    cycle = ln_cycle lu
+    cyc = ln_cycle lu
     idle tS =
         readIORef rfSig >>= \ (s0,tLo) ->
         let sCln = gcSig tS s0 in
@@ -119,20 +121,15 @@ luOnUpdate pd op rfSig rfA lu = LnkUp touch update idle cycle where
     schedRunUpdates tLo tHi sig =
         let xs = sigToList sig tLo tHi in
         let xsOp = takeWhile ((< tHi) . fst) xs in
-        unless (null xsOp) (p_onStepEnd pd (mapM_ runOp xsOp))
+        unless (null xsOp) (onStepEnd pd (mapM_ runOp xsOp))
     runOp (t,a) =
         readIORef rfA >>= \ a0 ->
         unless (a0 == a) $
             writeIORef rfA a >>
             op t a
 
--- | unsafeOnUpdateBLN - perform IO effects on the first signal if
--- any of the signals are used in the pipeline. This is useful to
--- debug a behavior without preventing dead-code elimination. 
-unsafeOnUpdateBLN :: (Eq a, Partition p)  
-                  => (PCX p -> IO (T -> Maybe a -> IO ())) 
-                  -> B (S p a :&: x) (S p a :&: x)
-unsafeOnUpdateBLN mkOp = bfirst (unsafeOnUpdateBL mkOp) >>> 
-                         (wrapB . const) keepAliveB0
 
+gcSig :: StableT -> Sig x -> Sig x
+gcSig DoneT _ = s_never
+gcSig (StableT tm) s0 = s_trim s0 tm
 

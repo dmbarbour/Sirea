@@ -4,9 +4,9 @@ module Sirea.Internal.Tuning
     ( dtRestart, dtStability, dtHeartbeat, dtGrace
     , dtInsigStabilityUp
     , dtFutureChoke
-    , dtEqShift, dtEqShiftAlign
+    , dtEqShift, dtAlign
     , dtTouch
-    , dtCompileFuture
+    , dtCompile
     , batchesInFlight    
     , dtDaggrHist, dtMdistHist
     , dtFinalize
@@ -31,35 +31,42 @@ dtGrace     = dtHeartbeat -- time allotted for graceful start and stop
 -- no update), but across partitions or steps we are free to drop a
 -- few if we deem them insignificant for GC purposes. 
 dtInsigStabilityUp :: DT
-dtInsigStabilityUp = dtHeartbeat * 0.85 -- largest insignificant pure-stability update
+dtInsigStabilityUp = 0.05 -- largest insignificant pure-stability update
 
--- The bfchoke behavior may delay updates that do not result in any
--- near-term updates. This hurts consistency of anticipated values,
--- but can help regulate computation costs. 
+-- To control temporal feedback cycles through resources, Sirea will
+-- choke processing of updates that apply to values in the distant
+-- future. This doesn't block the cycles, just slows them down to a
+-- manageable rate with predictable performance characteristics.
 dtFutureChoke :: DT
-dtFutureChoke = 4 * dtHeartbeat
+dtFutureChoke = 2 * dtHeartbeat
+
+-- TODO: develop a combined choke*eqshift that can support some sort
+-- of exponential backoff. Not critical for now, but could save much
+-- rework if done properly.
 
 -- For badjeqf and bconst, how far do we peek to find a first point
 -- of non-equivalence? If we find no difference, how much further do
 -- we seek for a point of ideal alignment to 'swap in' the updated
 -- signal?
-dtEqShift, dtEqShiftAlign :: DT
-dtEqShift = 6 * dtHeartbeat -- comparison of values
-dtEqShiftAlign = dtEqShift -- extra search for alignment
+dtEqShift, dtAlign :: DT
+dtEqShift = 4 * dtHeartbeat -- comparison of values
+dtAlign = 2 * dtHeartbeat -- extra search for alignment
 
-
--- When we 'btouch', how far (relative to stability) do we enforce
--- that the signal is evaluated?
+-- When we 'btouch', how far (relative to stability) do we cause the
+-- signal to be evaluated. Forcing evaluation is mostly useful to 
+-- control where latencies are introduced. If dtTouch is larger than
+-- zero, some rework may be performed but more values are available
+-- in real-time. 
 dtTouch :: DT
-dtTouch = dtHeartbeat
+dtTouch = dtEqShift / 10
 
 -- For dynamic behaviors, it's best to install behaviors a little 
 -- before they're necessary. Doing so can improve system latency and
 -- support better speculative evaluation downstream. The tradeoff is
 -- potentially much more rework when signals change. I plan to make
 -- this more adaptive, eventually.
-dtCompileFuture :: DT
-dtCompileFuture = dtEqShift -- how far to anticipate dynamic behaviors
+dtCompile :: DT
+dtCompile = 3 * dtHeartbeat -- how far to anticipate dynamic behaviors
 
 -- Communication between partitions in Sirea occurs via bcross, and
 -- uses coarse-grained batches to support snapshot consistency and

@@ -30,7 +30,7 @@ import Sirea.Internal.B0 -- B0 abstract type and instances
 -- | The primary, concrete behavior implementation provided by Sirea.
 newtype B x y = B { fromB0 :: StaticB (WrappedArrow (->) (PCX W)) (B0 IO) x y } 
     deriving ( Category, BFmap, BProd, BSum, BDisjoin
-             , BZip, BSplit, BTemporal, BPeek, Behavior, Typeable )
+             , BZip, BSplit, BTemporal, Behavior, Typeable )
     -- NOT deriving: BDynamic, BCross
 
 wrapB :: (PCX W -> B0 IO x y) -> B x y

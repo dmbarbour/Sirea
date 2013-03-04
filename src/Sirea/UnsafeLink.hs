@@ -12,17 +12,16 @@
 --
 module Sirea.UnsafeLink 
     ( unsafeFmapB
-    , unsafeLinkB
-    , unsafeLinkBL
-    , LnkUp(..), StableT(..)
+    , unsafeLinkB, unsafeLinkBL, unsafeLinkBLN
+    , LnkUpM(..), LnkUp, StableT(..)
     , ln_zero, ln_sfmap, ln_lumap, ln_append
     , isDoneT, fromStableT, maybeStableT
     ) where
 
-import Control.Applicative ((<$>))
 import Control.Exception (assert)
 import Sirea.Internal.LTypes
-import Sirea.Internal.B0Impl (mkLnkB0, mkLnkPure, forceDelayB0)
+import Sirea.Internal.B0Impl (mkLnkB0, mkLnkPure, forceDelayB0
+                             ,undeadB0, keepAliveB0)
 import Sirea.Internal.B0
 import Sirea.Behavior
 import Sirea.Signal
@@ -38,25 +37,30 @@ unsafeFmapB0 :: (Monad m) => (Sig a -> Sig b) -> B0 m (S p a) (S p b)
 unsafeFmapB0 = mkLnkPure lc_fwd . ln_lumap .ln_sfmap
 
 -- | unsafeLinkB is used when the link has some side-effects other
--- than processing the signal.
-unsafeLinkB :: (PCX W -> Maybe (LnkUp IO y) -> IO (LnkUp IO x))
+-- than processing the signal, and thus needs to receive a signal
+-- even if it is not going to pass one on.
+unsafeLinkB :: (PCX W -> LnkUp y -> IO (LnkUp x))
             -> B (S p x) (S p y)
-unsafeLinkB fn = unsafeLinkB' fn' where
-    fn' cw (LnkSig lu) = LnkSig <$> fn cw (Just lu)
-    fn' cw ln = assert (ln_dead ln) $ LnkSig <$> fn cw Nothing
+unsafeLinkB fn = unsafeLinkBL fn >>> (wrapB . const) undeadB0
 
--- | unsafeLinkBL is the lazy form of unsafeLinkB; returns dead link
--- when there is no need for the result signal. 
-unsafeLinkBL :: (PCX W -> LnkUp IO y -> IO (LnkUp IO x))
+-- | unsafeLinkBL is the lazy form of unsafeLinkB; it is inactive 
+-- unless the response signal is necessary downstream.
+unsafeLinkBL :: (PCX W -> LnkUp y -> IO (LnkUp x))
              -> B (S p x) (S p y)
-unsafeLinkBL fn = unsafeLinkB' fn' where
-    fn' cw (LnkSig lu) = LnkSig <$> fn cw lu
-    fn' _ ln = assert (ln_dead ln) $ return LnkDead
+unsafeLinkBL fn = wrapB $ \ cw -> 
+    forceDelayB0 >>> mkLnkB0 lc_fwd (const (onLink (fn cw)))
 
+onLink :: (Monad m) => (LnkUpM m a -> m (LnkUpM m b))
+       -> LnkM m (S p a) -> m (LnkM m (S p b))
+onLink fn (LnkSig lu) = fn lu >>= return . LnkSig
+onLink _ ln = assert (ln_dead ln) $ return LnkDead
 
-unsafeLinkB' :: (PCX W -> Lnk IO (S p y) -> IO (Lnk IO (S p x))) 
-            -> B (S p x) (S p y)
-unsafeLinkB' fn = wrapB $ \ cw ->
-    forceDelayB0 >>> mkLnkB0 lc_fwd (const (fn cw))
+-- | unsafeLinkBLN is a semi-lazy form of unsafeLinkB; it is active
+-- if any of the input signals are needed downstream, but operates
+-- only on the first input (even if its particular output is not
+-- used downstream).
+unsafeLinkBLN :: (PCX W -> LnkUp y -> IO (LnkUp x)) 
+              -> B (S p x :&: z) (S p y :&: z)
+unsafeLinkBLN fn = bfirst (unsafeLinkBL fn) >>> (wrapB . const) keepAliveB0
 
 

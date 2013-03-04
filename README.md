@@ -231,9 +231,9 @@ In Sirea, a behavior is compiled into a network with all signals inactive. The f
 
 There are many problem domains where support for continuous-varying signals would be useful: motion, sound, animation, charting, physics, probability. Sirea currently supports only discrete-varying signals, which is quite suitable for digital information (boolean values, integers, text). However, RDP in general can support piecewise-continuous signals. 
 
-I am interested in eventually developing support for continuous signals, most likely in a transformative layer above Sirea RDP. 
+I am interested in eventually developing support for continuous signals, most likely in a transformative layer above Sirea RDP. This has at least two special requirements:
 
-* Upon `bdelay` or `bpeek` need to time-shift the signal contents. 
+* Upon `bdelay` need to time-shift the signal contents. 
 * Instead of `bsplit` need some support for zero-crossings. 
 
 Viable candidates include [trigonometric polynomials](http://en.wikipedia.org/wiki/Trigonometric_polynomial) or [plain old polynomials](http://en.wikipedia.org/wiki/Polynomial). These models are symbolic, can be represented as a simple vector of coefficients, are easy to serialize or utilize on a GPU, and multi-dimensional variations are feasible. Use of Haskell functions (`T -> a`) is also feasible, though opaque and full of semantic garbage (such as discontinuous signals).
@@ -276,7 +276,7 @@ RDP is metacircular: it's behaviors *"all the way down"*.
 
 ### Behaviors as Dataflow Networks
 
-Behaviors are composed as dataflows across an open system. Abstractly, those dataflows are signals. For the concrete, installed behavior, those dataflows are signal updates (of type `SigUp`). 
+Behaviors are composed as dataflows across an open system. Abstractly, those dataflows are signals. For the concrete, installed behavior, those dataflows are signal updates. 
 
 The simplest dataflow is linear and is appropriately called a "pipeline". The constructor for pipelines is `>>>`. This operator is from `Control.Category`, where `(>>>) = flip (.)`. Composition with `>>>` is associative, chainable, and models dataflow from left to right. This results in code that is relatively read and document with English.
 
@@ -289,7 +289,7 @@ Developers may be familiar with pipelines from using command line interfaces, mo
 
 This behavior, while active, would *continuously* load "myImage.svg", render it to a JPG value, then save that result to "myImage.jpg". Of course, this is continuous only in the logical, abstract sense; the implementation would only fully load, render, and save when first activated and when "myImage.svg" changes. (*Note:* To activate this behavior, it must be part of a larger behavior. 
 
-The notion of behaviors as dataflow *"networks"* is due to use of the complex signal types. Each concrete signal type `(S p a)` will have its own stream of signal updates (`SigUp`). Different concrete signals may also be distributed across partitions. The signal type `(S P1 x :&: S P2 y)` describes a pair of concrete signals distributed across two partitions. Composition of distributed signals `(x :&: y)` involves composing `x` and `y` independently. This is supported by three primitive behaviors:
+The notion of behaviors as dataflow *"networks"* is due to use of the complex signal types. Each concrete signal type `(S p a)` will have its own stream of signal updates. Different concrete signals may also be distributed across partitions. The signal type `(S P1 x :&: S P2 y)` describes a pair of concrete signals distributed across two partitions. Composition of distributed signals `(x :&: y)` involves composing `x` and `y` independently. This is supported by three primitive behaviors:
 
         bfirst   :: (BProd b) => b x x' -> b (x :&: y) (x' :&: y)
         bswap    :: (BProd b) => b (x :&: y) (y :&: x)
@@ -332,7 +332,7 @@ To initially construct a concurrent dataflow, one will generally use the behavio
         bdup  :: (BProd b) => b x (x :&: x)
         bfst  :: (BProd b) => b (x :&: y) x
 
-Use of `bdup` results in the `SigUp` streams being duplicated. They are not yet independent signals. However, after applying the first and second pipes to different resources, e.g. to gather different state, they may diverge radically on update rates. Duplicating signals then using them in different ways enables developers to build complex dataflow networks. 
+Duplicating signals then using them in different ways enables developers to build complex dataflow networks. Sirea has decent dead-code elimination; if you duplicate a complex signal then filter them using `bfst` to get what you need, Sirea will skip duplicating the signals that aren't used on both paths.
 
 More utility behaviors are derived from `bdup` and `bfst`:
 
@@ -473,9 +473,9 @@ Use of explicit, logical delay provides developers more control over their RDP c
 
         bdelay :: (BDelay b) => DT -> b x x
 
-The behavior `bdelay` will delay a signal logically. It achieves this by adding the given `DT` to the update and stability times for every `SigUp`. Fundamentally, the idea is to turn *straggling* updates into *future* updates: instead of an update too late, the update might arrive a little early (based on the distance between logical and real time). Future updates are subject to speculative evaluation, anticipation, and buffering. The delay can mask variance in physical latency, hiding scheduler hiccups and similar.
+The behavior `bdelay` will delay a signal logically. Fundamentally, the idea is to turn *straggling* updates into *future* updates: instead of an update too late, the update might arrive a little early (based on the distance between logical and real time). Future updates are subject to speculative evaluation, anticipation, and buffering. The delay can mask variance in physical latency, hiding scheduler hiccups and similar.
 
-Choosing too large a `DT` value has its own disadvantages: most reactive or real time systems have a tight latency budget, beyond which the quality of the system rapidly degrades. Also, large `DT` results in larger buffers and memory overheads. So developers in RDP are under some pressure to specify delays that are large enough but not too large. Fortunately, developers do not need to be especially precise or accurate; most resources are robust to an occasional straggler, and the window for "good enough" is quite large in most problem domains. In many cases, computation latencies can be entirely subsumed by communication latencies.
+Choosing too large a delay has its own disadvantages: most reactive or real time systems have a tight latency budget, beyond which the quality of the system rapidly degrades. Further, it results in larger buffers and memory overheads. So developers in RDP are under some pressure to specify delays that are large enough but not too large. Fortunately, developers do not need to be very precise or accurate; most resources are robust to an occasional straggler, and the window for "good enough" is quite large in most problem domains. In many cases, computation latencies can be entirely subsumed by communication latencies, i.e. such that developers only add delay at `bcross`.
 
 The `bdelay` behavior be applied to components signals in a complex signal type (e.g. `bfirst bdelay 0.01` to delay the first signal 10 milliseconds). This is why RDP has *asynchronous products and sums* for its signal types. But when signals become asynchronous, it is often desirable to synchronize them for an operation. Some operations in Sirea will implicitly synchronize: `bzip`, `bmerge`, or `bdisjoin`. But a behavior for an explicit synchronization barrier is also available:
 
@@ -483,31 +483,19 @@ The `bdelay` behavior be applied to components signals in a complex signal type 
 
 The `bsynch` behavior will take every concrete signal in `x` and delay it to match the signal with the highest logical latency. This allows developers to synchronize signals without being explicitly aware of their latencies. Synchronization barriers can be very useful for controlling side-effects, ensuring multiple resources and subsystems operate in concert.
 
-### Anticipation
-
-Reactive Demand Programming offers an interesting feature: since each signal update (`SigUp`) carries a potentially rich future for the signal, it is easy to peek forward a little and obtain a decent guess of what the future holds. The ability to look forward even a few milliseconds can enable more intelligent decisions. For example, given a series of commands for a robotic arm, one can use knowledge of upcoming commands to select a smoother path. By comparing a value to its future, one can detect change-events and gestures without need for a state resource. The behavior to look into the future is `bpeek`:
-
-        bpeek :: (BPeek b) => DT -> b (S p x) (S p (Either x ()))
-
-The `DT` value is how far ahead to look, e.g. `0.003` for three milliseconds. The `Either x ()` answer is either a future `x` or an indicator `()` that the signal will be inactive three milliseconds hence. 
-
-This power comes with a price: the further you look, the less stable and less accurate your answers. Technically, one can understand this as looking into a buffer, where the buffer is still being updated: future updates become straggling updates. However, use of `bdelay` can directly counter the stability costs, trading latency for stability. For example:
-
-        bdelay 0.03 >>> bpeek 0.03
-
-Would create a 30 millisecond buffer and allow the developer to peek into without any cost to stability, albeit with a significant 30 millisecond cost to latency. The motivation for such a construct might be to avoid need for a stateful resource. An anticipation buffer is much less expressive than state, but can be used for some roles where state is traditionally necessary. Using anticipation, one can detect changes or take derivatives, but cannot accumulate values or compute integrals. By avoiding state, the system is more robust and resilient to partial failure. Avoiding state is not always the right answer, but it's worth considering in many cases.
-
-RDP does not provide a prediction system. It only propagates updates. However, prediction systems can be built using state resources, especially animated state (which models systems with inertia). I expect Sirea will eventually have packages that cover common prediction models based on machine learning.
-
 ### Behavior Implementation and Extension
 
-A behavior is compiled into a concrete dataflow network that uses Haskell `IO` for propagation. This network is then activated by signal updates of type `SigUp`. Signal updates are also used to deactivate the behavior, i.e. by indicating the signal is inactive. The use of `bcross` allows different parts of a behavior to compute in different partitions, where each partition is represented by a different Haskell thread. 
+A behavior is compiled into a concrete dataflow network that uses Haskell `IO` for propagation. This network is then activated by the first signal update. Signal updates are also used to deactivate the behavior, i.e. by indicating the signal is inactive after a certain time. The use of `bcross` allows different parts of a behavior to compute in different partitions, where each partition is represented by a different Haskell thread. 
 
-Between partitions, signal updates are batched into one outbox for each destination. The contents of those outboxes are delivered atomically at the end of the round. At the start of each round, ALL available batches are processed. Multiple updates for one signal will "piggyback" (be combined into one update). A bounded-buffer mechanism is applied at the batch-level between partitions, ensuring fairness and controlling space costs.
+Between partitions, signal updates are batched into one outbox for each destination. The contents of those outboxes are delivered atomically at the end of the step. At the start of each step, ALL available batches are processed. Multiple updates for one signal will "piggyback" (be combined into one update). A bounded-buffer mechanism is applied at the batch-level between partitions, ensuring fairness and controlling space costs.
 
-Round-based batch processing ensures an atomic "snapshot" view of other partitions within and between rounds. Snapshot consistency is weaker than "glitch freedom": by observing one resource through lenses of two different partitions, temporary inconsistency is possible. But snapshot consistency eliminates "local" glitches, which are the cause of most problems.
+Step-driven batch processing ensures an atomic "snapshot" view of other partitions within and between rounds. Snapshot consistency is weaker than "glitch freedom": by observing one resource through lenses of two different partitions, temporary inconsistency is possible. But snapshot consistency eliminates "local" glitches, which are the cause of most problems.
 
-Within each round, updates are processed in two phases. First, every link with a pending update is *"touched"* to indicate an update will be coming on that link. Then, every update is delivered. This is a dynamic solution to the update ordering problem. The *update ordering problem* is a performance concern for push-based reactive systems with complex or ad-hoc acyclic dependencies. For example, assume a system whose dependency graph looks like:
+Within each step, updates are processed in three phases. First, every link with a pending update is *"touched"* to indicate an update will be coming on that link. Second, every local update is processed, with `bcross` updates going to the relevant outbox. Third, mailboxes are delivered. 
+
+#### Touch and the Update Ordering Problem
+
+The *update ordering problem* is a performance concern for push-based reactive systems with complex or ad-hoc acyclic dependencies. For example, assume a system whose dependency graph looks like:
 
         a--b--c--d--e--k
          \/ \/ \/ \/  /
@@ -521,35 +509,32 @@ In this graph, dependencies flow left to right along the lines. For example, `c`
 
 I do not present a worst-case ordering. The worst-case ordering is exponentially worse than the best case. If you know the dependencies, a [toplogical sort](http://en.wikipedia.org/wiki/Topological_sorting) will provide an optimal ordering. However, for RDP, the dynamic behaviors and openly shared resources (state, demand monitors) make it difficult to determine the dependencies. The *"touch"* technique used by Sirea is a simple, dynamic solution to the problem: a "touch" is a promise of a pending update. When `g` is touched by `a` and `f`, `g` knows to wait for an update from both before pushing its own update. By propagating all touches before propagating any updates, the update ordering will be optimal.
 
-The use of "touch" is reflected directly in the data type for constructing concrete behavior networks. Each concrete signal link has IO methods for propagating the updates. The first method, `ln_touch`, is used to signal than an update is coming soon. (It it is determined the touch was a false alarm, idle is called instead.)
+A risk when we *touch* is that we might later decide that an update can be filtered or delayed, so we don't have a real update in that step. When that happens, we'll send an *idle* rather than a real update. 
+
+#### Robust Cycle Handling
+
+RDP behaviors do not directly express cycles, but can indirectly introduce feedback cycles through external resources. For example:
+
+        readFile "foo.txt" >>> bdelay 0.1 >>> bfmap foo >>> writeFile "foo.txt"
+
+This behavior presumably models a 10Hz cycle that continuously reads and writes the same file assuming there are no filesystem errors or write conflicts. The frequency determined by `bdelay 0.1` - each cycle delays 0.1 seconds. This delay is *logical*, but Sirea applies a choking mechanism such that it delays update once it runs a few cycles ahead of stability. Logical cycles will ultimately result in corresponding thread scheduler frequencies (albeit, only loosely aligned).
+
+*Note:* RDP developers are not encouraged to use cyclic feedback. It is possible, and sometimes unavoidable (due to unknown dependencies in open systems), but feedback is difficult to control and reason about. Fine-grained resources, e.g. using separate state resources for requests and results, can help avoid cycles.
+
+A concern for partition-local cycles is that the *touch* mechanism may result in a cyclic wait. To resolve this, there is also a test for partition-local cycles that involves passing a unique identifier and listening for the same value. Detected partition-local cycles are then broken across the next step, ensuring progress. For performance reasons involving potential rework, it is preferable to detect cycles and perform as much processing within each step as possible.
+
+#### Concrete Links and Updates
+
+I've mentioned signal updates, touch, idle, and test for partition-local cycles. These operations are directly reflected in the LnkUp type that is used to implement behaviors:
 
         data LnkUp a = LnkUp
             { ln_touch  :: IO ()
             , ln_update :: StableT -> T -> Sig a -> IO ()
             , ln_idle   :: StableT -> IO ()
+            , ln_cycle  :: Set Unique -> IO ()
             }
 
-Touch is used only within a partition. Between partitions (i.e. at borders guarded by `bcross`) updates are shunted into a mailbox then delivered in batches. At the batch level, this may result in non-optimal update orderings (with some partitions doing extra rework). However, the network is smaller (fewer partitions than RDP behaviors), concurrent updates are processed together, and a slow-consumer might piggyback multiple updates from a fast producer. These mitigating factors do not guarantee optimal orderings, but they should (in most circumstances) effectively resist worst-case orderings.
-
-Developers might use the `LnkUp` type directly if adapting Sirea to external IO resources or FFI. This is achieved with `unsafeLinkB` from Sirea.Link. A single `LnkUp` models only one concrete signal, but is a mechanism (`Lnk`) that allows modeling of complex products, sums, and possibly dead links:
-
-        unsafeLinkB :: (Lnk y -> IO (Lnk x)) -> B x y
-  
-        data Lnk x = -- GADT
-            LnkDead :: Lnk a
-            LnkSig  :: LnkUp a -> Lnk (S p a)
-            LnkProd :: Lnk x -> Lnk y -> Lnk (x :&: y)
-            LnkSum  :: Lnk x -> Lnk y -> Lnk (x :|: y)
-
-The `Lnk` type can carry `LnkUp` values for each concrete signal, including multiple concrete signals in case of `(x :&: y)` or `(x :|: y)`. The `LnkDead` indicates dead code on output, which can help optimize by eliminating cases where a resource is query-only. Some `IO` is allowed during construction, but should not have any observable effects: it's purpose is to prepare caches necessary for maintaining the link. 
-
-Type `B` is the concrete, primitive behavior type implemented by Sirea. Type `B` is inconvenient to use directly because it is unclear where resources would be represented other than the Haskell global space, which would be problematic. Sirea provides a higher level behavior type `BCX` to mitigate this by reifying a toplevel context object `PCX`. Operations such as `bcross` depend on the `PCX` value to track partition threads and mailboxes. The Sirea application behavior is of type `BCX`, with Sirea supplying the initial `PCX`.
-
-        newtype BCX w x y = BCX (PCX w -> B x y) 
-        unsafeLinkBCX :: (PCX w -> Lnk y -> IO (Lnk x)) -> BCX w x y
-        type SireaApp = forall w . BCX w (S P0 ()) (S P0 ())
-
-These `unsafeLink` operations are unsafe from Sirea's perspective (not Haskell's). It is far too easy to violate RDP's sensitive constraints. Discipline is needed by the developer to safely extend Sirea. This is, at the moment, one of Sirea's weaknesses, though support patterns such as AgentResource and UnsafeOnUpdate can help.
+This is used under-the-hood. Most users of Sirea shouldn't need to know or use LnkUp, but it occasionally will be valuable for developing new resource adapters or special behaviors.
 
 ### Parallelism and Performance
 
@@ -557,7 +542,7 @@ Sirea RDP is an excellent target for parallelism in Haskell for a few reasons:
 
 * the `(x :&: y)` asynchronous products clarify data dependencies. This makes it easier for developers to judge where introducing parrallelism is advantageous. Very little parallelism will be wasted. 
 * the concrete signal type `(S p a)` (implemented by `Sig a`) provides a clean separation between the spatial and temporal aspects of data. It is easy, in Sirea, to specify that the spatial computations occur in parallel while the temporal "spine" of the signal is left to incremental, sequential processing.
-* the use of signal updates with explicit stability (`SigUp`) supports speculative evaluation and optimistic concurrency, similar to lightweight time warp protocols. (Parallelism via optimistic concurrency is really trading efficiency for latency and robustness, but is a very nice way to use that extra CPU.)
+* the use of signal updates with explicit stability supports speculative evaluation and optimistic concurrency, similar to lightweight time warp protocols. (Parallelism via optimistic concurrency is really trading efficiency for latency and robustness, but is a very nice way to use that extra CPU.)
 * use of `bcross` models distributed behaviors, potentially multi-processor systems, which are inherently parallel. 
 * state resources are explicit and external to RDP, and persistent; there is no risk of lazy, parallel folds becoming space leaks.
 
@@ -628,7 +613,7 @@ However, programmers from imperative backgrounds must learn new ways of thinking
 * *machine learning* where the state is implicit to a learning or clustering model, but is not easy to control.
 * *history based state* which simply records the values pushed to it, possibly with some expiration or decay model
 
-A simplistic rules-based state model is the *reactive state transition system.* The resource is in some state, initially `0`. Each demand adds a directed bridge between states, such as `(4,5)`. The state follows a predictable path across these bridges, going as far as it can. If rule `(0,4)` is added, the state will transition from `0` to `4` then immediately from `4` to `5` (assuming that bridge is still available). Ambiguity might be resolved predictably by favoring the lowest numbered state. An instantaneous cycle might be resolved by settling in the lowest state. 
+A simplistic rules-based state model is the *reactive state transition system.* The resource is in some state, initially 0. Each demand adds a directed bridge between states, such as (4,5). The state follows a predictable path across these bridges, going as far as it can. If rule (0,4) is added, the state will transition from 0 to 4 then immediately from 4 to 5 (assuming the (4,5) bridge is still available). Ambiguity might be resolved predictably by favoring the lowest numbered state. An instantaneous cycle might be resolved by settling in the lowest state. 
 
 Reactive state transition could serve a similar purpose as a state machine. It could be augmented with time, e.g. by adding a cooldown time to each transition. It could also be augmented with a stack, e.g. for a "structured" state transition system that requires every trip to be a round trip (a very useful constraint).
 
@@ -657,6 +642,17 @@ One variation of demand monitor is possibly the simplest useful resource: the **
 Demand monitors and activity monitors are typically composed into more complex behaviors to track demands and use of resources. Demand monitors are also useful as a volatile blackboard for communication between agents, or as a registry for publishing available services or plugins (dynamic behaviors).
 
 Demand monitors have a severe weakness: a large set of demands will tend to be much less stable than any of the contributing signals. This is because an update to any constituent signal will require an update to the monitored signal. A suggested practice for demand monitors is to use many fine-grained demand monitors, one for each role or responsibility. Also, if possible, favor variations of demand monitors that narrow the set of responses (e.g. the activity monitor or a k-maximum monitor).
+
+### Anticipation
+
+Reactive Demand Programming is designed to pervasively support speculative evaluation: each signal update carries information about that signal's future, from tens of milliseconds up to a few seconds in the future. Though information about the future is not always stable or accurate, many resources can easily leverage this speculative information:
+
+* A file-system adapter can asynchronously pre-load files that it anticipates it will need in a second. 
+* A world model might leverage projected updates to improve the quality of current estimates and predictions.
+* A constraint model might use projected future constraints to choose solutions that can be expected to remain stable for longer.
+* A robotic arm might use speculative commands to plan a smoother motion.
+
+*Note:* Early RDP designs have `bpeek :: DT -> B (S p x) (S p (Maybe x))`, such that developers could anticipate on ad-hoc signals. Unfortunately, `bpeek` breaks merge equivalence: `(bpeek 0.1 +++ bpeek 0.1) >>> bmerge` is not equivalent to `bmerge >>> bpeek 0.1` because the former will anticipate periods of inactivity where the latter does not. Merge equivalence is essential for dynamic behaviors because it allows us to treat dynamic behaviors semantically as if they are continuously expired and replaced. Anticipation now is leveraged only at resources, but remains useful. 
 
 ### Resource Management
 

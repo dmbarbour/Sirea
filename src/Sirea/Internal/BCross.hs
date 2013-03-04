@@ -38,6 +38,7 @@
 -- 
 module Sirea.Internal.BCross 
     ( crossB0
+    , phaseUpdateB0
     , GobStopper(..)
     , runGobStopper
     ) where
@@ -107,7 +108,7 @@ getPartitions _ = (undefined,undefined)
 phaseUpdateB0 :: (Monad m) => B0 m (S p x) (S p x)
 phaseUpdateB0 = B0_mkLnk id mkLnPhase
 
-mkLnPhase :: (Monad m) => LCaps m (S p x) -> Lnk m (S p x) -> m (Lnk m (S p x))
+mkLnPhase :: (Monad m) => LCapsM m (S p x) -> LnkM m (S p x) -> m (LnkM m (S p x))
 mkLnPhase (LnkSig (LCX lc)) (LnkSig lu) =
     let cc = lc_cc lc in    
     cc_getSched cc >>= \ pd ->
@@ -122,7 +123,7 @@ data UpdateRecord a
     | FullUpdate !StableT !T !(Sig a)
 
 mkLuPhase :: (Monad m) => Ref m (UpdateRecord a) 
-          -> Sched m -> LnkUp m a -> LnkUp m a
+          -> Sched m -> LnkUpM m a -> LnkUpM m a
 mkLuPhase rf pd lu = LnkUp touch update idle cycle where
     touch = return () -- touch happens on received update
     cycle _ = return () -- no cycles can cross partitions
@@ -186,7 +187,7 @@ sendB0 cw p1 p2 = B0_mkLnk lcSend lnSend where
         let lu' = luSend rfT obSend lu in
         return (LnkSig lu')
 
-luSend :: IORef StableT -> OBSend -> LnkUp IO x -> LnkUp IO x
+luSend :: IORef StableT -> OBSend -> LnkUp x -> LnkUp x
 luSend rfT obSend lu = LnkUp touch update idle cycle where
     touch = return () -- touches stop at partition boundary
     cycle _ = return () -- cycles are partition-local

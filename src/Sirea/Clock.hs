@@ -41,6 +41,7 @@ import Sirea.Time
 import Sirea.UnsafeLink
 import Sirea.Behavior
 import Sirea.Signal
+import Sirea.Partition (Partition)
 
 -- | ClockSpec specifies when a clock ticks and tocks.
 --
@@ -74,20 +75,16 @@ data ClockSpec = ClockSpec
     , clock_offset :: !DT
     } deriving (Show,Eq)
 
--- | Observe a logical clock of a given ClockSpec. 
+-- | Observe a logical clock that matches a given ClockSpec. 
 bclock :: (Partition p) => ClockSpec -> B (S p ()) (S p T)
-bclock cs =
-    assert (clockSpecValid cs) $ 
-    unsafeLinkB clockLnk
-    where clockLnk _ = return . buildFn
-          buildFn LnkDead = LnkDead
-          buildFn (LnkSig lu) = LnkSig (clockFn cs lu)
+bclock cs = assert (clockSpecValid cs) $ 
+    unsafeLinkBL (const (return . clockFn cs))
 
-clockFn :: ClockSpec -> LnkUp T -> LnkUp ()
-clockFn cs lu = LnkUp touch update idle cycle where
+clockFn :: ClockSpec -> LnkUpM m T -> LnkUpM m ()
+clockFn cs lu = LnkUp touch update idle cyc where
     touch = ln_touch lu
-    idle  = ln_idle lu
-    cycle = ln_cycle lu
+    idle = ln_idle lu
+    cyc = ln_cycle lu
     update tS tU su =
         let sClock = clockSig cs tU in
         let su' = s_mask sClock su in
@@ -149,19 +146,19 @@ timeAfterTime cs t0 = t0 `seq` (t1:timeAfterTime cs t1)
 -- Note that high frequencies will become a space and CPU burden.
 -- The practical period for a clock really ranges from a few minutes
 -- down to a millisecond or so.   
-bclockOfFreq :: Rational -> B (S p ()) (S p T)
+bclockOfFreq :: (Partition p) => Rational -> B (S p ()) (S p T)
 bclockOfFreq = bclock . freqToClockSpec
 
 -- | Frequency is updates per second, and phase how far into each
 -- period we perform the update. E.g. if frequency was 2 and phase
 -- is 0.5, then we update twice per second at 0.25 and 0.75. 
 -- Phase must be bounded by [0.0,1.0). 
-bclockOfFreqAndPhase :: Rational -> Rational -> B (S p ()) (S p T)
+bclockOfFreqAndPhase :: (Partition p) => Rational -> Rational -> B (S p ()) (S p T)
 bclockOfFreqAndPhase dFreq dPhase = bclock $ freqAndPhaseToClockSpec dFreq dPhase
 
 -- | A few common low-frequency clocks. These each report the full time, 
 -- but do so at a very slow rate (relative to processor speeds).
-bclockHours, bclockMinutes, bclockSeconds :: B (S p ()) (S p T)
+bclockHours, bclockMinutes, bclockSeconds :: (Partition p) => B (S p ()) (S p T)
 bclockHours   = bclock csHours 
 bclockMinutes = bclock csMinutes
 bclockSeconds = bclock csSeconds

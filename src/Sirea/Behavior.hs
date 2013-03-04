@@ -25,7 +25,7 @@ module Sirea.Behavior
     , bIfThenElse, bUnless, bWhen -- utility
     , BZip(..), bzip, bzipWith, bunzip
     , BSplit(..), bsplitWith, bsplitOn, bunsplit, bsplitMaybe, bsplitBool
-    , BTemporal(..), BPeek(..)
+    , BTemporal(..)
     , BDynamic(..), beval, bexec, bbevalx, bbeval, bbexec
     , Behavior
     ) where
@@ -49,7 +49,7 @@ class ( Category b
       , BProd b, BZip b
       , BSum b, BSplit b
       , BDisjoin b
-      , BTemporal b, BPeek b
+      , BTemporal b
       ) => Behavior b
 
 -- | bfwd is just another name for Control.Category.id.
@@ -305,13 +305,10 @@ bvoid f = bdup >>> bfirst f >>> bsnd
 -- Various Laws or Properties: 
 --
 -- Factor Left: bleft f >>> bleft g = bleft (f >>> g)
--- Decision Commutativity: bleft f >>> bright g = bright g >>> bleft f
+-- Choice Commutativity: bleft f >>> bright g = bright g >>> bleft f
 --     Lemma: (f +++ g) >>> (f' +++ g') = (f >>> f') +++ (g >>> g')
--- Decision Idempotence (*): bsynch >>> (f +++ f) >>> bmerge
---                         = bsynch >>> bmerge >>> f
---     (*): bmerge must implicitly synch in haskell. The law ideally
---          would be : (f +++ f) >>> bmerge = bmerge >>> f
---          (This would require tracking time in signal types.)
+-- Merge Equivalence (*): (f +++ f) >>> bmerge = bmerge >>> f
+--     (*): assuming synchronized signals
 -- Dead Source Elim (Left):  binl >>> bright g = binl
 -- Dead Source Elim (Right): binr >>> bleft f  = binr
 -- Associative Identity (Sum, Left): bassocls >>> bassocrs = id
@@ -555,6 +552,8 @@ class (Category b) => BTemporal b where
     -- simultaneous actions with products. Idempotent.
     bsynch :: b x x
 
+{- NOTE: Decided to auto-choke at demand monitors and other cyclic
+   resources, such that explicit choke is unnecessary.
     -- | When interacting with resources, especially in combination
     -- with bdelay, one can model 'temporal recursive' behaviors in
     -- RDP, e.g. `monitor >>> bfmap fn >>> bdelay 0.1 >>> demand` 
@@ -572,39 +571,7 @@ class (Category b) => BTemporal b where
     -- annotation but is essential for cyclic applications. Sirea
     -- does not include any automatic chokes at this time.
     bfchoke :: b x x
-
-
--- | BPeek - anticipate a signal by studying its projected future.
--- RDP does not provide any support for prediction, but any future
--- for a signal will propagate through an RDP system. Modules can
--- benefit from predictions by components they don't know about.
--- This makes it easy to chain prediction systems together, or feed
--- plans right back into the predictions. 
---
--- BPeek can also serve as a state alternative if you need diffs or
--- a small history window. With peek you compare future vs. present
--- instead of present vs. past. And for buffered history, use delay
--- with peek to build a small buffer of valid state.
---
--- Peek places strain on a behavior's stability and efficiency. Use
--- it for small lookaheads only. For far predictions, use a proper
--- prediction model.
---
--- Due to peek, signals are observably distinct if they differ in
--- the future. Developers get abstraction and refactoring benefits
--- from idempotent expression, but network optimizations (multicast
--- and proxy cache) are hindered unless we have knowledge of how far
--- a service uses `bpeek` into signal futures.
---
-class (BTemporal b) => BPeek b where
-    -- | bpeek - anticipate a signal. The Left side is the future
-    -- signal value, while the Right side indicates the signal is
-    -- inactive in the given future. The activity of the signal 
-    -- does not change; bpeek does not cause delay.
-    --
-    -- Use of Either here (instead of Maybe) enables use of bsplit.
-    bpeek :: DT -> b (S p a) (S p (Either a ()))
-
+-}
 
 -- | Dynamic behaviors are behaviors constructed or discovered at
 -- runtime. They are useful for modeling resources, extensions,
@@ -635,9 +602,8 @@ class (BTemporal b) => BPeek b where
 -- `beval` to execute.  
 class (Behavior b, Behavior b') => BDynamic b b' where
     -- | continuously install and evaluate dynamic behaviors that
-    -- may cross partitions. The first argument supports static 
-    -- metadata about crossing and latency (it's a hack; a richer
-    -- type system should be able to avoid it).
+    -- may cross partitions. The first argument provides metadata
+    -- about crossing and latency; it's a hack.
     bevalx :: (SigInP p x, SigInP p' y) => b' (S p ()) (S p' ())
            -> b (S p (b' x y) :&: x) (y :|: S p ())
 

@@ -119,9 +119,8 @@ buildSireaApp app =
     writeIORef (tc_init tc0) True >>
     getPSched cp0 >>= \ pd ->
     -- compute behavior in the new context
-    -- add a phase delay for consistency with bcross updates
-    let bcx = wrapB phaseDelayB >>> app in
-    let b   = unwrapB bcx cw in
+    -- adds phase delay to model activation from abstract partition
+    let b   = phaseUpdateB0 >>> unwrapB app cw in
     let cc0 = CC { cc_getSched = return pd, cc_newRef = newRefIO } in
     let lc0 = LC { lc_dtCurr = 0, lc_dtGoal = 0, lc_cc = cc0 } in
     let lcaps = LnkSig (LCX lc0) in
@@ -299,8 +298,7 @@ basicSireaAppLoop rfContinue stepper =
 -- which could then perform this exit.
 --
 bUnsafeExit :: B (S P0 ()) (S P0 ())
-bUnsafeExit = unsafeOnUpdateBCX $ \ cw -> 
-    getPCX0 cw >>= \ cp0 ->
+bUnsafeExit = unsafeOnUpdateB $ \ cp0 -> 
     inExitR <$> findInPCX cp0 >>= \ rfKilled ->
     let kill = readIORef rfKilled >>= \ bBlooded ->
                unless bBlooded $ void $ 

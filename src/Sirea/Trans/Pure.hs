@@ -66,9 +66,6 @@ instance (BSplit b) => BSplit (PureB b) where
 instance (BTemporal b) => BTemporal (PureB b) where
     bdelay  = liftPure . bdelay
     bsynch  = liftPure bsynch
-    bfchoke = liftPure bfchoke
-instance (BPeek b) => BPeek (PureB b) where
-    bpeek   = liftPure . bpeek
 instance (Behavior b) => Behavior (PureB b)
 
 instance (BDynamic b b') => BDynamic b (PureB b') where

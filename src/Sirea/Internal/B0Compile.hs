@@ -20,15 +20,15 @@ import Control.Category
 -- INPUTS:
 --   B0 m x y    - behavior to compile
 --   LCaps m x   - tracks time, common capabilities
---   Lnk m y     - where the output signal goes
+--   LnkM m y     - where the output signal goes
 -- OUTPUTS:
 --   LCaps m y   - timings of outputs
---   m (Lnk m x) - constructor for input signal
+--   m (LnkM m x) - constructor for input signal
 --
 -- Note: there is no integration with the Stepper at this point. Any
 -- behaviors that need staging via the Stepper should have achieved 
 -- it via MkLnk.
-compileB0 :: (Monad m) => B0 m x y -> LCaps m x -> Lnk m y -> (LCaps m y, m (Lnk m x))
+compileB0 :: (Monad m) => B0 m x y -> LCapsM m x -> LnkM m y -> (LCapsM m y, m (LnkM m x))
 compileB0 bxy lcx lny =
     assert (lc_valid lcx) $
     let (bxy', lcy) = compileB0s1 bxy lcx in
@@ -39,7 +39,7 @@ compileB0 bxy lcx lny =
 -- | This is an initial left-to-right compile within a behavior. It
 -- computes the timing properties of the resulting signal, applies 
 -- time-dependent transforms (B0_latent).
-compileB0s1 :: (Monad m) => B0 m x z -> LCaps m x -> (B0s1 m x z, LCaps m z)
+compileB0s1 :: (Monad m) => B0 m x z -> LCapsM m x -> (B0s1 m x z, LCapsM m z)
 compileB0s1 (B0_pipe bxy byz) lcx =
     let (bxy', lcy) = compileB0s1 bxy lcx in
     assert (lc_valid lcy) $
@@ -68,7 +68,7 @@ compileB0s1 (B0_mkLnk fn mkLnk) lcx =
 -- | B0s1 is basically B0 after the first stage compile. The LCaps
 -- are applied and processed already, so only Lnk is left. 
 data B0s1 m x y where
-  B0s1_mkLnk :: (Lnk m y -> m (Lnk m x)) -> B0s1 m x y
+  B0s1_mkLnk :: (LnkM m y -> m (LnkM m x)) -> B0s1 m x y
   B0s1_pipe  :: B0s1 m x y -> B0s1 m y z -> B0s1 m x z
   B0s1_first :: B0s1 m x x' -> B0s1 m (x :&: y) (x' :&: y)
   B0s1_left  :: B0s1 m x x' -> B0s1 m (x :|: y) (x' :|: y)
@@ -78,7 +78,7 @@ instance (Monad m) => Category (B0s1 m) where
     (.) = flip B0s1_pipe
 
 -- | This is the right-to-left pass to build the behavior.
-compileB0s2 :: (Monad m) => B0s1 m x z -> Lnk m z -> m (Lnk m x)
+compileB0s2 :: (Monad m) => B0s1 m x z -> LnkM m z -> m (LnkM m x)
 compileB0s2 (B0s1_pipe bxy byz) lnz = 
     compileB0s2 byz lnz >>= compileB0s2 bxy 
 compileB0s2 (B0s1_first bef) lnz =

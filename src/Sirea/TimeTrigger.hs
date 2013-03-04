@@ -5,13 +5,13 @@
 -- precise, logical mechanism to express such queries, assuming
 -- you can provide a timestamp to test against:
 -- 
---   btimeTrigger :: B (S p T) (S p Bool)
+--   btimeTrigger :: (Partition p) => B (S p T) (S p Bool)
 --
 -- This behavior will output True when logical time is greater than
 -- or equal to the time indicated in signal. The time signal will
 -- usually come from stateful resources (timestamp, calendar, etc.).
 -- The logical time is from an implicit logical clock with infinite
--- precision (thus the HasClock constraint), though implementation
+-- precision (thus the Partition constraint), though implementation
 -- is expected to cheat for performance.
 -- 
 module Sirea.TimeTrigger
@@ -24,7 +24,7 @@ import Sirea.Time
 import Sirea.UnsafeLink
 import Sirea.Behavior
 import Sirea.Signal
-import Sirea.Clock
+import Sirea.Partition
 
 import Sirea.Internal.SigType
 import Sirea.Internal.DiscreteTimedSeq
@@ -34,8 +34,7 @@ import Sirea.Internal.DiscreteTimedSeq
 -- It is more efficient and precise than use of Sirea.Clock with 
 -- explicit comparisons.
 btimeTrigger :: (Partition p) => B (S p T) (S p Bool)
-btimeTrigger = unsafeLinkB mkLn where
-    mkLn _ = return . (ln_lumap . ln_sfmap) s_timeTrigger
+btimeTrigger = unsafeFmapB s_timeTrigger
 
 -- time trigger 0 assumes there is no pending trigger
 dsTimeTrigger0 :: DSeq (Maybe T) -> DSeq (Maybe Bool)

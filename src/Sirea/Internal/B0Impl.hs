@@ -29,7 +29,7 @@ import Sirea.Internal.STypes
 import Sirea.Internal.LTypes
 import Sirea.Internal.B0Type
 import Sirea.Internal.Tuning (dtTouch, dtFutureChoke
-                             ,dtEqShift, dtEqShiftAlign)
+                             ,dtEqShift, dtAlign)
 import Sirea.Time
 import Sirea.Signal
 
@@ -51,17 +51,17 @@ firstB0 = B0_first
 leftB0 :: B0 m x x' -> B0 m (x :|: y) (x' :|: y)
 leftB0 = B0_left
 
--- Many behaviors are pure and atemporal, no need for LCaps or monad
+-- Many behaviors are pure and atemporal, no need for LCapsM or monad
 mkLnkPure :: (Monad m) 
-          => (LCaps m x -> LCaps m y) 
-          -> (Lnk m y -> Lnk m x) 
+          => (LCapsM m x -> LCapsM m y) 
+          -> (LnkM m y -> LnkM m x) 
           -> B0 m x y
 mkLnkPure lcf lnf = B0_mkLnk lcf (const (return . lnf))
 
--- Some behaviors make use of LCaps.
+-- Some behaviors make use of LCapsM.
 mkLnkB0 :: (Monad m)
-        => (LCaps m x -> LCaps m y) 
-        -> (LCaps m x -> Lnk m y -> m (Lnk m x)) 
+        => (LCapsM m x -> LCapsM m y) 
+        -> (LCapsM m x -> LnkM m y -> m (LnkM m x)) 
         -> B0 m x y
 mkLnkB0 = B0_mkLnk
 
@@ -80,7 +80,7 @@ s1iB0 = mkLnkPure lcTriv lnTriv where
         let lnx = ln_snd ln in
         assert (ln_dead lnS1) lnx
 
-lcS1 :: (Monad m) => LCaps m S1
+lcS1 :: (Monad m) => LCapsM m S1
 lcS1 = LnkSig (LCX lc) where
     lc = LC { lc_dtCurr = 0, lc_dtGoal = 0, lc_cc = cc }
     cc = CC { cc_newRef = noMem, cc_getSched = noSched }
@@ -98,7 +98,7 @@ trivialB0 = mkLnkPure lcTriv lnTriv where
     lcTriv lcx = if (ln_dead lcx) then LnkDead else lcS1
     lnTriv lnS1 = assert (ln_dead lnS1) LnkDead 
 
--- simple swap on Lnk sinks
+-- simple swap on LnkM sinks
 swapB0 :: (Monad m) => B0 m (x :&: y) (y :&: x)
 swapB0 = mkLnkPure lcSwap lnSwap where
     lcSwap xy = LnkProd (ln_snd xy) (ln_fst xy)
@@ -126,7 +126,7 @@ dupB0 = mkLnkPure lcDup lnDup where
 
 -- deep duplicate signal updates, except for dead output.
 -- (The idea here is to only duplicate the signals that are used.)
-lnDeepDup :: (Monad m) => Lnk m x -> Lnk m x -> Lnk m x
+lnDeepDup :: (Monad m) => LnkM m x -> LnkM m x -> LnkM m x
 lnDeepDup x LnkDead = x -- no dup
 lnDeepDup LnkDead y = y -- no dup
 lnDeepDup (LnkProd x1 y1) xy2 =
@@ -193,7 +193,7 @@ synchForMergeB0 = tshiftB0 synchDTs where
 -- synchWith will synch elements pairwise (needed for merge).
 -- The other requirement here is to respect liveness, which
 -- might differ due to inner (:|:) types. 
-synchWith :: LCaps m x -> LCaps m x -> (LCaps m x, LCaps m x)
+synchWith :: LCapsM m x -> LCapsM m x -> (LCapsM m x, LCapsM m x)
 synchWith l LnkDead = (l,LnkDead)
 synchWith LnkDead r = (LnkDead,r)
 synchWith (LnkSig (LCX lc)) (LnkSig (LCX rc)) =
@@ -220,7 +220,7 @@ mergeSigsB0 = mkLnkB0 lcMerge lnMerge where
         return (LnkSum lnl lnr)
 
 -- merge caps is pretty trivial; it favors the caps from the LHS.
-mergeCaps :: LCaps m x -> LCaps m x -> LCaps m x
+mergeCaps :: LCapsM m x -> LCapsM m x -> LCapsM m x
 mergeCaps LnkDead r = r
 mergeCaps l LnkDead = l
 mergeCaps l@(LnkSig _) _ = l
@@ -234,7 +234,7 @@ mergeCaps (LnkSum lx ly) r =
     LnkSum x y
 
 -- structured merge. Matching on first cap, after quick liveness test.
-mergeLnks :: (Monad m) => LCaps m x -> LCaps m x -> Lnk m x -> m (Lnk m x, Lnk m x)
+mergeLnks :: (Monad m) => LCapsM m x -> LCapsM m x -> LnkM m x -> m (LnkM m x, LnkM m x)
 mergeLnks _ _ LnkDead = return (LnkDead, LnkDead)
 mergeLnks _ LnkDead x = return (x, LnkDead)
 mergeLnks LnkDead _ x = return (LnkDead, x)
@@ -287,7 +287,7 @@ synchForDisjoinB0 = tshiftB0 disjSynch where
 -- fullSynch will ensure that all caps are synched logically, and
 -- will also set them to be synched physically if their ldt_curr
 -- values are not uniform.
-fullSynch :: LCaps m x -> LCaps m x
+fullSynch :: LCapsM m x -> LCapsM m x
 fullSynch lcx = lc_map update lcx where
     dt = lc_maxGoal lcx
     bCurrSynch = lc_minCurr lcx == lc_maxCurr lcx
@@ -304,8 +304,8 @@ disjSigsB0 :: (Monad m, SigInP p x)
 disjSigsB0 = mkLnkB0 disjCaps buildDisj
 
 
-disjCaps :: LCaps m (x :&: ((S p () :&: y) :|: z))
-         -> LCaps m ((x :&: y) :|: (x :&: z))
+disjCaps :: LCapsM m (x :&: ((S p () :&: y) :|: z))
+         -> LCapsM m ((x :&: y) :|: (x :&: z))
 disjCaps xuyz =
     let x = ln_fst xuyz in
     let y = (ln_snd >>> ln_left >>> ln_snd) xuyz in
@@ -316,9 +316,9 @@ disjCaps xuyz =
     
 -- build disjoin behavior, using some input to decide left/right path.
 buildDisj :: (Monad m)
-          => LCaps m (x :&: ((S p () :&: y) :|: z))
-          -> Lnk m ((x :&: y) :|: (x :&: z))
-          -> m (Lnk m (x :&: ((S p () :&: y) :|: z)))
+          => LCapsM m (x :&: ((S p () :&: y) :|: z))
+          -> LnkM m ((x :&: y) :|: (x :&: z))
+          -> m (LnkM m (x :&: ((S p () :&: y) :|: z)))
 buildDisj lc ln = disj where
     lcu  = (ln_snd >>> ln_left >>> ln_fst) lc
     lcz  = (ln_snd >>> ln_right) lc
@@ -350,7 +350,7 @@ buildDisj lc ln = disj where
         (lc_minCurr ux == lc_maxCurr ux) &&
         (lc_minGoal ux == lc_maxGoal ux)
         
-mkDisjFull :: (Monad m) => CC m -> Lnk m x -> Lnk m x -> m (Lnk m x, Lnk m (S p ()))
+mkDisjFull :: (Monad m) => CC m -> LnkM m x -> LnkM m x -> m (LnkM m x, LnkM m (S p ()))
 mkDisjFull _ LnkDead LnkDead = return (LnkDead, LnkDead)
 mkDisjFull cc l@(LnkSig _) r = mkDisjSigs cc l r
 mkDisjFull cc l r@(LnkSig _) = mkDisjSigs cc l r
@@ -361,8 +361,8 @@ mkDisjFull cc l r@(LnkSum _ _) = mkDisjSum cc l r
 
 -- LnkDead may occur because we don't need the signal upstream. But
 -- the remaining signal must still be asked properly. 
-mkDisjSigs :: (Monad m) => CC m -> Lnk m (S p' x) -> Lnk m (S p' x) 
-           -> m (Lnk m (S p' x), Lnk m (S p ()))
+mkDisjSigs :: (Monad m) => CC m -> LnkM m (S p' x) -> LnkM m (S p' x) 
+           -> m (LnkM m (S p' x), LnkM m (S p ()))
 mkDisjSigs cc l r =
     let lu = ln_lnkup l in
     let ru = ln_lnkup r in
@@ -375,15 +375,15 @@ mkDisjSigs cc l r =
     ln_withSigM cc onTouch onEmit onCycle >>= \ (x,u) ->
     return (LnkSig x, LnkSig u)            
     
-mkDisjProd :: (Monad m) => CC m -> Lnk m (x :&: y) -> Lnk m (x :&: y) 
-           -> m (Lnk m (x :&: y), Lnk m (S p ()))
+mkDisjProd :: (Monad m) => CC m -> LnkM m (x :&: y) -> LnkM m (x :&: y) 
+           -> m (LnkM m (x :&: y), LnkM m (S p ()))
 mkDisjProd cc l r =
     mkDisjFull cc (ln_fst l) (ln_fst r) >>= \ (x,ux) ->
     mkDisjFull cc (ln_snd l) (ln_snd r) >>= \ (y,uy) ->
     return (LnkProd x y, lnDeepDup ux uy)
 
-mkDisjSum :: (Monad m) => CC m -> Lnk m (x :|: y) -> Lnk m (x :|: y) 
-          -> m (Lnk m (x :|: y), Lnk m (S p ()))
+mkDisjSum :: (Monad m) => CC m -> LnkM m (x :|: y) -> LnkM m (x :|: y) 
+          -> m (LnkM m (x :|: y), LnkM m (S p ()))
 mkDisjSum cc l r =
     mkDisjFull cc (ln_left l) (ln_left r) >>= \ (x,ux) ->
     mkDisjFull cc (ln_right l) (ln_right r) >>= \ (y,uy) ->
@@ -417,7 +417,7 @@ unsafeSigZipB0 fn = mkLnkB0 (lc_fwd . ln_fst) mkZip where
 -- intermediate state is needed to perform zip, zap, etc.
 -- since updates on fst and snd might occur at different times.
 buildZip :: (Monad m) => (Sig a -> Sig b -> Sig c) 
-         -> CC m -> Lnk m (S p c) -> m (Lnk m (S p a :&: S p b))
+         -> CC m -> LnkM m (S p c) -> m (LnkM m (S p a :&: S p b))
 buildZip _ _ LnkDead = return LnkDead
 buildZip fnZip cc (LnkSig lu) = 
     let onTouch = ln_touch lu in
@@ -488,7 +488,7 @@ constB0 = mkLnkPure lc_fwd . lnConst where
 touchB0 :: (Monad m) => B0 m (S p x) (S p x)
 touchB0 = mkLnkB0 id mkLnTouch 
 
-mkLnTouch :: (Monad m) => LCaps m (S p x) -> Lnk m (S p x) -> m (Lnk m (S p x))
+mkLnTouch :: (Monad m) => LCapsM m (S p x) -> LnkM m (S p x) -> m (LnkM m (S p x))
 mkLnTouch (LnkSig (LCX lc)) (LnkSig lu) =
     cc_newRef (lc_cc lc) s_never >>= \ rf ->
     return (LnkSig (luTouch rf lu))
@@ -496,7 +496,7 @@ mkLnTouch _ _ = return LnkDead
 
 -- sequence signal spine up to stability (modified by dt). This will
 -- work for all updates except the last (where stability is DoneT).
-luTouch :: (Monad m) => Ref m (Sig x) -> LnkUp m x -> LnkUp m x
+luTouch :: (Monad m) => Ref m (Sig x) -> LnkUpM m x -> LnkUpM m x
 luTouch rf lu = LnkUp touch update idle cycle where
     touch = ln_touch lu
     cycle = ln_cycle lu
@@ -537,12 +537,12 @@ adjeqfB0 = mkLnkPure id lnAdjeqf where
 
 -- | tshiftB is useful for declarative delays. Changes in lc_dtCurr
 -- result in actual signal delays to match the new specified latency.
-tshiftB0 :: (Monad m) => (LCaps m x -> LCaps m x) -> B0 m x x
+tshiftB0 :: (Monad m) => (LCapsM m x -> LCapsM m x) -> B0 m x x
 tshiftB0 fn = mkLnkB0 fn lnTshift where
     lnTshift lc0 lnx = return (buildTshift lc0 (fn lc0) lnx)
 
--- buildTshift will apply delays based on before/after LCaps values
-buildTshift :: (Monad m) => LCaps m x -> LCaps m x -> Lnk m x -> Lnk m x
+-- buildTshift will apply delays based on before/after LCapsM values
+buildTshift :: (Monad m) => LCapsM m x -> LCapsM m x -> LnkM m x -> LnkM m x
 buildTshift _ _ LnkDead = LnkDead
 buildTshift t0 tf (LnkProd x y) =
     let opx = buildTshift (ln_fst t0) (ln_fst tf) x in
@@ -559,12 +559,12 @@ buildTshift t0 tf (LnkSig lu) =
     assert (dtDiff > 0) $
     LnkSig (luApplyDelay dtDiff lu)
 
-getCurr :: LCaps m (S p x) -> DT
+getCurr :: LCapsM m (S p x) -> DT
 getCurr (LnkSig (LCX lc)) = lc_dtCurr lc
 getCurr LnkDead = 0
 
 -- apply actual delay to signal
-luApplyDelay :: DT -> LnkUp m x -> LnkUp m x
+luApplyDelay :: DT -> LnkUpM m x -> LnkUpM m x
 luApplyDelay dt lu = LnkUp touch update idle cycle where
     adjtS = adjStableTime (`addTime` dt)
     touch = ln_touch lu
@@ -618,7 +618,7 @@ peekB0 dt = mkLnkB0 lc_fwd mkLnPeek where
 -- TODO: Consider adjusting lnPeek to keep only the activity info.
 -- This could improve GC and memory costs, albeit potentially with
 -- a CPU overhead. 
-lnPeek :: (Monad m) => DT -> Ref m (Sig x) -> LnkUp m (Either x ()) -> LnkUp m x
+lnPeek :: (Monad m) => DT -> Ref m (Sig x) -> LnkUpM m (Either x ()) -> LnkUpM m x
 lnPeek dt rf lu = LnkUp touch update idle cycle where
     touch = ln_touch lu
     cycle = ln_cycle lu
@@ -688,7 +688,7 @@ chokeT tNow tDeadline =
     let dtMaxDelay = tDeadline `diffTime` tNow in
     tNow `addTime` (dtMaxDelay * 0.25)
 
-mkLnChoke :: (Monad m) => LCaps m x -> Lnk m x -> m (Lnk m x)
+mkLnChoke :: (Monad m) => LCapsM m x -> LnkM m x -> m (LnkM m x)
 mkLnChoke _ LnkDead = return LnkDead
 mkLnChoke lc (LnkProd x y) = 
     mkLnChoke (ln_fst lc) x >>= \ x' ->
@@ -704,12 +704,12 @@ mkLnChoke (LnkSig (LCX lc)) (LnkSig lu) =
 mkLnChoke lc _ = assert (ln_dead lc) $ return LnkDead
 
 -- | In case I want to choke an external resource using same code.
-wrapLnChoke :: LnkUp IO z -> IO (LnkUp IO z)
+wrapLnChoke :: LnkUp z -> IO (LnkUp z)
 wrapLnChoke lu =
     newRefIO Nothing >>= \ rf ->
     return (luChoke rf lu)
 
-luChoke :: (Monad m) => Ref m (Maybe (CK z)) -> LnkUp m z -> LnkUp m z
+luChoke :: (Monad m) => Ref m (Maybe (CK z)) -> LnkUpM m z -> LnkUpM m z
 luChoke rf lu = LnkUp touch update idle cycle where
     cycle = ln_cycle lu
     touch = ln_touch lu
@@ -764,13 +764,13 @@ unsafeEqShiftB0 eq = mkLnkB0 id mkln where
 
 -- | wrapLnEqShift enables IO resources to access the same logic as
 -- the eqShiftB0 behavior.
-wrapLnEqShift :: (a -> a -> Bool) -> LnkUp IO a -> IO (LnkUp IO a)
+wrapLnEqShift :: (a -> a -> Bool) -> LnkUp a -> IO (LnkUp a)
 wrapLnEqShift eq lu =
     newRefIO s_never >>= \ rf ->
     return (luEqShift eq rf lu)
 
 luEqShift :: (Monad m) => (a -> a -> Bool) -> Ref m (Sig a) 
-         -> LnkUp m a -> LnkUp m a
+         -> LnkUpM m a -> LnkUpM m a
 luEqShift eq rf lu = LnkUp touch update idle cycle where
     touch = ln_touch lu
     cycle = ln_cycle lu
@@ -808,7 +808,7 @@ firstDiffT eq as bs tLower tUpper =
     let cutL = L.dropWhile sampleActive sigEqList in
     case cutL of
         (x:_) -> Just $! fst x -- found a difference
-        [] -> let tAlign = tUpper `addTime` dtEqShiftAlign in
+        [] -> let tAlign = tUpper `addTime` dtAlign in
               let (x,xs) = s_sample_d sigEq tUpper tAlign in
               case x of
                 Just (tU,_) -> Just tU -- align with an update
