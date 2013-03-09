@@ -10,14 +10,14 @@ module Sirea.Internal.B0Impl
     , s0iB0, s0eB0, vacuousB0, leftB0, mirrorB0, assoclsB0, mergeB0, splitB0 -- BSum
     , disjoinB0
     , fmapB0, constB0, touchB0, stratB0, adjeqfB0 -- BFmap
-    , tshiftB0, delayB0, synchB0, forceDelayB0, peekB0, fchokeB0 -- temporal
+    , tshiftB0, delayB0, synchB0, forceDelayB0 -- temporal
 
     -- miscellaneous
     , mkLnkPure, mkLnkB0
     , luApplyDelay
     , unsafeSigZipB0
     , unsafeEqShiftB0
-    , wrapLnEqShift, wrapLnChoke
+    , wrapLnEqShift
     , unsafeFullMapB0
     , undeadB0
     , keepAliveB0
@@ -28,8 +28,7 @@ import Prelude hiding (id,(.),cycle)
 import Sirea.Internal.STypes
 import Sirea.Internal.LTypes
 import Sirea.Internal.B0Type
-import Sirea.Internal.Tuning (dtTouch, dtFutureChoke
-                             ,dtEqShift, dtAlign)
+import Sirea.Internal.Tuning (dtTouch, dtEqShift, dtAlign)
 import Sirea.Time
 import Sirea.Signal
 
@@ -495,7 +494,7 @@ mkLnTouch (LnkSig (LCX lc)) (LnkSig lu) =
 mkLnTouch _ _ = return LnkDead
 
 -- sequence signal spine up to stability (modified by dt). This will
--- work for all updates except the last (where stability is DoneT).
+-- work for all updates except the last.
 luTouch :: (Monad m) => Ref m (Sig x) -> LnkUpM m x -> LnkUpM m x
 luTouch rf lu = LnkUp touch update idle cycle where
     touch = ln_touch lu
@@ -507,7 +506,6 @@ luTouch rf lu = LnkUp touch update idle cycle where
         writeRef rf sf >>
         process tS >>
         ln_update lu tS tU su
-    process DoneT = writeRef rf s_never
     process (StableT tStable) =
         let tTgt = tStable `addTime` dtTouch in
         readRef rf >>= \ s0 ->
@@ -566,7 +564,7 @@ getCurr LnkDead = 0
 -- apply actual delay to signal
 luApplyDelay :: DT -> LnkUpM m x -> LnkUpM m x
 luApplyDelay dt lu = LnkUp touch update idle cycle where
-    adjtS = adjStableTime (`addTime` dt)
+    adjtS = adjStableT (`addTime` dt)
     touch = ln_touch lu
     cycle = ln_cycle lu
     idle = ln_idle lu . adjtS
@@ -601,6 +599,7 @@ forceDelayB0 :: (Monad m) => B0 m x x
 forceDelayB0 = tshiftB0 (lc_map toGoal)
     where toGoal lc = lc { lc_dtCurr = (lc_dtGoal lc) }
 
+{-
 -- | look ahead in a signal slightly. Reduces stability of signal,
 -- i.e. updates at time T can affect peek signal at time T-dt.
 peekB0 :: (Monad m) => DT -> B0 m (S p x) (S p (Either x ()))
@@ -622,7 +621,7 @@ lnPeek :: (Monad m) => DT -> Ref m (Sig x) -> LnkUpM m (Either x ()) -> LnkUpM m
 lnPeek dt rf lu = LnkUp touch update idle cycle where
     touch = ln_touch lu
     cycle = ln_cycle lu
-    adjTS = adjStableTime (`subtractTime` dt)
+    adjTS = adjStableT (`subtractTime` dt)
     idle tS0 =
         let tS = adjTS tS0 in
         readRef rf >>= \ s0 ->
@@ -638,10 +637,11 @@ lnPeek dt rf lu = LnkUp touch update idle cycle where
         let tU = tU0 `subtractTime` dt in
         let sPk = s_peek dt (s_trim s' tU) in
         ln_update lu tS tU sPk
+
+-}
         
 -- GC a signal based on stability
 gcSig :: StableT -> Sig x -> Sig x
-gcSig DoneT _ = s_never
 gcSig (StableT tS) s = s_trim s tS
 
 -- | keepAliveB will keep the first element alive so long as other
@@ -661,93 +661,6 @@ undeadB0 = mkLnkPure id (LnkSig . ln_lnkup)
 
 
 
--- choke data
-data CK z = CK 
-    { ck_sendby :: {-# UNPACK #-} !T
-    , _ck_tmup   :: {-# UNPACK #-} !T
-    , _ck_signal :: !(Sig z)
-    }
-
--- | choke a signal so updates won't run too far ahead of stability.
--- This is modeled by translating some updates into idles until the
--- stability catches up. Rather than an absolute choke, this uses a
--- backoff algorithm: update rate will diminish with the distance to
--- the next update (past a given dt cutoff).
-fchokeB0 :: (Monad m) => B0 m x x
-fchokeB0 = mkLnkB0 id mkLnChoke
-
--- chokeT is a heuristic decision for when to deliver an update
--- relative to a future deadline. If this time is a growing function
--- of the difference, then cycles of any size can stabilize. For now
--- I'll just use a fraction of the difference.
---
--- The deadline itself is already offset from the 
-chokeT :: T -> T -> T
-chokeT tNow tDeadline =
-    assert (tDeadline > tNow) $ -- deadline in future
-    let dtMaxDelay = tDeadline `diffTime` tNow in
-    tNow `addTime` (dtMaxDelay * 0.25)
-
-mkLnChoke :: (Monad m) => LCapsM m x -> LnkM m x -> m (LnkM m x)
-mkLnChoke _ LnkDead = return LnkDead
-mkLnChoke lc (LnkProd x y) = 
-    mkLnChoke (ln_fst lc) x >>= \ x' ->
-    mkLnChoke (ln_snd lc) y >>= \ y' ->
-    return (LnkProd x' y')
-mkLnChoke lc (LnkSum x y) =
-    mkLnChoke (ln_left lc) x >>= \ x' ->
-    mkLnChoke (ln_right lc) y >>= \ y' ->
-    return (LnkSum x' y')
-mkLnChoke (LnkSig (LCX lc)) (LnkSig lu) =
-    cc_newRef (lc_cc lc) Nothing >>= \ rf ->
-    return (LnkSig (luChoke rf lu))
-mkLnChoke lc _ = assert (ln_dead lc) $ return LnkDead
-
--- | In case I want to choke an external resource using same code.
-wrapLnChoke :: LnkUp z -> IO (LnkUp z)
-wrapLnChoke lu =
-    newRefIO Nothing >>= \ rf ->
-    return (luChoke rf lu)
-
-luChoke :: (Monad m) => Ref m (Maybe (CK z)) -> LnkUpM m z -> LnkUpM m z
-luChoke rf lu = LnkUp touch update idle cycle where
-    cycle = ln_cycle lu
-    touch = ln_touch lu
-    idle tS =
-        readRef rf >>= \ mbck ->
-        case mbck of
-            Nothing -> ln_idle lu tS
-            Just (CK tDeliver tU0 s0) ->
-                let bDeliver = maybeStableT True (>= tDeliver) tS in
-                if bDeliver
-                    then writeRef rf Nothing >>
-                         ln_update lu tS tU0 s0
-                    else ln_idle lu tS
-    update tS@DoneT tU su = 
-        readRef rf >>= \ mbck ->
-        deliverCK mbck tS tU su
-    update tS@(StableT tNow) tU su =
-        readRef rf >>= \ mbck ->
-        let tCut = tU `subtractTime` dtFutureChoke in
-        let tSendBy = maybe tCut (min tCut . ck_sendby) mbck in
-        if (tNow >= tSendBy)
-            then deliverCK mbck tS tU su
-            else let ck' = delayCK mbck (chokeT tNow tCut) tU su in
-                 writeRef' rf (Just $! ck') >>
-                 ln_idle lu tS
-    deliverCK mbck tS tU su = 
-        writeRef rf Nothing >>
-        case mbck of
-            Nothing -> ln_update lu tS tU su
-            Just (CK _ tU0 s0) ->
-                if (tU > tU0)
-                    then ln_update lu tS tU0 (s_switch' s0 tU su)
-                    else ln_update lu tS tU su
-    delayCK Nothing tChoke tU su = CK tChoke tU su
-    delayCK (Just (CK tChoke0 tU0 s0)) tChoke tU su =
-        let tChoke' = min tChoke0 tChoke in
-        if (tU > tU0) then CK tChoke' tU0 (s_switch' s0 tU su)
-                      else CK tChoke' tU su
 
 -- | eqshiftB0 tries to push updates a bit into the future if they
 -- would otherwise be redundant, with a given limit for how far into
@@ -778,7 +691,7 @@ luEqShift eq rf lu = LnkUp touch update idle cycle where
         modifyRef' rf (gcSig tS) >>
         ln_idle lu tS
     update tS tU su =
-        let tSeek = (fromStableT tU tS) `addTime` dtEqShift in
+        let tSeek = inStableT tS `addTime` dtEqShift in
         readRef rf >>= \ s0 -> -- old signal for comparison
         let mbDiffT = firstDiffT eq s0 su tU tSeek in
         case mbDiffT of

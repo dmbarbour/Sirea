@@ -9,7 +9,6 @@ module Sirea.Internal.Tuning
     , dtCompile
     , batchesInFlight    
     , dtDaggrHist, dtMdistHist
-    , dtFinalize
     , dtPrintExpire  
     , tAncient  
     ) where
@@ -49,8 +48,8 @@ dtFutureChoke = 2 * dtHeartbeat
 -- we seek for a point of ideal alignment to 'swap in' the updated
 -- signal?
 dtEqShift, dtAlign :: DT
-dtEqShift = 4 * dtHeartbeat -- comparison of values
-dtAlign = 2 * dtHeartbeat -- extra search for alignment
+dtEqShift = 5 * dtHeartbeat -- comparison of values
+dtAlign = 3 * dtHeartbeat -- extra search for alignment
 
 -- When we 'btouch', how far (relative to stability) do we cause the
 -- signal to be evaluated. Forcing evaluation is mostly useful to 
@@ -66,7 +65,7 @@ dtTouch = dtEqShift / 10
 -- potentially much more rework when signals change. I plan to make
 -- this more adaptive, eventually.
 dtCompile :: DT
-dtCompile = 3 * dtHeartbeat -- how far to anticipate dynamic behaviors
+dtCompile = 4 * dtHeartbeat -- how far to anticipate dynamic behaviors
 
 -- Communication between partitions in Sirea occurs via bcross, and
 -- uses coarse-grained batches to support snapshot consistency and
@@ -102,17 +101,6 @@ batchesInFlight = 6
 dtDaggrHist, dtMdistHist :: DT
 dtDaggrHist = dtHeartbeat -- how long to tolerate late-arriving demands
 dtMdistHist = dtHeartbeat -- how long to tolerate late-arriving observers
-
--- 
--- Some behaviors depend on stability values to know how much to 
--- compute. UnsafeOnUpdate is one example, and BDynamic has another.
--- When these behaviors reach their 'final' stability value, it can
--- be confusing to decide how much more to compute. Presumably, the
--- final value should be an inactive signal. But it might be active
--- for a few seconds before finalizing. In those cases, dtFinalize
--- is used to ensure any remaining values are processed.
-dtFinalize :: DT
-dtFinalize = dtRestart
 
 -- For console printing, currently I use a simple expiration model
 -- for old sentences. (I'd like to eventually develop a rigorous

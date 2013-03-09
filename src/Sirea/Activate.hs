@@ -226,7 +226,7 @@ maintainApp apw tS0 = beginPulse where
     beginHalt =
         let tFinal = tS0 `addTime` dtGrace in
         later (haltingApp apw tFinal) >>
-        ln_update lu DoneT tFinal s_never 
+        ln_update lu (StableT tFinal) tFinal s_never 
 
 -- After we set the main signal to inactive, we must still wait for
 -- real-time to catch up, and should run a final few heartbeats to

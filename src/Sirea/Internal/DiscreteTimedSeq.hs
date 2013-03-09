@@ -359,7 +359,7 @@ ds_adjn0 ds = DSeq $ \ tq ->
     case dstep ds tq of
         DSDone -> DSDone
         DSWait ds' -> DSWait (ds_adjn0 ds')
-        DSNext _ Nothing ds' -> dstep ds' tq
+        DSNext _ Nothing ds' -> dstep (ds_adjn0 ds') tq
         DSNext tm v ds' -> DSNext tm v (ds_adjn1 ds')
 
 -- same as ds_adjn1, but assuming prior value was Just

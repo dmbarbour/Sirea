@@ -34,7 +34,8 @@ module Sirea.Signal
  , s_merge
  , s_switch, s_switch'
  , s_is_final, s_term
- , s_delay, s_peek
+ , s_delay
+ --, s_peek
  , s_adjn, s_adjeqf
  , s_tseq
  --, s_strat
@@ -297,6 +298,7 @@ ds_delay dt ds = DSeq $ \ tq ->
         DSWait ds' -> DSWait (ds_delay dt ds')
         DSNext tm v ds' -> DSNext (addTime tm dt) v (ds_delay dt ds')
 
+{-
 
 -- | Peek is for anticipating a signal. Unlike delay, this does not
 -- change the activity of a signal; instead, it reports that the
@@ -314,6 +316,7 @@ s_peek dt s0 =
     let merged  = s_merge shifted stopped in 
     let masked  = s_mask merged stopped in
     masked
+-}
 
 -- | Erase adjacent signal values that are equal in value. You can
 -- provide the equality function that compares one value to another.

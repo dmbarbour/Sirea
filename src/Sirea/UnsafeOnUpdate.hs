@@ -17,13 +17,14 @@
 -- The Sirea.AgentResource module would help for the latter option,
 -- while message-passing is often suitable for concurrent events.
 --
--- A weakness of UnsafeOnUpdate is that it is totally unsuitable for
--- input effects. Consequences of update events are not anticipated!
--- Developers should disfavor UnsafeOnUpdate if it causes feedback
--- through other IO observations. UnsafeOnUpdate is for output only.
+-- Weaknesses of UnsafeOnUpdate:
+--   
+--   * output only, no speculation of consequences, poor feedback
+--   * driven by stability, bursty, unsuitable for real-time control
+--   * neither idempotent nor commutative, unsafe for RDP invariants
 --
 -- UnsafeOnUpdate is useful for logging, debugging, and integration
--- with some simple imperative APIs. It's convenient for hacking.
+-- with some imperative APIs. It's convenient for hacking.
 --
 module Sirea.UnsafeOnUpdate 
     ( unsafeOnUpdateB
@@ -41,7 +42,7 @@ import Sirea.Behavior
 import Sirea.B
 import Sirea.PCX
 import Sirea.Partition
-import Sirea.Internal.Tuning (dtFinalize, tAncient)
+import Sirea.Internal.Tuning (tAncient)
 
 --import Debug.Trace
 
@@ -96,32 +97,29 @@ luOnUpdate pd op rfSig rfA lu = LnkUp touch update idle cyc where
     idle tS =
         readIORef rfSig >>= \ (s0,tLo) ->
         let sCln = gcSig tS s0 in
-        let tHi = case tS of
-                DoneT -> tLo `addTime` dtFinalize
-                StableT tm -> tm
-        in
+        let tHi = inStableT tS in
         assert (tHi >= tLo) $
-        sCln `seq` tHi `seq` 
+        sCln `seq` tHi `seq`
         writeIORef rfSig (sCln,tHi) >>
         schedRunUpdates tLo tHi s0 >>
         ln_idle lu tS 
     update tS tU su =
         readIORef rfSig >>= \ (s0,tLo) ->
-        let sf = s_switch s0 tU su in
+        let sf = s_switch' s0 tU su in
         let sCln = gcSig tS sf in
-        let tHi = case tS of
-                DoneT -> (max tLo tU) `addTime` dtFinalize
-                StableT tm -> tm
-        in
+        let tHi = inStableT tS in
         assert (tHi >= tLo) $
         sCln `seq` tHi `seq` 
         writeIORef rfSig (sCln,tHi) >>
         schedRunUpdates tLo tHi sf >>
         ln_update lu tS tU su
     schedRunUpdates tLo tHi sig =
-        let xs = sigToList sig tLo tHi in
-        let xsOp = takeWhile ((< tHi) . fst) xs in
-        unless (null xsOp) (onStepEnd pd (mapM_ runOp xsOp))
+        let tLoR = tLo `subtractTime` nanosToDt 1 in
+        let lOps = takeWhile ((< tHi) . fst) $
+                   dropWhile ((< tLo) . fst) $
+                   sigToList sig tLoR tHi 
+        in
+        unless (null lOps) (onStepEnd pd (mapM_ runOp lOps))
     runOp (t,a) =
         readIORef rfA >>= \ a0 ->
         unless (a0 == a) $
@@ -130,6 +128,5 @@ luOnUpdate pd op rfSig rfA lu = LnkUp touch update idle cyc where
 
 
 gcSig :: StableT -> Sig x -> Sig x
-gcSig DoneT _ = s_never
 gcSig (StableT tm) s0 = s_trim s0 tm
 

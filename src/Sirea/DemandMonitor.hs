@@ -44,10 +44,11 @@ module Sirea.DemandMonitor
 -- collections in general.
 
 import Control.Applicative
-import Control.Exception (assert)
-import Data.Maybe (maybeToList)
+import Data.Maybe (isJust)
 import Data.Function (fix)
 import Data.Typeable
+import Data.Set (Set)
+import qualified Data.Set as S
 import Sirea.Signal
 import Sirea.Behavior
 import Sirea.B
@@ -55,93 +56,88 @@ import Sirea.UnsafeLink
 import Sirea.Partition
 import Sirea.PCX
 import Sirea.Internal.DemandMonitorData
-import Sirea.Internal.B0Impl (wrapEqFilter)
-import Sirea.Internal.Tuning (dtEqf)
 
 -- | DemandMonitor is a synonym for the (demand,monitor) facet pair 
 type DemandMonitor b p e z = (b (S p e) (S p ()), b (S p ()) (S p z))
 
 -- | Obtain a demand monitor resource, as a (demand,monitor) pair.
-demandMonitor :: (Ord e, Typeable e, Partition p) => String -> DemandMonitor B p e [e]
+--
+-- This demand monitor will return the set of active demands.
+demandMonitor :: (Ord e, Typeable e, Partition p) => String -> DemandMonitor B p e (Set e)
 demandMonitor nm = fix $ \ dm ->
     let cwToDMD cw = getPCX dm cw >>= fmap getDMD . findByNameInPCX nm in
     let d = demandFacetB $ fmap fst . cwToDMD in
     let m = monitorFacetB $ fmap snd . cwToDMD in
     (d,m)
 
--- | An activityMonitor is a simple wrapper for a demand monitor on
--- a unit signal, to change the result to a boolean. (For unit, the
--- only monitored values would be [] or [()].)
-activityMonitor :: String -> DemandMonitor B p () Bool 
-activityMonitor nm = (d,m') where
-    (d,m) = demandMonitor nm
-    m' = m >>> bfmap (not . null)
+-- | activityMonitor is a specialized demand monitor with unit type,
+-- which means it only monitors whether at least one input signal is
+-- active. This observed value is 'True' for durations where there
+-- is at least one active demand.
+activityMonitor :: (Partition p) => String -> DemandMonitor B p () Bool 
+activityMonitor nm = fix $ \ dm ->
+    let cwToAMon cw = getPCX dm cw >>= fmap getAMon . findByNameInPCX nm in
+    let d = demandFacetB $ fmap fst . cwToAMon in
+    let m = monitorFacetB $ fmap snd . cwToAMon in
+    (d,m)
 
 -- load PCX for correct partition (type system tricks)
 getPCX :: (Partition p) => DemandMonitor b p e z -> PCX W -> IO (PCX p)
 getPCX _ = findInPCX
 
-newtype DMD e = DMD { getDMD :: (DemandAggr e [e], MonitorDist [e]) } deriving (Typeable)
+newtype DMD e = DMD { getDMD :: (DemandAggr e (Set e), MonitorDist (Set e)) } 
+    deriving (Typeable)
 
 instance (Partition p, Typeable e, Ord e) => Resource p (DMD e) where
     locateResource _ cp = DMD <$> newDMD cp
 instance (Partition p, Typeable e, Ord e) => NamedResource p (DMD e)
  
 -- newDMD will return a coupled DemandAggr and MonitorDist pair.
---   
-newDMD  :: (Partition p, Ord e) => PCX p -> IO (DemandAggr e [e], MonitorDist [e])
+newDMD :: (Partition p, Ord e) => PCX p -> IO (DemandAggr e (Set e), MonitorDist (Set e))
 newDMD cp =     
-    newMonitorDist cp (s_always []) >>= \ md ->
-    wrapEqFilter dtEqf (==) (primaryMonitorLnk md) >>= \ lnMon ->
-    newDemandAggr cp lnMon dmdZip >>= \ d ->
+    getPSched cp >>= \ pd ->
+    newMonitorDist pd (s_always S.empty) >>= \ md ->
+    let lnMon = primaryMonitorLnk md in
+    newDemandAggrEqf pd lnMon setZip >>= \ d ->
     return (d,md)
 
--- Zip function for demand monitors, will provide sorted lists in
--- each instant then filter equivalent instants over time. This is
--- further combined with a state-based choke and equality filter.
-dmdZip :: (Ord e) => [Sig e] -> Sig [e]
-dmdZip = s_adjeqf (==) . sigMergeSortSet compare
+setZip :: (Ord e) => [Sig e] -> Sig (Set e)
+setZip [] = s_always S.empty
+setZip (s:[]) = s_full_map (Just . maybe S.empty S.singleton) s
+setZip ss = s_zip S.union s1 s2 where
+    (h1,h2) = splitAt (length ss `div` 2) ss
+    s1 = setZip h1
+    s2 = setZip h2
+
+-- TODO: seek more efficient zip operations. 
+
+newtype AMon = AMon { getAMon :: (DemandAggr () Bool, MonitorDist Bool) } 
+    deriving (Typeable)
+
+instance (Partition p) => Resource p AMon where
+    locateResource _ cp = AMon <$> newAMon cp
+instance (Partition p) => NamedResource p AMon
+ 
+-- newAM will return a coupled DemandAggr and MonitorDist pair.
+newAMon :: (Partition p) => PCX p -> IO (DemandAggr () Bool, MonitorDist Bool)
+newAMon cp =     
+    getPSched cp >>= \ pd ->
+    newMonitorDist pd (s_always False) >>= \ md ->
+    let lnMon = primaryMonitorLnk md in
+    newDemandAggrEqf pd lnMon amonZip >>= \ d ->
+    return (d,md)
+
+amonZip :: [Sig ()] -> Sig Bool
+amonZip = 
+    s_full_map (Just . isJust) .
+    foldr s_merge s_never 
 
 demandFacetB :: (PCX W -> IO (DemandAggr e z)) -> B (S p e) (S p ())
-demandFacetB getDA = bvoid (unsafeLinkB lnDem) >>> bconst ()
-    where lnDem cw ln = assert (ln_dead ln) $ 
-                getDA cw >>= \ da ->
-                newDemandLnk da >>= \ lu' ->
-                return (LnkSig lu')
+demandFacetB getDA = bvoid (unsafeLinkB_ lnDem) >>> bconst () where
+    lnDem cw = getDA cw >>= newDemandLnk
 
 monitorFacetB :: (PCX W -> IO (MonitorDist z)) -> B (S p ()) (S p z)
-monitorFacetB getMD = unsafeLinkB lnMon
-    where lnMon _ LnkDead = return LnkDead -- dead code elim.
-          lnMon cw (LnkSig lu) = 
-            getMD cw >>= \ md ->
-            newMonitorLnk md lu >>= \ lu' ->
-            return (LnkSig lu')
+monitorFacetB getMD = unsafeLinkBL lnMon where
+    lnMon cw lu = getMD cw >>= flip newMonitorLnk lu
 
--- merge-sort a list of signals, eliminating duplicates as we go.
--- My (unproven) intuition is that a merge-sort in this manner will
--- be able to reuse some of the computation when there are only a
--- few updates.
---
-sigMergeSortSet :: (e -> e -> Ordering) -> [Sig e] -> Sig [e]
-sigMergeSortSet _ [] = s_always []
-sigMergeSortSet _ (s:[]) = s_full_map (Just . maybeToList) s
-sigMergeSortSet cmp ss = 
-    let n = length ss in
-    let half = n `div` 2 in
-    let (ssHd,ssTl) = splitAt half ss in
-    let sigHd = sigMergeSortSet cmp ssHd in
-    let sigTl = sigMergeSortSet cmp ssTl in
-    s_zip (mergeListSet cmp) sigHd sigTl
-
--- merge two list-sets into a new list-set. A list-set is
--- already ordered and without duplicates, which simplifies
--- comparison. 
-mergeListSet :: (e -> e -> Ordering) -> [e] -> [e] -> [e]
-mergeListSet _ [] ys = ys
-mergeListSet _ xs [] = xs
-mergeListSet cmp xs@(x:xs') ys@(y:ys') =
-    case cmp x y of
-        LT -> x:(mergeListSet cmp xs' ys )
-        EQ -> x:(mergeListSet cmp xs' ys')
-        GT -> y:(mergeListSet cmp xs  ys')
 

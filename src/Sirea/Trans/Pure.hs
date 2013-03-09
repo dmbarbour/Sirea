@@ -69,7 +69,7 @@ instance (BTemporal b) => BTemporal (PureB b) where
 instance (Behavior b) => Behavior (PureB b)
 
 instance (BDynamic b b') => BDynamic b (PureB b') where
-    bevalx bdt = bfirst (bfmap unwrapPure) >>> bevalx bdt
+    bevalx bdt = bfirst (bfmap unwrapPure) >>> bevalx (unwrapPure bdt)
 instance (BDynamic b b') => BDynamic (PureB b) (PureB b') where
     bevalx = liftPure . bevalx
 

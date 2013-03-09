@@ -15,13 +15,12 @@
 -- lists as sets.
 --
 module Sirea.DemandListMonitor 
-    ( HasDemandListMonitor(..)
+    ( demandListMonitor
     ) where
 
 -- TODO: partition IO access into the partition's demand monitors (SRef-like?)
 
 import Control.Applicative
-import Control.Exception (assert)
 import Data.Function (fix)
 import Data.Typeable
 import Sirea.Signal
@@ -61,24 +60,20 @@ instance (Partition p, Typeable e) => NamedResource p (UDMD e)
 -- newDMD will return a coupled DemandAggr and MonitorDist pair.
 newUDMD :: (Partition p) => PCX p -> IO (DemandAggr e [e], MonitorDist [e])
 newUDMD cp =     
-    newMonitorDist cp (s_always []) >>= \ md ->
-    newDemandAggr cp (primaryMonitorLnk md) sigZipLists >>= \ d ->
+    getPSched cp >>= \ pd ->
+    newMonitorDist pd (s_always []) >>= \ md ->
+    let lnMon = primaryMonitorLnk md in
+    newDemandAggr pd lnMon sigZipLists >>= \ d ->
     return (d,md)
 
+
 demandFacetB :: (PCX W -> IO (DemandAggr e z)) -> B (S p e) (S p ())
-demandFacetB getDA = bvoid (unsafeLinkB lnDem) >>> bconst ()
-    where lnDem cw ln = assert (ln_dead ln) $ 
-                getDA cw >>= \ da ->
-                newDemandLnk da >>= \ lu' ->
-                return (LnkSig lu')
+demandFacetB getDA = bvoid (unsafeLinkB_ lnDem) >>> bconst () where
+    lnDem cw = getDA cw >>= newDemandLnk
 
 monitorFacetB :: (PCX W -> IO (MonitorDist z)) -> B (S p ()) (S p z)
-monitorFacetB getMD = unsafeLinkB lnMon
-    where lnMon _ LnkDead = return LnkDead -- dead code elim.
-          lnMon cw (LnkSig lu) = 
-                getMD cw >>= \ md ->
-                newMonitorLnk md lu >>= \ lu' ->
-                return (LnkSig lu')
+monitorFacetB getMD = unsafeLinkBL lnMon where
+    lnMon cw lu = getMD cw >>= flip newMonitorLnk lu
 
 sigZipLists :: [Sig e] -> Sig [e]
 sigZipLists = foldr (s_full_zip jf) (s_always [])

@@ -1,26 +1,27 @@
-{-# LANGUAGE GADTs, TypeOperators, Rank2Types #-}
+{-# LANGUAGE GADTs, TypeOperators, Rank2Types, GeneralizedNewtypeDeriving #-}
 
 -- | This module provides the concrete datatypes and organization of
 -- Sirea's implementation. Specific behavior logic is in B0Impl. 
 module Sirea.Internal.LTypes 
     ( LnkW(..)
-    , LnkUpM(..), CycleSet, LnkM, LnkUp, Lnk
+    , LnkUpM(..), StableT(..), CycleSet
+    , LnkM, LnkUp, Lnk
     , LC(..), LCX(..), LCapsM, LCaps
-    , StableT(..), isDoneT, fromStableT, maybeStableT
     , ln_left, ln_right, ln_fst, ln_snd, ln_toList, ln_toMaybe
     , ln_dead, ln_zero, ln_lnkup, ln_append
     , ln_lumap, ln_sfmap, ln_map
     , lc_anyCap, lc_dupCaps, lc_map, lc_fwd
     , lc_minGoal, lc_maxGoal, lc_minCurr, lc_maxCurr, lc_valid
-    , SigSt(..), st_zero, st_poke, st_clear, st_update, st_idle
+    , adjStableT
+    , SigSt(..), st_zero, st_poke, st_clear, st_update, st_idle, st_term
+    , leastActiveStability
     , monotonicStability, respectsStability
     , SigM(..), sm_zero
     , sm_update_l, sm_poke_l, sm_idle_l
     , sm_update_r, sm_poke_r, sm_idle_r 
     , sm_waiting, sm_stable, sm_emit, sm_cleanup
-    , ln_forEach, ln_freeze, ln_touchAll
+    , ln_forEach, ln_touchAll
     , ln_withSigM
-    , adjStableTime
     , module Sirea.Internal.CC
     ) where
 
@@ -107,6 +108,20 @@ data LnkUpM m a = LnkUp
 type LnkUp = LnkUpM IO
 type CycleSet = Set Unique
 
+-- | StableT is a promise of stability of the model, a time value 
+-- for which the past is fixed and will no longer receive updates.
+-- This value helps drive GC, choke, touch, and other background
+-- features. Stability may increase on update or idle, and must be
+-- non-decreasing. An update time must be greater than or equal to
+-- the previously reported stability. (The updated stability may be
+-- greater than the update time.)
+--
+newtype StableT = StableT { inStableT :: T }
+    deriving (Eq, Ord, Show)
+
+adjStableT :: (T -> T) -> StableT -> StableT
+adjStableT fn = StableT . fn . inStableT
+
 instance (Monad m) => Monoid (LnkUpM m a) where
     mempty  = ln_zero
     mappend = ln_append
@@ -123,48 +138,6 @@ type LCaps = LCapsM IO
 -- Thoughts: It might be worth adding some path descriptors to LC
 -- for debugging purposes, i.e. to answer: "Where am I?" Could do
 -- this from both sides.
-
-
--- | StableT describes a stability value for a signal. This is a
--- concrete time, or 'DoneT' if fully finished. DoneT means the
--- signal will not update again, except in a few special cases
--- (notably, DemandAggr) where they might indicate that no more
--- updates are known to be on their way. 
---
-data StableT = StableT {-# UNPACK #-} !T
-             | DoneT
-             deriving (Show,Eq)
-
-isDoneT :: StableT -> Bool
-isDoneT DoneT = True
-isDoneT _ = False
-
-fromStableT :: T -> StableT -> T
-fromStableT t DoneT = t
-fromStableT _ (StableT t) = t
-
-maybeStableT :: a -> (T -> a) -> StableT -> a
-maybeStableT a _ DoneT = a
-maybeStableT _ fn (StableT t) = fn t
-
--- The main reason for StableT is right here. Dealing with Maybe's
--- default Ord instance was painful.
-instance Ord StableT where
-    compare (StableT a) (StableT b) = compare a b
-    compare DoneT DoneT = EQ
-    compare DoneT _ = GT -- Done means forever
-    compare _ DoneT = LT
-    (<) (StableT a) (StableT b) = (a < b)
-    (<) DoneT _ = False
-    (<) _ _ = True
-    (>=) a b = not (a < b)
-    (>) = flip (<)
-    (<=) = flip (>=)
-
--- | manipulate stability by a small increment or decrement
-adjStableTime :: (T -> T) -> StableT -> StableT
-adjStableTime _ DoneT = DoneT
-adjStableTime fn (StableT tm) = StableT (fn tm)
 
 
 -- | ln_zero is a trivial LnkUp state, like LnkDead but opaque.
@@ -251,13 +224,6 @@ ln_forEach fn (LnkProd x y) = liftM2 mappend (ln_forEach fn x) (ln_forEach fn y)
 ln_forEach fn (LnkSum x y) = liftM2 mappend (ln_forEach fn x) (ln_forEach fn y)
 ln_forEach fn (LnkSig lu) = fn lu
 
--- | freeze the current signals on a link
-ln_freeze :: (Monad m) => LnkM m x -> m ()
-ln_freeze = ln_forEach freeze
-
-freeze :: LnkUpM m x -> m ()
-freeze lu = ln_idle lu DoneT -- idle forever...
-
 ln_touchAll :: (Monad m) => LnkM m x -> m ()
 ln_touchAll = ln_forEach ln_touch
 
@@ -326,7 +292,7 @@ lc_fwd (LnkSig (LCX lc)) = LnkSig (LCX lc)
 -- This is intended for use with SigM, primarily. 
 data SigSt a = SigSt
     { st_signal :: !(Sig a)    -- signal value
-    , st_stable :: !StableT    -- signal stability
+    , st_stable :: {-# UNPACK #-} !StableT    -- signal stability
     , st_expect :: !Bool       -- expecting an update?
     }
 
@@ -347,7 +313,7 @@ st_poke st = st { st_expect = True }
 st_clear :: StableT -> SigSt a -> SigSt a 
 st_clear tsClr st =
     assert (st_stable st >= tsClr) $
-    let s' = maybeStableT s_never (s_trim (st_signal st)) tsClr in
+    let s' = s_trim (st_signal st) (inStableT tsClr) in
     st { st_signal = s' }
 
 st_update :: StableT -> T -> Sig a -> SigSt a -> SigSt a
@@ -358,11 +324,13 @@ st_update tS tU su st =
     SigSt sf tS False
 
 st_idle :: StableT -> SigSt a -> SigSt a
-st_idle tStable st =
-    assert (monotonicStability (st_stable st) tStable) $
+st_idle tS st =
+    assert (monotonicStability (st_stable st) tS) $
     let sf = st_signal st in
-    SigSt sf tStable False
+    SigSt sf tS False
 
+st_term :: SigSt a -> Bool
+st_term st = s_term (st_signal st) (inStableT (st_stable st))
 
 -- is stability non-decreasing?
 monotonicStability :: StableT -> StableT -> Bool
@@ -370,8 +338,18 @@ monotonicStability tOld tNew = (tNew >= tOld)
 
 -- does update occur in stability order?
 respectsStability :: StableT -> T -> Bool
-respectsStability DoneT _ = False
 respectsStability (StableT tS) tU = (tU >= tS)
+
+-- least stability of a non-terminal SigSt
+leastActiveStability :: [SigSt a] -> Maybe StableT
+leastActiveStability = foldr activeStability Nothing
+
+activeStability :: SigSt a -> Maybe StableT -> Maybe StableT
+activeStability st mbt =
+    if st_term st then mbt else
+    let tS = st_stable st in
+    Just $! maybe tS (min tS) mbt
+
 
 ------------------------------------------------------------------
 -- SigM represents states for two signals, for zip, merge, and 

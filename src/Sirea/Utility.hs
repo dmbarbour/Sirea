@@ -86,6 +86,8 @@ instance Resource P0 PrintBuffer where
 bundefined :: (SigInP p y) => B (S p x) y
 bundefined = bconst () >>> undefinedB
 
+-- might be nice to put some equivalent to 'assert' here, too.
+
 -- undefinedB is only live code if there is demand on `y`.
 -- This would be unsafe without `y` being entirely in p.
 -- 
@@ -127,7 +129,6 @@ testActivity rf lu = LnkUp touch update idle cyc where
         let bInactive = all (isNothing . snd) lSigs in
         unless bInactive $
             fail "undefined behavior activated"
-    runTest _ _ _ = return ()
                 
 -- nullB0 will idle instead of update, promising inactivity to all
 -- downstream components. Since undefinedB will fail before this

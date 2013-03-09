@@ -204,8 +204,6 @@ luSend rfT obSend lu = LnkUp touch update idle cycle where
 -- stability update can be ignored, but a big one needs to be
 -- processed to support GC.
 urgentStability :: StableT -> StableT -> Bool
-urgentStability DoneT tf = assert (isDoneT tf) False
-urgentStability _ DoneT = True
 urgentStability (StableT t0) (StableT tf) =
     assert (tf >= t0) $
     (tf > (t0 `addTime` dtInsigStabilityUp))
