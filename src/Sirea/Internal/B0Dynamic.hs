@@ -35,7 +35,7 @@ import Sirea.Internal.STypes
 import Sirea.Internal.LTypes
 import Sirea.Internal.B0Impl 
 import Sirea.Internal.B0Compile
-import Sirea.Internal.Tuning (dtCompile, dtInsigStabilityUp, tAncient)
+import Sirea.Internal.Tuning (dtCompile, tAncient)
 import Sirea.Time
 import Sirea.Signal
 
@@ -220,9 +220,8 @@ lnkEvalB0 ev = LnkUp touch update idle cyc where
                     dropWhile ((< tLo) . fst) $
                     sigToList s tLoR tHi 
         in
-        let bUrgent = not (null range) || urgentStability tS0 tS in
-        let tS' = if bUrgent then tS else tS0 in
-        writeRef' (ev_data ev) (EVD sGC tS' tHi) >>
+        let bUrgent = not (null range) || (tS0 /= tS) in
+        writeRef' (ev_data ev) (EVD sGC tS tHi) >>
         when bUrgent (install tS range)
     install tS [] = -- stability update only
         onNextStep (ev_sched ev) $
@@ -242,10 +241,6 @@ lnkEvalB0 ev = LnkUp touch update idle cyc where
         let k = succ k0 in
         writeRef' (ev_keys ev) k >>
         return k
-
-urgentStability :: StableT -> StableT -> Bool
-urgentStability (StableT t0) (StableT tf) =
-    (tf > (t0 `addTime` dtInsigStabilityUp))
 
 -- build a complex dynamic behavior state that reflects the signal type
 -- (including LnkDead for cases where the input signal is dead-on-input)
@@ -463,6 +458,7 @@ deliverDyn tS tU0 s0 (lo:r@(hi:_)) =
             let tU = max tU0 (fst lo) in
             let sLo = s_trim s0 tU in
             let sHi = s_switch sLo (fst hi) s_never in
+            sLo `seq`
             ln_update lu tS tU sHi >>
             deliverDyn tS tU0 sLo r
            

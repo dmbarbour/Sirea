@@ -660,8 +660,6 @@ undeadB0 :: (Monad m) => B0 m (S p x) (S p x)
 undeadB0 = mkLnkPure id (LnkSig . ln_lnkup)
 
 
-
-
 -- | eqshiftB0 tries to push updates a bit into the future if they
 -- would otherwise be redundant, with a given limit for how far into
 -- the future we should search for the first change. The given eq

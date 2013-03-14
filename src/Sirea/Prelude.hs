@@ -16,7 +16,7 @@ module Sirea.Prelude
     ) where
 
 import Sirea.Behavior 
-import Sirea.Activate (runSireaApp, pulseSireaApp)
+import Sirea.Activate (runSireaApp)
 import Sirea.B (B)
 import Sirea.Partition (BCross(..),Partition(..), Pt, P0)
 import Sirea.BDeep

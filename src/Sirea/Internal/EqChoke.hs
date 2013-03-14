@@ -1,48 +1,23 @@
 
--- | RDP is able to model feedback cycles with shared resources. For
--- demand monitors, a cycle might be:
+-- | EqChoke is an extension of Choke. Choke ensures temporal cycles
+-- are processed robustly. EqChoke does the same, but also protects
+-- against false updates.
 --
---   monitor >>> bfmap foo >>> bdelay 0.1 >>> demand
+-- A false update occurs when a change in an upstream signal has no
+-- effect on a downstream signal, e.g. for a behavior that returns
+-- only part of its input, or a simplified view of it. False updates
+-- can have a negative impact on stability and efficiency, causing
+-- rework downstream.
 --
--- Logically, the above behavior will cycle at 10Hz. Without choke,
--- Sirea would compute it as fast as possible, perhaps at 10kHz, and
--- thus be 9990 cycles ahead by the time one second had passed. That
--- would be an inefficient use of CPU and memory, and risks rework
--- due to later updates undermining the speculated values. Choking a
--- cycle ensures it reaches an equilibrium with its logical rate. In
--- this case, choke is transparently added to `demand`, and reduces
--- the cycle to 10Hz (speculating fractions of a second ahead). 
+-- The `badjeqf` behavior will delay a false update just a little,
+-- which helps eliminate rework because most processing of signals
+-- regards the near-term rather than the distant future. EqChoke
+-- goes further, enabling indefinite delay. (The reason `badjeqf`
+-- limits delay is to protect snapshot consistency.)
 --
--- Cyclic feedback can model interactive systems and coordination 
--- patterns. However, cycles are expensive to compute and speculate.
--- Due to RDP's support for effects, there is no magical fixpoint to
--- wrap the signal around on itself; instead, one step is needed per
--- cycle. If we run at 10Hz, that means some partition is running 10
--- steps per second (modulo filtering false-changes). However, the 
--- 10 steps may be bursty, not bound to the logical 10Hz frequency.
 --
--- If one cycle is responsible for many loops, it will tend to step
--- at a rate based on the shortest cycle. If a cycle crosses many
--- partitions, all of them will end up cycling.
---
--- Developers are encouraged to avoid cycles where possible, instead
--- favoring animated state models that can compute fixpoint futures.
--- But cycles cannot be avoided entirely in open systems, so RDP and
--- Sirea must handle them robustly and efficiently. Potential cycles
--- are choked at every resource that might introduce them (state and
--- demand monitors, mostly).
---
--- A second concern regarding cycles is interaction with ln_touch.
---
--- A cycle within a partition is broken across steps. This ensures
--- each step performs a predictable amount of computation before
--- returning, though this does hurt snapshot consistency across the
--- cyclic resource. To keep more computation in the step, cycles are
--- detected within each partition (using ln_cycle) and breaks occur
--- at most once per cycle.
---
-module Sirea.Internal.Choke
-    ( newChoke
+module Sirea.Internal.EqChoke
+    ( newEqChoke
     ) where
 
 import Data.IORef
@@ -54,7 +29,7 @@ import Control.Exception (assert)
 import Sirea.Signal
 import Sirea.Time
 import Sirea.UnsafeLink
-import Sirea.Internal.Tuning (tAncient)
+import Sirea.Internal.Tuning (dtDaggrHist, dtMdistHist, tAncient)
 import Sirea.Internal.LTypes -- for convenient SigSt, et. al.
 
 
@@ -62,11 +37,10 @@ import Sirea.Partition
 import Sirea.Internal.LTypes
 
 
+
 -- identity 
 -- cycle cut
--- drop insignificant stability updates 
---   (if cut, and doesn't result in final state)
--- psched?
+-- psched
 -- state
 -- note: might need to check s_is_final to assume final updates
 --   (of course, in that case stability should be at or above the
@@ -74,45 +48,20 @@ import Sirea.Internal.LTypes
 --
 --   But can't depend on DoneT since it's gone, nor s_term due to 
 --   use with demand monitors (which always report active).
-{-
-data Choke z = Choke
-    { ck_link    :: !(LnkUp z)
+-- include any update for current instant
 
-    , ck_data    :: !(IORef (CKD z))
-    , ck_ident   :: !Unique
-    , ck_psched  :: !PSched
+data Choke z = Choke
+    { ck_link  :: !(LnkUp z)
+    , ck_data  :: !(IORef (CKD z))
+    , ck_ident :: !Unique
     }
 data CKD z = CKD
-    { ckd_signal :: !(Sig z)
-    , ckd_tmup   :: !(Maybe T) -- 
-    , ckd_sendby :: {-# UNPACK #-} !StableT   -- goal stability for next send (< tmup)
-    , ckd_stable :: {-# UNPACK #-} !StableT   -- last reported stability
-    , ckd_cut    :: !Bool
-    }
 
-ckdZero :: CKD z
-ckdZero = CKD 
-    { ckd_signal = s_never
-    , ckd_tmup = Nothing
-    , ckd_sendby = 
-s_never Nothing (StableT tAncient) False
 
--- | Choke on difference between stability and update time. This is
--- only useful for cycles if developers use `bdelay` correctly.s 
-newChoke :: PSched -> LnkUp z -> IO (LnkUp z)
-newChoke pd lu =
-    newUnique >>= \ ident ->
-    newIORef ckdZero >>= \ rf ->
-    let ck = Choke lu rf ident pd in
-    return (lnkChoke ck)
 
-lnkChoke :: Choke z -> LnkUp z
-lnkChoke ck = LnkUp touch update idle cyc where
-
--}
-
-newChoke :: PSched -> LnkUp z -> IO (LnkUp z)
-newChoke = error "TODO"
+-- | EqChoke will Choke and also eliminate many false updates.
+newEqChoke :: (Ord z) => PSched -> LnkUp z -> IO (LnkUp z)
+newEqChoke pd lu = error "TODO!"
 
 {-
 

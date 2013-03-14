@@ -2,7 +2,7 @@
 -- A single module for all those configuration tuning variables used by Sirea.
 module Sirea.Internal.Tuning
     ( dtRestart, dtStability, dtHeartbeat, dtGrace
-    , dtInsigStabilityUp
+    , nRestartSteps
     , dtFutureChoke
     , dtEqShift, dtAlign
     , dtTouch
@@ -20,17 +20,28 @@ import Sirea.Time (T,DT,mkTime)
 -- a reset period - if the main thread seems frozen too long, we'll
 -- model this in the activity signal.
 dtRestart, dtStability, dtHeartbeat, dtGrace :: DT
-dtRestart   = 2.00   -- how long a pause to cause a restart
+dtRestart   = 2.00   -- how long a pause to force a restart
 dtStability = 0.30   -- stability of main signal (affects halting time)
 dtHeartbeat = 0.06   -- heartbeat and periodic increase of stability
 dtGrace     = dtHeartbeat -- time allotted for graceful start and stop
+
+-- When restarting, we'll want to give a little time to clear cycles
+-- so we don't end up trapping old stability values. Unfortunately, 
+-- this is not foolproof. But a few steps could help a lot. Each
+-- step is one heartbeat delay.
+nRestartSteps :: Int
+nRestartSteps = 4
+
 
 -- A small update to stability is not always worth sending. It must
 -- be sent within a partition (after ln_touch, to indicate there is
 -- no update), but across partitions or steps we are free to drop a
 -- few if we deem them insignificant for GC purposes. 
-dtInsigStabilityUp :: DT
-dtInsigStabilityUp = 0.05 -- largest insignificant pure-stability update
+--
+-- (Note: this is problematic for high-frequency cycles. E.g. cycle 
+-- at 40ms might stop updating stability and get 'stuck'.)
+--dtInsigStabilityUp :: DT
+--dtInsigStabilityUp = 0.05 -- largest insignificant pure-stability update
 
 -- To control temporal feedback cycles through resources, Sirea will
 -- choke processing of updates that apply to values in the distant
@@ -48,8 +59,8 @@ dtFutureChoke = 2 * dtHeartbeat
 -- we seek for a point of ideal alignment to 'swap in' the updated
 -- signal?
 dtEqShift, dtAlign :: DT
-dtEqShift = 5 * dtHeartbeat -- comparison of values
-dtAlign = 3 * dtHeartbeat -- extra search for alignment
+dtEqShift = 3 * dtHeartbeat -- comparison of values
+dtAlign = 2 * dtHeartbeat -- extra search for alignment
 
 -- When we 'btouch', how far (relative to stability) do we cause the
 -- signal to be evaluated. Forcing evaluation is mostly useful to 
@@ -65,7 +76,7 @@ dtTouch = dtEqShift / 10
 -- potentially much more rework when signals change. I plan to make
 -- this more adaptive, eventually.
 dtCompile :: DT
-dtCompile = 4 * dtHeartbeat -- how far to anticipate dynamic behaviors
+dtCompile = 3 * dtHeartbeat -- how far to anticipate dynamic behaviors
 
 -- Communication between partitions in Sirea occurs via bcross, and
 -- uses coarse-grained batches to support snapshot consistency and

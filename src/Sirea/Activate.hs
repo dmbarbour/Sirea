@@ -6,7 +6,7 @@
 -- other special needs.
 --
 module Sirea.Activate
-    ( runSireaApp, pulseSireaApp
+    ( runSireaApp
     , SireaAppObject(..)
     , buildSireaApp, beginSireaApp
     , bUnsafeExit
@@ -18,7 +18,7 @@ import Data.Typeable
 import Control.Applicative
 import Control.Concurrent.MVar
 import Control.Monad (unless, when, void, liftM)
-import Control.Exception (catch, assert, AsyncException)
+import Control.Exception (catch, AsyncException)
 import Control.Concurrent (myThreadId, forkIO, killThread, threadDelay)
 import Sirea.Internal.LTypes
 import Sirea.Internal.B0Compile (compileB0)
@@ -35,8 +35,15 @@ import Sirea.B
 import Sirea.Time
 import Sirea.Signal
 
-import Debug.Trace (traceIO)
+--import Debug.Trace (traceIO)
 
+-- IDEA: Have runSireaApp wrap the main application with a dynamic
+-- behavior (bexec, etc.). Then use this to model restart. Switch
+-- the application. 
+
+-- IDEA: Separate update of 'content' and 'activity' signals, like
+-- I expect to do for networked systems. This could potentially make
+-- it easier to hold onto older values.
 
 -- | The typical use case for Sirea is to simply runSireaApp as the
 -- main operation, with enough abstraction that the app itself is a
@@ -53,21 +60,10 @@ import Debug.Trace (traceIO)
 -- runSireaApp will activate the behavior and keep it active until 
 -- interrupted by any AsyncException in the initial thread. Ctrl+C
 -- will cause such a exception. After interruption, runSireaApp will
--- run a few more heartbeats (a fraction of a second) while shutting
--- down gracefully, then return. (A second interrupt will abort the 
--- effort for graceful shutdown.)
+-- begin a graceful shutdown.
 --
 runSireaApp :: B (S P0 ()) y -> IO ()
 runSireaApp app = buildSireaApp (app >>> btrivial) >>= beginSireaApp
-
--- | pulseSireaApp will simply runSireaApp very briefly, a fraction
--- of a second. This is potentially useful for testing, and enables
--- RDP to be wielded much like a procedure call.
-pulseSireaApp :: B (S P0 ()) y -> IO ()
-pulseSireaApp app = 
-    buildSireaApp (app >>> btrivial) >>= \ so ->
-    (runStopper . sireaStopper) so >>
-    beginSireaApp so
 
 -- | SireaAppObject manages life cycle of an initialized SireaApp:
 -- 
@@ -97,7 +93,7 @@ data AppPeriodic = AppPeriodic
     , ap_gs     :: !(GobStopper)
     , ap_pulse  :: !(IO ())
     , ap_sd     :: !(IORef StopData)
-    , ap_luMain :: !(LnkUp ())
+    , ap_link   :: !(LnkUp ())
     }
 
 
@@ -120,7 +116,7 @@ buildSireaApp app =
     getPSched cp0 >>= \ pd ->
     -- compute behavior in the new context
     -- adds phase delay to model activation from abstract partition
-    let b   = phaseUpdateB0 >>> unwrapB app cw in
+    let b   = unwrapB (appWrap app) cw in
     let cc0 = CC { cc_getSched = return pd, cc_newRef = newRefIO } in
     let lc0 = LC { lc_dtCurr = 0, lc_dtGoal = 0, lc_cc = cc0 } in
     let lcaps = LnkSig (LCX lc0) in
@@ -131,6 +127,16 @@ buildSireaApp app =
     buildSireaBLU cw lu >>= \ sireaAppObj ->
     when bDead ((runStopper . sireaStopper) sireaAppObj) >> 
     return sireaAppObj
+
+-- To help make resets a bit more robust, I'm going to leverage the
+-- dynamic behaviors model (which will basically compile the app per
+-- active period). This should make it easier to GC connections and
+-- recover a valid stability.
+appWrap :: B (S P0 ()) S1 -> B (S P0 ()) S1
+appWrap b =
+    (wrapB . const) phaseUpdateB0 >>> 
+    bdup >>> bfirst (bfmap (const b)) >>> 
+    bexec 
 
 getPCX0 :: PCX W -> IO (PCX P0)
 getPCX0 = findInPCX
@@ -152,110 +158,93 @@ buildSireaBLU cw lu =
           
 -- task to initialize application (performed on first runStepper)
 -- a slight delay is introduced before everything really starts.
---
--- Once you start, you're active for at least a period of:
---
---    dtStability - dtGrace
---
--- This period starts at Now+dtGrace, providing a grace period for
--- startup (to pre-load resources, files, etc.). After halting, the
--- system runs an additional dtGrace for final shutdown. 
---
--- pulseSireaApp depends on stop condition remaining unchecked until
--- maintenance phases, so beginApp will always activate the app.
---
 beginApp :: PCX W -> IORef StopData -> LnkUp () -> IO ()
 beginApp cw rfSD lu = 
     findInPCX cw >>= \ gs ->
     getPCX0 cw >>= \ cp0 ->
     findInPCX cp0 >>= \ tc0 ->
     getPulseRunner cp0 >>= \ pulse ->    
-    let apw = AppPeriodic 
+    let ap = AppPeriodic 
                 { ap_cw = cw
                 , ap_tc0 = tc0
                 , ap_gs = gs
                 , ap_pulse = pulse
                 , ap_sd = rfSD
-                , ap_luMain = lu }
+                , ap_link = lu }
     in
-    getTime >>= \ tNow ->
-    let tStart = tNow `addTime` dtGrace in
-    let tStable = tNow `addTime` dtStability in
-    let nextStep = maintainApp apw tStable in
-    ln_update lu (StableT tStable) tStart (s_always ()) >> -- activation!
-    pulse >> -- first heartbeat
-    schedule dtHeartbeat (addTCRecv tc0 nextStep)
-
+    apTime ap >>= \ tNow ->
+    let tForcingRestart = tNow `subtractTime` (dtRestart + 1) in
+    maintainApp ap (StableT tForcingRestart)
+    
 -- schedule will delay an event then perform it in another thread.
 -- Sirea only does this with one thread at a time.
-schedule :: DT -> IO () -> IO ()
-schedule dt op = assert (usec > 0) $ void $ 
-    forkIO (threadDelay usec >> op)
-    where usec = fromInteger $ (999 + dtToNanos dt) `div` 1000
+schedule :: IO () -> IO ()
+schedule op = void $ forkIO (threadDelay hb >> op) where
+    hb = fromInteger $ dtToNanos dtHeartbeat `div` 1000
+
+apSched :: AppPeriodic -> IO () -> IO ()
+apSched ap = schedule . addTCRecv (ap_tc0 ap)
+
+apTime :: AppPeriodic -> IO T
+apTime = getTCTime . ap_tc0
 
 -- regular maintenance operation, simply increases stability of the
 -- active signal on a regular basis; performed within main thread.
 -- At any given time, one maintenance operation is either queued in
 -- the main thread or delayed by a 'schedule' thread.
-maintainApp :: AppPeriodic -> T -> IO ()
-maintainApp apw tS0 = beginPulse where
-    lu = ap_luMain apw 
-    tc0 = ap_tc0 apw
-    beginPulse =
-        ap_pulse apw >> -- heartbeat
-        readIORef (ap_sd apw) >>= \ sd ->
-        if shouldStop sd then beginHalt else
-        getTCTime tc0 >>= \ tNow ->
-        let bNeedRestart = (tNow > (tS0 `addTime` dtRestart)) in
-        if bNeedRestart then beginReset tNow else continueIdle tNow
-    later = schedule dtHeartbeat . addTCRecv tc0
-    continueIdle tNow =
-        let tS = tNow `addTime` dtStability in
-        assert (tS >= tS0) $ -- the clock runs forwards, right?
-        later (maintainApp apw tS) >>
-        ln_idle lu (StableT tS) 
-    resetMessage = "*** SIREA APP RESET (Stopped for a few seconds) ***"
-    beginReset tNow =
-        let tRestart = tNow `addTime` dtHeartbeat in
-        let tS = tNow `addTime` dtStability in
-        let sigRestart = s_switch s_never tRestart (s_always ()) in
-        assert (tS >= tS0) $
-        traceIO resetMessage >>
-        later (maintainApp apw tS) >>
-        ln_update lu (StableT tS) tS0 sigRestart
-    beginHalt =
-        let tFinal = tS0 `addTime` dtGrace in
-        later (haltingApp apw tFinal) >>
-        ln_update lu (StableT tFinal) tFinal s_never 
+--
+-- If there is a huge jump in stability (based on dtRestart tuning)
+-- the app will adjust the signal to reflect the pause, basically to
+-- kill the app for the period of activity. 
+--
+-- Note that restart takes precedence over halting. This is mostly
+-- to ensure a period of inactivity is recorded if we halt right
+-- on recovery.
+maintainApp :: AppPeriodic -> StableT -> IO ()
+maintainApp ap (StableT tS0) = 
+    ap_pulse ap >> -- heartbeat
+    apTime ap >>= \ tNow ->
+    readIORef (ap_sd ap) >>= \ sd ->
+    if shouldStop sd then haltApp ap tS0 tNow else
+    let tS = StableT (tNow `addTime` dtStability) in
+    apSched ap (maintainApp ap tS) >>
+    if (tNow > (tS0 `addTime` dtRestart))
+       then let tR = tNow `addTime` dtGrace in
+            let tU = tS0 in
+            let su = s_switch s_never tR (s_always ()) in
+            ln_update (ap_link ap) tS tU su
+       else ln_idle (ap_link ap) tS
+
+-- termination signal requested since last heartbeat
+haltApp :: AppPeriodic -> T -> T -> IO ()
+haltApp ap tS0 tNow =
+    let tS = StableT (tNow `addTime` dtStability) in
+    apSched ap (stoppingApp ap tS) >>
+    ln_update (ap_link ap) tS tS0 s_never
 
 -- After we set the main signal to inactive, we must still wait for
 -- real-time to catch up, and should run a final few heartbeats to
 -- provide any pulse actions.
-haltingApp :: AppPeriodic -> T -> IO ()
-haltingApp apw tFinal = 
-    ap_pulse apw >> -- heartbeat
-    getTCTime tc0 >>= \ tNow ->
-    if (tNow > tFinal) -- wait for real time to catch up to stability
-        then let onStop = ap_pulse apw >> finiStopData (ap_sd apw) in
-             let gs = ap_gs apw in
-             runGobStopper gs (addTCRecv tc0 onStop) >>
-             later (finalizingApp apw) 
-        else later (haltingApp apw tFinal)
-    where later = schedule dtHeartbeat . addTCRecv tc0
-          tc0 = ap_tc0 apw
+stoppingApp :: AppPeriodic -> StableT -> IO ()
+stoppingApp ap tFinal = 
+    ap_pulse ap >> -- heartbeat
+    apTime ap >>= \ tNow ->
+    if (tNow > inStableT tFinal) -- wait for real time to catch up
+        then let onStop = ap_pulse ap >> finiStopData (ap_sd ap) in
+             let gs = ap_gs ap in
+             runGobStopper gs (addTCRecv (ap_tc0 ap) onStop) >>
+             apSched ap (finalizingApp ap) 
+        else apSched ap (stoppingApp ap tFinal)
 
 -- at this point we've run the all-stop for all other threads,
 -- so we're just biding time until threads report completion.
--- There might not be any more heartbeats at this point.
+-- Continue to run any final heartbeats.
 finalizingApp :: AppPeriodic -> IO ()
-finalizingApp apw =
-    ap_pulse apw >> -- heartbeat (potentially last)
-    readIORef (ap_sd apw) >>= \ sd ->
+finalizingApp ap =
+    ap_pulse ap >> -- heartbeat (potentially last)
+    readIORef (ap_sd ap) >>= \ sd ->
     unless (isStopped sd) $
-        let nextStep = finalizingApp apw in
-        let tc0 = ap_tc0 apw in
-        schedule dtHeartbeat (addTCRecv tc0 nextStep)
-
+        apSched ap (finalizingApp ap)
 
 
 -- | beginSireaApp activates a forever loop to process the SireaApp.

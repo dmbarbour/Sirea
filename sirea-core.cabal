@@ -89,6 +89,7 @@ Library
     Sirea.Internal.DiscreteTimedSeq
     Sirea.Internal.DemandMonitorData
     Sirea.Internal.Choke
+    Sirea.Internal.EqChoke
     Sirea.Internal.SigType
     Sirea.Internal.LTypes
     Sirea.Internal.PTypes

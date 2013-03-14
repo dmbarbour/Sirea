@@ -6,12 +6,16 @@
 --   * aggregation of demands (DemandAggr)
 --   * distribution of a signal to many observers (MonitorDist)
 --
--- Cycle detection is also essential, but is addressed by choke from
--- another module. Every demand aggregator is choked.
+-- Robust cycle handling is also essential, but is addressed by 
+-- choke from another module. Every demand aggregator is choked. 
 --
 -- Monitors help with late-arriving observers by keeping a little 
 -- extra history and some information about recent cycle tests.
 --
+-- Each observer is stable up to earliest activation. This is 
+-- important for restarts, to prevent capture of old stability
+-- values.
+-- 
 module Sirea.Internal.DemandMonitorData
     ( DemandAggr, newDemandAggr, newDemandAggrEqf, newDemandLnk
     , MonitorDist, newMonitorDist, primaryMonitorLnk, newMonitorLnk
@@ -32,6 +36,7 @@ import Sirea.Partition
 import Sirea.Internal.Tuning (dtDaggrHist, dtMdistHist)
 import Sirea.Internal.LTypes -- for convenient SigSt, et. al.
 import Sirea.Internal.Choke
+import Sirea.Internal.EqChoke
 
 -- import Debug.Trace (traceIO)
 -- showK = ("U#" ++) . show . hashUnique
@@ -60,7 +65,7 @@ newDemandAggr :: PSched -> (LnkUp z) -> ([Sig e] -> Sig z)
               -> IO (DemandAggr e z)
 newDemandAggr pd lu zp = 
     newIORef ddZero >>= \ rf ->
-    newFChoke pd lu >>= \ luChoked ->
+    newChoke pd lu >>= \ luChoked ->
     return (DemandAggr rf zp luChoked pd)
 
 -- | Create a demand aggregator that also attempts to detect when
@@ -70,7 +75,7 @@ newDemandAggrEqf :: (Ord z) => PSched -> LnkUp z -> ([Sig e] -> Sig z)
                  -> IO (DemandAggr e z)
 newDemandAggrEqf pd lu zp =
     newIORef ddZero >>= \ rf ->
-    newEqFChoke pd lu >>= \ luChoked ->
+    newEqChoke pd lu >>= \ luChoked ->
     return (DemandAggr rf zp luChoked pd)
 
 ddZero :: DemandData e z
@@ -255,8 +260,9 @@ data MDD z = MDD
 
 data MLN z = MLN 
     { mln_link      :: !(LnkUp z)        -- observer update callbacks
-    , mln_signal    :: !(SigSt ())          -- observer query (the mask)
-    , mln_tmup      :: !(Maybe T)           -- tracks observed update time
+    , mln_signal    :: !(SigSt ())       -- observer query (the mask)
+    , mln_init      :: !(Maybe StableT)  -- earliest activation time
+    , mln_tmup      :: !(Maybe T)        -- tracks observed update time
     }
 
 -- | Each MonitorDist will handle a set of observers for one signal.
@@ -340,11 +346,16 @@ primaryMonitorLnk md = LnkUp touch update idle cyc where
 -- update. It is necessary that both inputs have received updates 
 -- (if any in the current step) before this is executed. 
 --
--- The stability for the update may be `Nothing` if this value will
--- be fully cleared. 
+-- The stability value is adjusted for:
+--   * observer's stability
+--   * source's stability
+--   * observer activation time
+-- The last point helps with restarts, to keep stability values
+-- from being captured in a loop after hibernation etc.
 deliverUpdateMD :: StableT -> MDD z -> MLN z -> IO ()
 deliverUpdateMD tMDD mdd mln = deliver where
-    tS = min tMDD ((st_stable . mln_signal) mln)
+    tMddObs = maybe tMDD (max tMDD) (mln_init mln) 
+    tS = min tMddObs $ st_stable (mln_signal mln)
     tmup = leastTime (mdd_tmup mdd) (mln_tmup mln)
     maskSig tU =
         let sigZ = s_trim (mdd_signal mdd) tU in
@@ -484,7 +495,9 @@ mlnZero :: LnkUp z -> MLN z
 mlnZero lzOut = 
     MLN { mln_link = lzOut
         , mln_signal = st_zero
-        , mln_tmup = Nothing }
+        , mln_tmup = Nothing 
+        , mln_init = Nothing
+        }
 
 -- Process an update to the masking signal for an observer. The mask
 -- describes durations of observation and ensures duration coupling.
@@ -496,7 +509,8 @@ updateMLN :: MonitorDist z -> Unique -> StableT -> T -> Sig () -> IO ()
 updateMLN md k tS tU su = updateMLN' md k $ \ mln ->
     let st' = st_update tS tU su (mln_signal mln) in
     let tmup' = Just $! maybe tU (min tU) (mln_tmup mln) in
-    mln { mln_signal = st', mln_tmup = tmup' }
+    let init' = mln_init mln <|> (Just $! min (StableT tU) tS) in
+    mln { mln_signal = st', mln_tmup = tmup', mln_init = init' }
 
 idleMLN :: MonitorDist z -> Unique -> StableT -> IO ()
 idleMLN md k tS = updateMLN' md k $ \ mln ->

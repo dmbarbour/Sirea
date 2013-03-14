@@ -194,11 +194,11 @@ updateTime tc =
     tEff `seq`  
     writeIORef rf (tEff,tNow) 
 
--- the monotonic update heuristics
+-- the monotonic time update heuristic
 adjTime :: (T,T) -> T -> T
 adjTime (tEff0, tAct0) tNow =
     let dtAct = tNow `diffTime` tAct0 in -- difference in times.
-    let dtEst = 0.96 * dtAct in -- heuristic to mitigate sudden shifts in OS clock
+    let dtEst = 0.97 * dtAct in -- heuristic to mitigate sudden shifts in OS clock
     let tEst = if (dtEst > 0) then tEff0 `addTime` dtEst 
                               else tEff0 `addTime` 0.0001
     in 

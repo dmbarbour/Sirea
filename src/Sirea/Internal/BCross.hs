@@ -59,7 +59,7 @@ import Sirea.Internal.STypes
 import Sirea.Internal.LTypes
 import Sirea.Internal.PTypes
 import Sirea.Internal.PulseSensor (initPulseListener)
-import Sirea.Internal.Tuning ( batchesInFlight, tAncient, dtInsigStabilityUp)
+import Sirea.Internal.Tuning ( batchesInFlight, tAncient)
 import Sirea.Partition
 import Sirea.PCX
 import Sirea.Behavior
@@ -193,20 +193,12 @@ luSend rfT obSend lu = LnkUp touch update idle cycle where
     cycle _ = return () -- cycles are partition-local
     idle tS =
         readIORef rfT >>= \ tS0 ->
-        when (urgentStability tS0 tS) $
+        unless (tS0 == tS) $
             writeIORef rfT tS >>
             obSend (ln_idle lu tS)
     update tS tU su =
         tS `seq` writeIORef rfT tS >>
         obSend (ln_update lu tS tU su)
-
--- | stability updates are pretty much all or nothing; a minor
--- stability update can be ignored, but a big one needs to be
--- processed to support GC.
-urgentStability :: StableT -> StableT -> Bool
-urgentStability (StableT t0) (StableT tf) =
-    assert (tf >= t0) $
-    (tf > (t0 `addTime` dtInsigStabilityUp))
 
 getTC :: (Partition p) => PCX p -> IO TC
 getTC = findInPCX 

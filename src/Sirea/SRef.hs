@@ -18,7 +18,7 @@
 -- and without invasive edits of the Partition instance.
 -- 
 module Sirea.SRef 
-    ( SRefO, getSRefO, writeSRef, bwatchSRef
+    ( SRefO, getSRefO, writeSRef, writeSRefDT, bwatchSRef
     , SRefI, getSRefI, readSRef, addSRefEvent, bsignalSRef
     ) where
 
@@ -144,28 +144,27 @@ getSRefO = flip findByNameInPCX
 
 -- | Write to an output SRef. Developers must specify at which time
 -- their updates begin to apply, but this may be silently truncated
--- for deep retroactive updates. To reduce rework, it's preferable 
--- to update the future.
+-- for deep retroactive updates - less than about -50ms. To reduce 
+-- rework, it's preferable to update the future. 
 --
 -- Note: while the input signal is inactive, active observers will
 -- see a 'Nothing' value. The input signal starts inactive.
+--
+-- Note: Writes are safe from any thread, though writes to an SRefO
+-- should be serialized.
 writeSRef :: SRefO z -> T -> Sig z -> IO ()
-writeSRef sro tU0 su =
+writeSRef sro tU0 su = onNextStep (sro_psched sro) $
     readIORef (sro_data sro) >>= \ srod ->
     let s0 = srod_signal srod in
     let tS0 = srod_stable srod in
     let tU = max tU0 (inStableT tS0) in
     let sf = s_switch' s0 tU su in
-    let tmup' = maybe tU (min tU) (srod_tmup srod) in
-    let srod' = srod { srod_signal = sf
-                     , srod_tmup = Just $! tmup'
-                     }
-    in
+    let tmup' = Just $! maybe tU (min tU) (srod_tmup srod) in
+    let srod' = srod { srod_signal = sf, srod_tmup = tmup' } in
     srod' `seq` writeIORef (sro_data sro) srod' >>
-    onNextStep (sro_psched sro) (activateSRO sro)
+    activateSRO sro
 
--- activate is called at the start of a step by flush or writeSRef.
--- It is idempotent.
+-- idempotent activation within a step
 activateSRO :: SRefO z -> IO ()
 activateSRO sro =
     readIORef (sro_data sro) >>= \ srod ->
@@ -173,7 +172,17 @@ activateSRO sro =
         let srod' = srod { srod_active = True } in
         writeIORef (sro_data sro) srod' >>
         onUpdPhase (sro_psched sro) (deliverSRO sro) >>
-        ln_touch (sro_link sro)
+        ln_touch (sro_link sro)        
+
+-- | Write to an output SRef using relative time for the update
+-- based on the current clock value. This is sometimes convenient,
+-- but does risk inconsistency with external change events.
+writeSRefDT :: SRefO z -> DT -> Sig z -> IO ()
+writeSRefDT sro dt su =
+    stepTime (sro_psched sro) >>= \ tNow ->
+    let tU = tNow `addTime` dt in
+    writeSRef sro tU su
+
 
 -- deliver update associated with SRO
 deliverSRO :: SRefO z -> IO ()
