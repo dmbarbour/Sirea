@@ -70,6 +70,7 @@ instance (Behavior b, Applicative f) => Behavior (StaticB f b)
 -- dynamic behavior that the original behavior could evaluate.
 instance (BDynamic b b', Applicative f) => BDynamic (StaticB f b) b' where
     bevalx  = liftStatic . bevalx
+    bexec   = liftStatic bexec
 
 -- from Sirea.Partition
 instance (BCross b, Applicative f) => BCross (StaticB f b) where

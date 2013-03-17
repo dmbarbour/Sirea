@@ -171,7 +171,7 @@ buildEval flc lcbx@(LnkProd (LnkSig (LCX lcb)) lcx) lny =
     let ccx = lc_cc lcb in
     let ccy = lc_cc (flc lcb) in
     cc_newRef ccx evdZero >>= \ rfEVD ->
-    cc_newRef ccx 1000 >>= \ rfKeys ->
+    cc_newRef ccx 10000 >>= \ rfKeys ->
     cc_getSched ccx >>= \ sched ->
     mkFullDyn lcx >>= \ dynX ->
     mkMergeLnkFactory ccy lny >>= \ mergeLnkY ->
@@ -220,14 +220,16 @@ lnkEvalB0 ev = LnkUp touch update idle cyc where
                     dropWhile ((< tLo) . fst) $
                     sigToList s tLoR tHi 
         in
-        let bUrgent = not (null range) || (tS0 /= tS) in
+        let bUrgent = not (null range) || (tS /= tS0) in
         writeRef' (ev_data ev) (EVD sGC tS tHi) >>
         when bUrgent (install tS range)
     install tS [] = -- stability update only
+        --trace ("Eval Stability " ++ show tS) $
         onNextStep (ev_sched ev) $
             onUpdPhase (ev_sched ev) (dynBIdle tS (ev_dynX ev)) >>
             dynBTouch (ev_dynX ev)
     install tS range = onStepEnd (ev_sched ev) $
+        --trace ("dynamic install " ++ show tS ++ "  range: " ++ show (map fst range)) $
         mapM compileE range >>= \ dynLnks ->
         dynBInstall (ev_dynX ev) dynLnks >>= \ (gcTouch,gcKill) ->
         onNextStep (ev_sched ev) $
@@ -310,6 +312,8 @@ dynBTouch = ln_forEach $ \ (Dyn rf) ->
     unless bExpect (touchBL (dyn_blink dyn))
 
 -- idle every link in the dynamic behaviors
+-- Since actual update (install) takes place between steps, only
+-- idle is ever distributed as an update.
 dynBIdle :: (Monad m) => StableT -> LnkW (Dyn m) x -> m ()
 dynBIdle tS = ln_forEach $ \ d@(Dyn rf) ->
     readRef rf >>= \ dyn ->
@@ -325,7 +329,7 @@ dynSigTouch (Dyn rf) =
     readRef rf >>= \ dyn ->
     let bExpect = dynExpect dyn in
     let dyn' = dyn { dyn_signal = st_poke (dyn_signal dyn) } in
-    writeRef rf dyn' >>
+    writeRef' rf dyn' >>
     unless bExpect (touchBL (dyn_blink dyn))
 
 touchBL :: (Monad m) => [(T,LnkUpM m a)] -> m ()
@@ -383,15 +387,17 @@ dynBInstall (LnkSum x y) bl =
     dynBInstall y ly >>= \ gcy ->
     return (gcPair gcx gcy)
 dynBInstall (LnkSig (Dyn rf)) blu@(b:_) =
+    readRef rf >>= \ dyn ->
     let bl = map (second ln_lnkup) blu in
     let tU = fst b in
-    readRef rf >>= \ dyn ->
     let (blKeep,blKill) = span ((< tU) . fst) (dyn_blink dyn) in
     let bl' = blKeep ++ bl in
-    let tmup' = Just $! maybe tU (min tU) (dyn_tmup dyn) in
-    let dyn' = dyn { dyn_tmup = tmup', dyn_blink = bl' } in
+    assert (isNothing (dyn_tmup dyn)) $
+    let dyn' = dyn { dyn_tmup = Just tU, dyn_blink = bl' } in
+    let tKill = inStableT $ dynStable dyn in -- earliest legal kill
+    assert (tU >= tKill) $
     let gcTouch = mapM_ (ln_touch . snd) blKill in
-    let gcKill = mapM_ (terminate tU . snd) blKill in
+    let gcKill = mapM_ (terminate tKill . snd) blKill in
     writeRef' rf dyn' >>
     return (gcTouch, gcKill)
 dynBInstall LnkDead bl =
@@ -408,17 +414,17 @@ gcPair (tx,kx) (ty,ky) = (tx >> ty, kx >> ky)
 -- when we switch to a new dynamic behavor, we kill behaviors that
 -- are no longer relevant. This recants signals starting at time tm.
 terminate :: T -> LnkUpM m a -> m ()
-terminate tCut lu = ln_update lu (StableT tCut) tCut s_never
+terminate tKill lu = ln_update lu (StableT tKill) tKill s_never
 
 -- deliver the updated dynamic behavior input signals
 dynEmit :: (Monad m) => Dyn m a -> m ()
 dynEmit (Dyn rf) = 
     readRef rf >>= \ dyn ->
     assert ((not . dynExpect) dyn) $
-    let tS    = dynStable dyn in
-    let bl    = dyn_blink dyn in
-    let st'   = st_clear tS (dyn_signal dyn) in
-    let bl'   = bl_clear (inStableT tS) bl in
+    let tS   = dynStable dyn in
+    let bl   = dyn_blink dyn in
+    let st'  = st_clear tS (dyn_signal dyn) in
+    let bl'  = bl_clear (inStableT tS) bl in
     let dyn' = dyn { dyn_signal = st'
                    , dyn_blink  = bl'
                    , dyn_tmup   = Nothing }
@@ -434,7 +440,7 @@ dynEmit (Dyn rf) =
 -- Eliminate old links that won't be updated further.
 bl_clear :: T -> [(T,lu)] -> [(T,lu)]
 bl_clear tS bl@(_:r@(hi:_)) =
-    if (tS >= fst hi) then bl_clear tS r else bl
+    if (tS > fst hi) then bl_clear tS r else bl
 bl_clear _ bl = bl -- always keep last element
 
 -- deliver updates 
@@ -457,9 +463,8 @@ deliverDyn tS tU0 s0 (lo:r@(hi:_)) =
         LT -> -- fragment update
             let tU = max tU0 (fst lo) in
             let sLo = s_trim s0 tU in
-            let sHi = s_switch sLo (fst hi) s_never in
-            sLo `seq`
-            ln_update lu tS tU sHi >>
+            let sLoCutHi = s_switch sLo (fst hi) s_never in
+            ln_update lu tS tU sLoCutHi >>
             deliverDyn tS tU0 sLo r
            
 -- RESULTS LINK FACTORY.
@@ -511,18 +516,19 @@ mkMergeLnkFactory cc (LnkSig lu) =
 -- recorded to ensure we report increasing stability.
 newtype MergeLnk m a = MergeLnk { mln_data :: Ref m (MLD a) }
 data MLD a = MLD
-    { mld_touchCt  :: {-# UNPACK #-} !Int
-    , mld_stable   :: {-# UNPACK #-} !StableT
+    { mld_touchCt  :: {-# UNPACK #-} !Int     -- current touch count
+    , mld_stable   :: {-# UNPACK #-} !StableT -- reported stability
+    , mld_upper    :: {-# UNPACK #-} !StableT -- max stability of inputs
     , mld_table    :: !(M.Map Key (SigSt a))
     , mld_cycle    :: !CycleSet
     , mld_tmup     :: !(Maybe T)
     }
 
-
 mldZero :: MLD a
 mldZero = MLD 
     { mld_touchCt = 0
     , mld_stable  = StableT tAncient
+    , mld_upper   = StableT tAncient
     , mld_table   = M.empty
     , mld_tmup    = Nothing
     , mld_cycle   = S.empty
@@ -548,7 +554,8 @@ mld_idle mld k tS =
     let st' = st_idle tS st in
     let tbl' = M.insert k st' (mld_table mld) in
     let tc' = pred (mld_touchCt mld) in
-    mld { mld_touchCt = tc', mld_table = tbl' }
+    let tSU = max (mld_upper mld) tS in
+    mld { mld_touchCt = tc', mld_table = tbl', mld_upper = tSU }
 
 mld_update :: MLD a -> Key -> StableT -> T -> Sig a -> MLD a
 mld_update mld k tS tU su =
@@ -558,7 +565,9 @@ mld_update mld k tS tU su =
     let tbl' = M.insert k st' (mld_table mld) in
     let tc' = pred (mld_touchCt mld) in
     let tmup' = Just $! maybe tU (min tU) (mld_tmup mld) in
-    mld { mld_touchCt = tc', mld_table = tbl', mld_tmup = tmup' }
+    let tSU = max (mld_upper mld) tS in
+    mld { mld_touchCt = tc', mld_table = tbl'
+        , mld_upper = tSU, mld_tmup = tmup' }
 
 -- merge signals from present and future dynamic behaviors
 -- 
@@ -583,25 +592,25 @@ fnMergeEval mln lu k = LnkUp touch update idle cyc where
         let ns' = S.union ns nsu in
         unless (S.size ns' == S.size ns) $
             let mld' = mld { mld_cycle = ns' } in
-            writeRef (mln_data mln) mld' >>
+            writeRef' (mln_data mln) mld' >>
             ln_cycle lu ns'
     touch = 
         readRef (mln_data mln) >>= \ mld ->
         let bFirstTouch = (0 == mld_touchCt mld) in 
         let mld' = mld_touch mld k in
-        writeRef (mln_data mln) mld' >>
+        writeRef' (mln_data mln) mld' >>
         when bFirstTouch (ln_touch lu)
     idle tS =
         readRef (mln_data mln) >>= \ mld ->
         let mld' = mld_idle mld k tS in
         let bLastUpdate = (0 == mld_touchCt mld') in
-        writeRef (mln_data mln) mld' >>
+        writeRef' (mln_data mln) mld' >>
         when bLastUpdate emit
     update tS tU su = 
         readRef (mln_data mln) >>= \ mld ->
         let mld' = mld_update mld k tS tU su in
         let bLastUpdate = (0 == mld_touchCt mld') in
-        writeRef (mln_data mln) mld' >>
+        writeRef' (mln_data mln) mld' >>
         when bLastUpdate emit
     emit = emitMergedSignal mln lu
 
@@ -622,35 +631,40 @@ emitMergedSignal mln lu =
     assert (0 == mld_touchCt mld) $
     assert ((not . M.null . mld_table) mld) $
     let lst = M.toAscList (mld_table mld) in
-    let mbtGC = leastActiveStability (fmap snd lst) in
+    let tSMax = inStableT (mld_upper mld) in
+    let tTest = (maybe tSMax (max tSMax) (mld_tmup mld)) `addTime` dtCompile in
+    let mbtGC = leastActiveStability tTest (fmap snd lst) in
+    -- trace ("Merging sigs: " ++ show (map fst lst)) $
     let tS0 = mld_stable mld in
-    let tSMax = foldr (max . st_stable . snd) tS0 lst in
-    let tS = maybe tSMax (max tS0) mbtGC in
-    let tbl' = M.fromAscList $ mapMaybe (mergeGC tS) lst in 
+    let tS = maybe (mld_upper mld) (max tS0) mbtGC in
+    let tGC = inStableT tS in
+    let tbl' = M.fromAscList $ mapMaybe (mergeGC tGC tTest) lst in 
     let mld' = MLD 
             { mld_table = tbl'
+            , mld_upper = (mld_upper mld)
             , mld_stable = tS 
             , mld_touchCt = 0
             , mld_tmup = Nothing
             , mld_cycle = S.empty }
     in
-    -- trace ("emitMerged @(" ++ show tStable ++ ") count=" ++ show (length lst)) $ 
+    -- trace ("dynamic merge @ " ++ show tS ++ " lst=" ++ show (map fst lst)) $ 
     writeRef' (mln_data mln) mld' >>
     case mld_tmup mld of
         Nothing -> ln_idle lu tS 
         Just tU0 ->
             let tU = max tU0 (inStableT tS0) in
+            --trace ("dynamic merge @ " ++ show tU ++ " lst=" ++ show (map fst lst)) $
             let lSigs = map ((`s_trim` tU) . st_signal . snd) lst in
             let sMrg = foldr (flip s_merge) s_never lSigs in
             ln_update lu tS tU sMrg
    
 -- need to GC the table. An element can be removed once it no longer
 -- contributes to the result
-mergeGC :: StableT -> (k,SigSt a) -> Maybe (k, SigSt a)
-mergeGC tS (k,st) = 
-    assert ((not . st_expect) st) $
-    let st' = st_clear tS st in
-    let bDone = s_term (st_signal st') (inStableT tS) in
+mergeGC :: T -> T -> (k,SigSt a) -> Maybe (k, SigSt a)
+mergeGC tGC tT (k,st) = 
+    let s' = s_trim (st_signal st) tGC in
+    let bDone = s_term2 s' tGC tT in
+    let st' = st { st_signal = s' } in
     if bDone then Nothing 
              else st' `seq` Just (k, st')
 

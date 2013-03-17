@@ -4,7 +4,7 @@
 -- Sirea's implementation. Specific behavior logic is in B0Impl. 
 module Sirea.Internal.LTypes 
     ( LnkW(..)
-    , LnkUpM(..), StableT(..), CycleSet
+    , LnkUpM(..), StableT(..), inStableT, CycleSet
     , LnkM, LnkUp, Lnk
     , LC(..), LCX(..), LCapsM, LCaps
     , ln_left, ln_right, ln_fst, ln_snd, ln_toList, ln_toMaybe
@@ -13,7 +13,7 @@ module Sirea.Internal.LTypes
     , lc_anyCap, lc_dupCaps, lc_map, lc_fwd
     , lc_minGoal, lc_maxGoal, lc_minCurr, lc_maxCurr, lc_valid
     , adjStableT
-    , SigSt(..), st_zero, st_poke, st_clear, st_update, st_idle, st_term
+    , SigSt(..), st_zero, st_poke, st_clear, st_update, st_idle
     , leastActiveStability
     , monotonicStability, respectsStability
     , SigM(..), sm_zero
@@ -119,8 +119,11 @@ type CycleSet = Set Unique
 -- the previously reported stability. (The updated stability may be
 -- greater than the update time.)
 --
-newtype StableT = StableT { inStableT :: T }
+newtype StableT = StableT T
     deriving (Eq, Ord, Show)
+
+inStableT :: StableT -> T
+inStableT (StableT t) = t
 
 adjStableT :: (T -> T) -> StableT -> StableT
 adjStableT fn = StableT . fn . inStableT
@@ -332,8 +335,6 @@ st_idle tS st =
     let sf = st_signal st in
     SigSt sf tS False
 
-st_term :: SigSt a -> Bool
-st_term st = s_term (st_signal st) (inStableT (st_stable st))
 
 -- is stability non-decreasing?
 monotonicStability :: StableT -> StableT -> Bool
@@ -344,14 +345,16 @@ respectsStability :: StableT -> T -> Bool
 respectsStability (StableT tS) tU = (tU >= tS)
 
 -- least stability of a non-terminal SigSt
-leastActiveStability :: [SigSt a] -> Maybe StableT
-leastActiveStability = foldr activeStability Nothing
+-- the first arg should be the test time.
+leastActiveStability :: T -> [SigSt a] -> Maybe StableT
+leastActiveStability tT = foldr (activeStability tT) Nothing
 
-activeStability :: SigSt a -> Maybe StableT -> Maybe StableT
-activeStability st mbt =
-    if st_term st then mbt else
+activeStability :: T -> SigSt a -> Maybe StableT -> Maybe StableT
+activeStability tT st mbt =
     let tS = st_stable st in
-    Just $! maybe tS (min tS) mbt
+    let bDone = s_term2 (st_signal st) (inStableT tS) tT in
+    if bDone then mbt else
+    Just $! maybe tS (min tS) mbt 
 
 
 ------------------------------------------------------------------

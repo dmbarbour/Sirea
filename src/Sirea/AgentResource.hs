@@ -41,7 +41,7 @@ import Sirea.Time
 
 import Sirea.Internal.B0Compile (compileB0)
 import Sirea.Internal.DemandMonitorData
-import Sirea.Internal.B0Impl (wrapLnEqShift)
+--import Sirea.Internal.B0Impl (wrapLnEqShift)
 import Sirea.Internal.LTypes
 
 -- | The RDP behaviors of AgentResources are defined in a typeclass.
@@ -98,8 +98,8 @@ newAR cw = mfix $ \ ar -> -- fix cyclic dependencies
     let lcaps = LnkSig (LCX lc0) in
     let make = ln_lnkup <$> snd (compileB0 b0 lcaps LnkDead) in 
     let lu = LnkUp (touchAR ar) (updateAR ar) (idleAR ar) (cycleAR ar) in
-    wrapLnEqShift (==) lu >>= \ luEq ->
-    newDemandAggr pd luEq sigActive >>= \ da ->
+    --wrapLnEqShift (==) lu >>= \ luEq ->
+    newDemandAggr pd lu sigActive >>= \ da ->
     return (AR da make rf)
     
 -- functions getABS, getDuty, getPCX mostly for type wrangling

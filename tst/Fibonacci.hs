@@ -14,7 +14,8 @@ import Sirea.Time
 
 fib :: B (S P0 Int) (S P0 Int)
 fib = (bfmap dynFib &&& (bfmap pred >>> (bfwd &&& bfmap pred))) >>> 
-       bbeval 0 >>> bright (bconst (-1)) >>> bmerge
+       bbeval 0 >>> bright fibFail >>> bmerge
+    where fibFail = bfmap $ const (-999999)
 
 dynFib :: Int -> B (S P0 Int :&: S P0 Int) (S P0 Int)
 dynFib n = if (n < 2) then bfst >>> bconst n

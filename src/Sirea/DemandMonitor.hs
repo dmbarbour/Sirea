@@ -56,7 +56,7 @@ import Sirea.UnsafeLink
 import Sirea.Partition
 import Sirea.PCX
 import Sirea.Internal.DemandMonitorData
-import Sirea.Internal.B0Impl (wrapLnEqShift)
+--import Sirea.Internal.B0Impl (wrapLnEqShift)
 
 -- | DemandMonitor is a synonym for the (demand,monitor) facet pair 
 type DemandMonitor b p e z = (b (S p e) (S p ()), b (S p ()) (S p z))
@@ -99,8 +99,8 @@ newDMD cp =
     getPSched cp >>= \ pd ->
     newMonitorDist pd (s_always S.empty) >>= \ md ->
     let lu = primaryMonitorLnk md in
-    wrapLnEqShift (==) lu >>= \ luEq ->
-    newDemandAggr pd luEq (s_adjeqf (==) . setZip) >>= \ d ->
+    -- wrapLnEqShift (==) lu >>= \ luEq ->
+    newDemandAggr pd lu (s_adjeqf (==) . setZip) >>= \ d ->
     return (d,md)
 
 setZip :: (Ord e) => [Sig e] -> Sig (Set e)
@@ -126,8 +126,8 @@ newAMon cp =
     getPSched cp >>= \ pd ->
     newMonitorDist pd (s_always False) >>= \ md ->
     let lu = primaryMonitorLnk md in
-    wrapLnEqShift (==) lu >>= \ luEq ->
-    newDemandAggr pd luEq amonZip >>= \ d ->
+    --wrapLnEqShift (==) lu >>= \ luEq ->
+    newDemandAggr pd lu amonZip >>= \ d ->
     return (d,md)
 
 amonZip :: [Sig ()] -> Sig Bool

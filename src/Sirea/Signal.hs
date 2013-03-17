@@ -34,6 +34,7 @@ module Sirea.Signal
  , s_merge
  , s_switch, s_switch'
  , s_is_final, s_term
+ , s_is_final2, s_term2
  , s_delay
  --, s_peek
  , s_adjn, s_adjeqf
@@ -255,21 +256,32 @@ s_switch' s0 t sf =
 -- This is a semi-decision; it may return False if the answer is
 -- unknown (or would risk divergence) at the given instant.
 s_is_final :: Sig a -> T -> Bool
-s_is_final s0 tm =
-    let (_,ds) = ds_query (s_head s0) tm (s_tail s0) in
-    case dstep ds tm of
-        DSDone -> True
-        _ -> False
+s_is_final s0 tm = s_is_final2 s0 tm tm
+
+-- | Same as s_is_final, but the time of the test is not the same as
+-- the time for the query. s_is_final s tQuery tTest. tTest >= tQuery.
+s_is_final2 :: Sig a -> T -> T -> Bool
+s_is_final2 s0 tQ tT = assert (tT >= tQ) $
+    let (_,ds) = ds_query (s_head s0) tQ (s_tail s0) in
+    case dstep ds tT of { DSDone -> True; _ -> False }
 
 -- | Test whether a signal has terminated after a given instant.
 --     s_term s t = isNothing (s_sample s t) && (s_is_final s t)
 s_term :: Sig a -> T -> Bool
-s_term s0 tm =
-    let (v,ds) = ds_query (s_head s0) tm (s_tail s0) in
-    let isFinal = case dstep ds tm of 
-                    DSDone -> True
-                    _ -> False
-    in isNothing v && isFinal
+s_term s0 tm = s_term2 s0 tm tm
+
+-- | Test whether a signal has terminated after a given instant, but
+-- time of test may be different from the time of query. This allows
+-- testing further ahead to make the decision.
+--     s_term s tQuery tTest. tTest >= tQuery.
+s_term2 :: Sig a -> T -> T -> Bool
+s_term2 s0 tQ tT = assert (tT >= tQ) $ dead && final where
+    (v,ds) = ds_query (s_head s0) tQ (s_tail s0)
+    dead = isNothing v
+    final = case dstep ds tT of { DSDone -> True; _ -> False }
+
+-- | Same as s_is_final, but the time of the test is not the same
+-- as the time of the 
 
 -- | s_adjn will eliminate adjacent `Nothing` values. These might 
 -- exist after s_full_map to filter a signal by its values.

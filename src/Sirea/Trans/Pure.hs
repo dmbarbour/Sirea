@@ -70,8 +70,10 @@ instance (Behavior b) => Behavior (PureB b)
 
 instance (BDynamic b b') => BDynamic b (PureB b') where
     bevalx bdt = bfirst (bfmap unwrapPure) >>> bevalx (unwrapPure bdt)
+    bexec = bfirst (bfmap unwrapPure) >>> bexec
 instance (BDynamic b b') => BDynamic (PureB b) (PureB b') where
     bevalx = liftPure . bevalx
+    bexec = liftPure bexec
 
 -- from Sirea.Partition
 instance (BCross b) => BCross (PureB b) where

@@ -26,7 +26,7 @@ module Sirea.Behavior
     , BZip(..), bzip, bzipWith, bunzip
     , BSplit(..), bsplitWith, bsplitOn, bunsplit, bsplitMaybe, bsplitBool
     , BTemporal(..)
-    , BDynamic(..), beval, bexec, bbevalx, bbeval, bbexec
+    , BDynamic(..), beval, bbevalx, bbeval, bbexec
     , Behavior
     ) where
 
@@ -596,16 +596,20 @@ class (Category b) => BTemporal b where
 --
 -- NOTE: BDynamic has two behavior types, b b'. This is primarily
 -- to support arrow transforms; not every transformed behavior type
--- can be used as dynamic behavior. For other behavior wrappers or
--- DSLs, I suggest compilation behavior separate from evaluation.
--- E.g. compile to `B w x y`, compose further if desired, then use
--- `beval` to execute.  
+-- can be used as dynamic behavior. 
 class (Behavior b, Behavior b') => BDynamic b b' where
-    -- | continuously install and evaluate dynamic behaviors that
+    -- | Continuously install and evaluate dynamic behaviors that
     -- may cross partitions. The first argument provides metadata
-    -- about crossing and latency; it's a hack.
+    -- about crossing and latency; it's a hack. 
     bevalx :: (SigInP p x, SigInP p' y) => b' (S p ()) (S p' ())
            -> b (S p (b' x y) :&: x) (y :|: S p ())
+
+    -- | Apply a dynamic behavior but drop the result. Conveniently,
+    -- this doesn't require the extra argument for latency or cross.
+    -- Default implementation can be overridden for performance.
+    bexec :: (SigInP p x) => b (S p (b' x y_) :&: x) S1
+    bexec = bfirst (bfmap (>>> btrivial)) >>> bevalx btrivial >>> btrivial
+
 
 -- | common case: install and evaluate in a single partition, given
 -- a fixed latency budget for each behavor. Dynamic behaviors that 
@@ -614,10 +618,6 @@ beval :: (BDynamic b b', SigInP p x, SigInP p y)
       => DT -> b (S p (b' x y) :&: x) (y :|: S p ())
 beval = bevalx . bdelay
 
--- | apply a dynamic behavior, but drop the result. Conveniently, 
--- this is independent of latency.
-bexec :: (BDynamic b b', SigInP p x) => b (S p (b' x y_) :&: x) S1
-bexec = bfirst (bfmap (>>> btrivial)) >>> bevalx btrivial >>> btrivial
 
 -- | bbevalx, bbeval, bbexec simply constrain the BDynamic type to
 -- simplify type inference in the common case where the host type is

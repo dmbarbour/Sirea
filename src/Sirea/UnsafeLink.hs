@@ -13,7 +13,7 @@
 module Sirea.UnsafeLink 
     ( unsafeFmapB
     , unsafeLinkB, unsafeLinkB_, unsafeLinkBL, unsafeLinkBLN
-    , LnkUpM(..), LnkUp, StableT(..)
+    , LnkUpM(..), LnkUp, StableT(..), inStableT
     , ln_zero, ln_sfmap, ln_lumap, ln_append
     ) where
 

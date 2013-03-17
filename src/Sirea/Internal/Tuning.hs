@@ -109,7 +109,7 @@ dtMdistHist = dtHeartbeat -- how long to tolerate late-arriving observers
 -- roughly models a tuple space with expirations.)
 --  (note: this won't be used in near future)
 dtPrintExpire :: DT
-dtPrintExpire = dtRestart
+dtPrintExpire = 6.0
 
 -- In some cases, I want to initialize structures with a lower bound
 -- for Time. But I don't want to pay code and performance overheads 
