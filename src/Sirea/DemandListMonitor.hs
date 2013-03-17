@@ -62,8 +62,8 @@ newUDMD :: (Partition p) => PCX p -> IO (DemandAggr e [e], MonitorDist [e])
 newUDMD cp =     
     getPSched cp >>= \ pd ->
     newMonitorDist pd (s_always []) >>= \ md ->
-    let lnMon = primaryMonitorLnk md in
-    newDemandAggr pd lnMon sigZipLists >>= \ d ->
+    let lu = primaryMonitorLnk md in
+    newDemandAggr pd lu sigZipLists >>= \ d ->
     return (d,md)
 
 

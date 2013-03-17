@@ -5,8 +5,7 @@ module Main
 
 import Sirea.Prelude
 
-bHelloWorld :: BCX w (S P0 ()) (S P0 ())
-bHelloWorld = bvoid $ bconst "Hello, World!" >>> bprint id
+bHelloWorld = bconst "Hello, World!" >>> bprint
 
 main :: IO ()
 main = 

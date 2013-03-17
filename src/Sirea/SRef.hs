@@ -97,7 +97,8 @@ newSRefI :: (Partition p) => PCX p -> IO (SRefI z)
 newSRefI cp = 
     newIORef sridZero >>= \ rf -> 
     getPSched cp >>= \ pd ->
-    newDemandAggr pd (lnkSRefI pd rf) sigListZip >>= \ da ->
+    let lu = lnkSRefI pd rf in
+    newDemandAggr pd lu sigListZip >>= \ da ->
     return (SRefI da rf pd) 
 
 lnkSRefI :: PSched -> IORef (SRID z) -> LnkUp [z]

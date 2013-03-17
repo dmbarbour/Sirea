@@ -2,7 +2,6 @@
 -- A single module for all those configuration tuning variables used by Sirea.
 module Sirea.Internal.Tuning
     ( dtRestart, dtStability, dtHeartbeat, dtGrace
-    , nRestartSteps
     , dtFutureChoke
     , dtEqShift, dtAlign
     , dtTouch
@@ -25,14 +24,6 @@ dtStability = 0.30   -- stability of main signal (affects halting time)
 dtHeartbeat = 0.06   -- heartbeat and periodic increase of stability
 dtGrace     = dtHeartbeat -- time allotted for graceful start and stop
 
--- When restarting, we'll want to give a little time to clear cycles
--- so we don't end up trapping old stability values. Unfortunately, 
--- this is not foolproof. But a few steps could help a lot. Each
--- step is one heartbeat delay.
-nRestartSteps :: Int
-nRestartSteps = 4
-
-
 -- A small update to stability is not always worth sending. It must
 -- be sent within a partition (after ln_touch, to indicate there is
 -- no update), but across partitions or steps we are free to drop a
@@ -45,10 +36,9 @@ nRestartSteps = 4
 
 -- To control temporal feedback cycles through resources, Sirea will
 -- choke processing of updates that apply to values in the distant
--- future. This doesn't block the cycles, just slows them down to a
--- manageable rate with predictable performance characteristics.
+-- future.
 dtFutureChoke :: DT
-dtFutureChoke = 2 * dtHeartbeat
+dtFutureChoke = 3 * dtHeartbeat
 
 -- TODO: develop a combined choke*eqshift that can support some sort
 -- of exponential backoff. Not critical for now, but could save much
@@ -59,7 +49,7 @@ dtFutureChoke = 2 * dtHeartbeat
 -- we seek for a point of ideal alignment to 'swap in' the updated
 -- signal?
 dtEqShift, dtAlign :: DT
-dtEqShift = 3 * dtHeartbeat -- comparison of values
+dtEqShift = 4 * dtHeartbeat -- comparison of values
 dtAlign = 2 * dtHeartbeat -- extra search for alignment
 
 -- When we 'btouch', how far (relative to stability) do we cause the

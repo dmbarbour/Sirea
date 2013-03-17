@@ -10,10 +10,11 @@ import Sirea.Clock
 import Sirea.Time
 import Sirea.DemandMonitor
 import Control.Monad (unless)
+import qualified Data.Set as S
 
 -- assertions
-assertb :: (Show a) => String -> (a -> Bool) -> BCX w (S P0 a) (S P0 a)
-assertb tstName test = bvoid $ bfmap (\a -> (test a,show a)) >>> unsafeOnUpdateBCX mkAssert
+assertb :: (Show a) => String -> (a -> Bool) -> B (S P0 a) (S P0 a)
+assertb tstName test = bvoid $ bfmap (\a -> (test a,show a)) >>> unsafeOnUpdateB mkAssert
     where mkAssert _ = return doAssert
           doAssert t = maybe (return ()) $ \ (b,a) ->
                         if b then putStrLn ("PASS: " ++ tstName ++ " @ " ++ show t ++ " (" ++ a ++ ")")
@@ -25,11 +26,11 @@ tstActive1 = fst amon >>> snd amon >>> assertb "tstActive1" (== True)
     where amon = activityMonitor "tstActive1"
 tstActive2 = (fst amon &&& snd amon) >>> bsnd >>> assertb "tstActive2" (== True)
     where amon = activityMonitor "tstActive2"
-tstInactive2 = snd dmon >>> assertb "tstInactive2" (== [])
-    where dmon = demandMonitor "L"
-          inject = bconst (0 :: Int) >>> fst dmon
+tstInactive2 = snd dmon >>> assertb "tstInactive2" (S.null)
+    where dmon = demandMonitor "tstInactive2"
+          inject = bconst (0 :: Int) >>> fst dmon -- to infer type, not used
 
-tstNums = bvoid $ inject >>> monitor >>> assertb "tstNums" (== [3,4,5,7])
+tstNums = bvoid $ inject >>> monitor >>> assertb "tstNums" ((== [3,4,5,7]) . S.toAscList)
     where inject = input 7 |*| input 3 |*| input 5 |*| input 4          
           input n = bconst (int n) >>> fst deMon
           monitor = snd deMon
@@ -41,10 +42,10 @@ allTests = tstInactive |*| tstActive1 |*| tstActive2 |*| tstNums |*| tstInactive
 main :: IO ()
 main = runSireaApp $ allTests
 
-tstCycle :: BCX w (S P0 ()) (S P0 ())
-tstCycle = snd dm >>> bdelay 1.0 >>> bfchoke >>> bfmap addOne >>> bprint show >>> fst dm
+tstCycle :: B (S P0 ()) (S P0 ())
+tstCycle = snd dm >>> bdelay 1.0 >>> bfmap addOne >>> bprint >>> fst dm
      where dm = demandMonitor "tstCycle"
-           addOne = succ . maximum . ((0::Int):)
+           addOne = succ . S.findMax . S.insert (0 :: Int)
 
 -- 'int' is just a type annotation to help inference
 int :: Int -> Int

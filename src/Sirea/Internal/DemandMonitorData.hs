@@ -17,7 +17,7 @@
 -- values.
 -- 
 module Sirea.Internal.DemandMonitorData
-    ( DemandAggr, newDemandAggr, newDemandAggrEqf, newDemandLnk
+    ( DemandAggr, newDemandAggr, newDemandLnk
     , MonitorDist, newMonitorDist, primaryMonitorLnk, newMonitorLnk
     ) where
 
@@ -36,7 +36,6 @@ import Sirea.Partition
 import Sirea.Internal.Tuning (dtDaggrHist, dtMdistHist)
 import Sirea.Internal.LTypes -- for convenient SigSt, et. al.
 import Sirea.Internal.Choke
-import Sirea.Internal.EqChoke
 
 -- import Debug.Trace (traceIO)
 -- showK = ("U#" ++) . show . hashUnique
@@ -61,21 +60,12 @@ data DemandData e z = DemandData
     }
 
 -- | Create a demand aggregator, given the output target.
-newDemandAggr :: PSched -> (LnkUp z) -> ([Sig e] -> Sig z) 
-              -> IO (DemandAggr e z)
+-- NOTE: Client must choke the given link if there is any risk of
+-- cyclic dependency.
+newDemandAggr :: PSched -> (LnkUp z) -> ([Sig e] -> Sig z) -> IO (DemandAggr e z)
 newDemandAggr pd lu zp = 
     newIORef ddZero >>= \ rf ->
     newChoke pd lu >>= \ luChoked ->
-    return (DemandAggr rf zp luChoked pd)
-
--- | Create a demand aggregator that also attempts to detect when
--- there has been no change in the signal to eliminate a portion of
--- non-essential updates.
-newDemandAggrEqf :: (Ord z) => PSched -> LnkUp z -> ([Sig e] -> Sig z) 
-                 -> IO (DemandAggr e z)
-newDemandAggrEqf pd lu zp =
-    newIORef ddZero >>= \ rf ->
-    newEqChoke pd lu >>= \ luChoked ->
     return (DemandAggr rf zp luChoked pd)
 
 ddZero :: DemandData e z
@@ -505,6 +495,12 @@ mlnZero lzOut =
 --
 -- Link updates will cause a full GC of the MonitorDist (and all 
 -- observer links), at the end of the step.
+--
+-- The first update on an MLN will activate it, and determines a
+-- minimum stability for further observations (i.e. the observer's
+-- signal will never earlier than when we begin observing). This 
+-- helps control against bad behavior for stability in cycles after
+-- waking from suspend or other pauses in computation.
 updateMLN :: MonitorDist z -> Unique -> StableT -> T -> Sig () -> IO ()
 updateMLN md k tS tU su = updateMLN' md k $ \ mln ->
     let st' = st_update tS tU su (mln_signal mln) in

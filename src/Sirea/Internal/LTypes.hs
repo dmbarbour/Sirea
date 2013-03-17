@@ -90,14 +90,10 @@ type Lnk = LnkM IO
 --   ln_cycle: recognize cycles; if one's own unique token is in the
 --      set, it must have arrived by cycle. If not, add one's token,
 --      then pass it on. Where cycles are detected, they can be cut
---      by delaying updates to a future step. (Developers can dampen
---      cycles by use of bfchoke.) Most links just pass this on.
+--      by delaying updates to a future step. Most links just pass
+--      it forward, since they can't cut or contribute to cycles. A
+--      shared resource might add a test here.
 --
---      Only IO resources have cycles, so they can access newUnique.
---      Only cycles within a partition, where ln_touch is used, need
---      to be broken this way. Cycles should not be used unless
---      touch is also used in the same step. Some behaviors record
---      cycles and need to cleanup the record upon update.
 --
 data LnkUpM m a = LnkUp
     { ln_touch  :: !(m ())
@@ -107,6 +103,13 @@ data LnkUpM m a = LnkUp
     }
 type LnkUp = LnkUpM IO
 type CycleSet = Set Unique
+
+-- QUESTION: Can I cut cycle-tests to just once per step?
+--
+-- ANSWER: I potentially could, if I limited to static links per a
+-- step (e.g. at MonitorDist). OTOH, I shouldn't really need to test
+-- cycles more than once per resource anyway.
+--   
 
 -- | StableT is a promise of stability of the model, a time value 
 -- for which the past is fixed and will no longer receive updates.

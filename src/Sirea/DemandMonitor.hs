@@ -56,6 +56,7 @@ import Sirea.UnsafeLink
 import Sirea.Partition
 import Sirea.PCX
 import Sirea.Internal.DemandMonitorData
+import Sirea.Internal.B0Impl (wrapLnEqShift)
 
 -- | DemandMonitor is a synonym for the (demand,monitor) facet pair 
 type DemandMonitor b p e z = (b (S p e) (S p ()), b (S p ()) (S p z))
@@ -97,8 +98,9 @@ newDMD :: (Partition p, Ord e) => PCX p -> IO (DemandAggr e (Set e), MonitorDist
 newDMD cp =     
     getPSched cp >>= \ pd ->
     newMonitorDist pd (s_always S.empty) >>= \ md ->
-    let lnMon = primaryMonitorLnk md in
-    newDemandAggrEqf pd lnMon setZip >>= \ d ->
+    let lu = primaryMonitorLnk md in
+    wrapLnEqShift (==) lu >>= \ luEq ->
+    newDemandAggr pd luEq (s_adjeqf (==) . setZip) >>= \ d ->
     return (d,md)
 
 setZip :: (Ord e) => [Sig e] -> Sig (Set e)
@@ -123,13 +125,15 @@ newAMon :: (Partition p) => PCX p -> IO (DemandAggr () Bool, MonitorDist Bool)
 newAMon cp =     
     getPSched cp >>= \ pd ->
     newMonitorDist pd (s_always False) >>= \ md ->
-    let lnMon = primaryMonitorLnk md in
-    newDemandAggrEqf pd lnMon amonZip >>= \ d ->
+    let lu = primaryMonitorLnk md in
+    wrapLnEqShift (==) lu >>= \ luEq ->
+    newDemandAggr pd luEq amonZip >>= \ d ->
     return (d,md)
 
 amonZip :: [Sig ()] -> Sig Bool
 amonZip = 
     s_full_map (Just . isJust) .
+    s_const () .
     foldr s_merge s_never 
 
 demandFacetB :: (PCX W -> IO (DemandAggr e z)) -> B (S p e) (S p ())

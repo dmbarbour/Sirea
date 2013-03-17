@@ -24,9 +24,9 @@ timeString t =
                     else show x
 
 ttshow (t,b) = timeString t ++ " -> " ++ show b
-bttshow = bprint ttshow
+bttshow = bprintWith ttshow
 
-bTT :: DT -> BCX w (S P0 ()) (S P0 ())
+bTT :: DT -> B (S P0 ()) (S P0 ())
 bTT dt = bvoid $ bclockSeconds >>> bfmap (`addTime` dt) >>> (bfwd &&& btimeTrigger) >>> bzip >>> bttshow
 
 bTT0 = bTT 0

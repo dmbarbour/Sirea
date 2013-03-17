@@ -22,7 +22,7 @@ import Sirea.Partition (BCross(..),Partition(..), Pt, P0)
 import Sirea.BDeep
 import Sirea.Time (T,DT)
 import Sirea.DemandMonitor (demandMonitor)
-import Sirea.Utility (bprint)
+import Sirea.Utility
 import Sirea.Clock (bclockHours, bclockMinutes, bclockSeconds)
 import Sirea.TimeTrigger 
 

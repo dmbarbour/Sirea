@@ -12,30 +12,32 @@ import Sirea.Prelude
 import Sirea.Clock
 import Sirea.Time
 
-fib :: BCX w (S P0 Int) (S P0 Int)
+fib :: B (S P0 Int) (S P0 Int)
 fib = (bfmap dynFib &&& (bfmap pred >>> (bfwd &&& bfmap pred))) >>> 
-       bevalb 0 >>> bright (bconst (-1)) >>> bmerge
+       bbeval 0 >>> bright (bconst (-1)) >>> bmerge
 
-dynFib :: Int -> BCX w (S P0 Int :&: S P0 Int) (S P0 Int)
+dynFib :: Int -> B (S P0 Int :&: S P0 Int) (S P0 Int)
 dynFib n = if (n < 2) then bfst >>> bconst n
                       else (fib *** fib) >>> bzipWith (+)
 
-fibPrint :: BCX w (S P0 Int) (S P0 ())
-fibPrint = (bfwd &&& fib) >>> bzipWith showFib >>> bprint_
+fibPrint :: B (S P0 Int) S1
+fibPrint = (bfwd &&& fib) >>> bzipWith showFib >>> bprint >>> btrivial
 
 showFib :: Int -> Int -> String
 showFib n fibn = "Fib(" ++ show n ++ ") = " ++ show fibn
 
 -- rotate numbers from 0..9 repeatedly, at 1 Hz 
-rotateI :: BCX w (S p ()) (S p Int)
+rotateI :: (Partition p) => B (S p ()) (S p Int)
 rotateI = bclockOfFreq 1 >>> bfmap tkI
     where tkI = fromInteger . (`div` nInnerPeriod) . (`mod` nOuterPeriod) . tmNanos
           nOuterPeriod = 10000000000  -- 10 seconds
           nInnerPeriod =  1000000000  -- 1 second
 
-rotateFib :: BCX w (S P0 ()) (S P0 ())
+rotateFib :: B (S P0 ()) S1
 rotateFib = rotateI >>> fibPrint
 
 main :: IO ()
-main = runSireaApp $ bconst 11 >>> fibPrint >>> bUnsafeExit
+main = do
+    putStrLn "Hit Ctrl+C to exit" 
+    runSireaApp $ bconst 11 >>> fibPrint
 

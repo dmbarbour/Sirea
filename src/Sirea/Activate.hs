@@ -35,7 +35,7 @@ import Sirea.B
 import Sirea.Time
 import Sirea.Signal
 
---import Debug.Trace (traceIO)
+import Debug.Trace (traceIO)
 
 -- IDEA: Have runSireaApp wrap the main application with a dynamic
 -- behavior (bexec, etc.). Then use this to model restart. Switch
@@ -173,8 +173,10 @@ beginApp cw rfSD lu =
                 , ap_link = lu }
     in
     apTime ap >>= \ tNow ->
-    let tForcingRestart = tNow `subtractTime` (dtRestart + 1) in
-    maintainApp ap (StableT tForcingRestart)
+    let tS = StableT (tNow `addTime` dtStability) in
+    let tU = tNow `addTime` dtGrace in
+    ln_update (ap_link ap) tS tU (s_always ()) >>
+    apSched ap (maintainApp ap tS)
     
 -- schedule will delay an event then perform it in another thread.
 -- Sirea only does this with one thread at a time.
@@ -212,6 +214,7 @@ maintainApp ap (StableT tS0) =
        then let tR = tNow `addTime` dtGrace in
             let tU = tS0 in
             let su = s_switch s_never tR (s_always ()) in
+            traceIO ("Sirea app restart: " ++ show tS0 ++ " -> " ++ show tR) >>
             ln_update (ap_link ap) tS tU su
        else ln_idle (ap_link ap) tS
 

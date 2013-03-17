@@ -2,7 +2,7 @@
 
 -- | Utility behaviors that lack a better home. 
 module Sirea.Utility
-    ( bprint
+    ( bprint, bprintWith
     , bundefined
     ) where
 
@@ -41,12 +41,14 @@ import Control.Exception (assert)
  -}
 
 
-
 -- | Print allows developer to provide show function (a -> String)
 -- and preserves the type of the input. This makes it easier to
 -- inject bprint into a behavior for debugging.
 bprint :: (Show a) => B (S P0 a) (S P0 a)
-bprint = bvoid $ bfmap show >>> bprint_
+bprint = bprintWith show
+
+bprintWith :: (a -> String) -> B (S P0 a) (S P0 a)
+bprintWith fn = bvoid $ bfmap fn >>> bprint_
 
   -- TODO: switch to demand monitor + agent resource for console printing
 bprint_ :: B (S P0 String) S1

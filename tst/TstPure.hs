@@ -11,22 +11,22 @@ import Sirea.Time
 import Control.Monad (unless)
 
 -- assertions
-assertb :: String -> (a -> Bool) -> BCX w (S P0 a) (S P0 a)
-assertb tstName test = bvoid $ bfmap test >>> unsafeOnUpdateBCX mkAssert
+assertb :: String -> (a -> Bool) -> B (S P0 a) (S P0 a)
+assertb tstName test = bvoid $ bfmap test >>> unsafeOnUpdateB mkAssert
     where mkAssert _ = return doAssert
           doAssert _ = maybe (return ()) $ \ b ->
                         if b then putStrLn ("PASS: " ++ tstName)
                              else ioError $ userError ("FAIL: " ++ tstName)
 
 -- test for dead code due to binl or binr - shouldn't even create bcx.
-assertDeadOnInput :: String -> BCX w (S P0 x) (S P0 x)
-assertDeadOnInput msg = bvoid $ bconst () >>> unsafeOnUpdateBCX mkAssert
+assertDeadOnInput :: String -> B (S P0 x) (S P0 x)
+assertDeadOnInput msg = bvoid $ bconst () >>> unsafeOnUpdateB mkAssert
     where mkAssert _ = ioError (userError ("FAIL: " ++ msg)) >> undefined
 
 -- test for dead code on output. This requires a lazy assertion, otherwise
 -- the assertion itself would keep the behavior alive for output. 
-assertDeadOnOutput :: String -> BCX w (S P0 ()) (S P0 ())
-assertDeadOnOutput msg = bconst () >>> unsafeOnUpdateBCXL mkAssert
+assertDeadOnOutput :: String -> B (S P0 ()) (S P0 ())
+assertDeadOnOutput msg = bconst () >>> unsafeOnUpdateBL mkAssert
     where mkAssert _ = ioError (userError ("FAIL: " ++ msg)) >> undefined
 
 
@@ -62,7 +62,7 @@ allTests = tstConst >>> tstFmap >>> tstZip >>> tstSwap >>> tstAssocp
        >>> tstSplitL >>> tstSplitR >>> tstInL >>> tstInR
        >>> tstDisjoinL >>> tstDisjoinR
        >>> tstDeadOutput
-       >>> bvoid (bconst "Hit Ctrl+C to End!" >>> bprint_)
+       >>> bvoid (bconst "Hit Ctrl+C to End!" >>> bprint)
        
 
 --joinTests :: 
@@ -70,27 +70,15 @@ allTests = tstConst >>> tstFmap >>> tstZip >>> tstSwap >>> tstAssocp
 
 -- rotate from 0..99 then back again, quickly (every 1/10th second)
 -- this is intended to serve as a simple variable for tests.
-rotateI :: BCX w (S p ()) (S p Int)
+rotateI :: B (S P0 ()) (S P0 Int)
 rotateI = bclockOfFreq 10 >>> bfmap tkI
     where tkI = fromInteger . (`div` sTenth) . (`mod` sTen) . tmNanos
           sTen   = 10000000000   -- 10 seconds
           sTenth =   100000000   -- 100 milliseconds
 
-cascade :: BCX w (S P0 ()) (S P0 Int :|: S P0 Int)
-cascade = rotateI >>> bsplitOn (\ x -> (x `mod` 20 < 10)) >>> (bprint show +++ bprint (\x -> "      " ++ show x))
+cascade :: B (S P0 ()) (S P0 Int :|: S P0 Int)
+cascade = rotateI >>> bsplitOn (\ x -> (x `mod` 20 < 10)) >>> (bprintWith show +++ bprintWith (\x -> "      " ++ show x))
 
--- maybe a behavior that uses anticipation:
---  rotateI, anticipate at 0.12, 0.24, 0.36.
---           print sequences of four values, one per line.
---seqmon :: BCX w (S P0 ()) (S P0 ()) 
-seqmon :: BCX w (S P0 ()) (S P0 ())
-seqmon = bvoid $ rotateI >>> takeFour >>> joinFour >>> bprint show
-    where takeFour = bfmap Left &&& (bpeek 0.12 &&& (bpeek 0.24 &&& bpeek 0.36))
-          j4 (Left x1) (Left x2) (Left x3) (Left x4) = [x1,x2,x3,x4]
-          j4 _ _ _ _ = []
-          joinFour = bfirst (bfmap j4) >>>
-                     bassoclp >>> bfirst bzap >>>
-                     bassoclp >>> bfirst bzap >>> bzap 
                               
 
 -- tests to perform:

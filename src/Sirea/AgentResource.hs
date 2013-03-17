@@ -41,6 +41,7 @@ import Sirea.Time
 
 import Sirea.Internal.B0Compile (compileB0)
 import Sirea.Internal.DemandMonitorData
+import Sirea.Internal.B0Impl (wrapLnEqShift)
 import Sirea.Internal.LTypes
 
 -- | The RDP behaviors of AgentResources are defined in a typeclass.
@@ -97,7 +98,8 @@ newAR cw = mfix $ \ ar -> -- fix cyclic dependencies
     let lcaps = LnkSig (LCX lc0) in
     let make = ln_lnkup <$> snd (compileB0 b0 lcaps LnkDead) in 
     let lu = LnkUp (touchAR ar) (updateAR ar) (idleAR ar) (cycleAR ar) in
-    newDemandAggrEqf pd lu sigActive >>= \ da ->
+    wrapLnEqShift (==) lu >>= \ luEq ->
+    newDemandAggr pd luEq sigActive >>= \ da ->
     return (AR da make rf)
     
 -- functions getABS, getDuty, getPCX mostly for type wrangling
@@ -111,9 +113,9 @@ getPCX :: (Partition p) => AR p duty -> PCX W -> IO (PCX p)
 getPCX _ = findInPCX
     
 -- simple merge of activity signals
-sigActive :: [Sig ()] -> Sig ()
+sigActive :: [Sig a] -> Sig ()
 sigActive [] = s_never
-sigActive (s:ss) = foldl (<|>) s ss
+sigActive (s:ss) = s_const () $ foldl (<|>) s ss
 
 -- Touch on AgentResource will forward touch to the agent.
 -- It also instantiates the agent, if needed.

@@ -24,8 +24,8 @@ timeString t =
 
 -- using clock, printing based on stability. (Only works for low rate
 -- clocks... up to ~20Hz. Higher rate will update in bursts.)
-bCC :: BCX w (S P0 ()) (S P0 ())
-bCC = bvoid $ bclockSeconds >>> bforce (`seq` ()) >>> bprint timeString
+bCC :: B (S P0 ()) (S P0 ())
+bCC = bvoid $ bclockSeconds >>> bseq >>> bprintWith timeString
 
 main :: IO ()
 main = 
