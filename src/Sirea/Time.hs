@@ -1,4 +1,4 @@
-
+{-# LANGUAGE DeriveDataTypeable #-}
 module Sirea.Time
     ( T
     , tmDay,tmNanos
@@ -14,7 +14,9 @@ import Data.Ratio ((%),numerator,denominator)
 import qualified Data.Time.Clock as CW
 import qualified Data.Time.Calendar as Cal
 import Data.Function (on)
+import Data.Typeable
 import Control.Exception (assert)
+
 
 -- | T - a fixpoint representation of time UTC with nanosecond
 -- precision, as a pair of integers. Time in Sirea is modeled as  
@@ -30,6 +32,7 @@ import Control.Exception (assert)
 -- 
 -- Construct via mkTime, fromUTC, or getTime. 
 data T = T {-# UNPACK #-} !Int32 {-# UNPACK #-} !Int64
+    deriving (Typeable)
 
 _tmDay :: T -> Int32
 _tmDay (T d _) = d

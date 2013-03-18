@@ -17,7 +17,7 @@
 -- values.
 -- 
 module Sirea.Internal.DemandMonitorData
-    ( DemandAggr, newDemandAggr, newDemandLnk
+    ( DemandAggr, newDemandAggr, newDemandAggrRaw, newDemandLnk
     , MonitorDist, newMonitorDist, primaryMonitorLnk, newMonitorLnk
     ) where
 
@@ -37,8 +37,8 @@ import Sirea.Internal.Tuning (dtDaggrHist, dtMdistHist, tAncient)
 import Sirea.Internal.LTypes -- for convenient SigSt, et. al.
 import Sirea.Internal.Choke
 
--- import Debug.Trace (traceIO)
--- showK = ("U#" ++) . show . hashUnique
+import Debug.Trace (trace,traceIO)
+showK = ("U#" ++) . show . hashUnique
 
 writeIORef' :: IORef a -> a -> IO ()
 writeIORef' rf a = a `seq` writeIORef rf a
@@ -67,13 +67,17 @@ data DemandData e z = DemandData
     }
 
 -- | Create a demand aggregator, given the output target.
--- NOTE: Client must choke the given link if there is any risk of
--- cyclic dependency.
+-- NOTE: This operation builds in 'choke' automatically.
 newDemandAggr :: PSched -> (LnkUp z) -> ([Sig e] -> Sig z) -> IO (DemandAggr e z)
 newDemandAggr pd lu zp = 
-    newIORef ddZero >>= \ rf ->
     newChoke pd lu >>= \ luCk ->
-    return (DemandAggr rf zp luCk pd)
+    newDemandAggrRaw pd luCk zp
+
+-- | Same as newDemandAggr, but no default choke operation.
+newDemandAggrRaw :: PSched -> (LnkUp z) -> ([Sig e] -> Sig z) -> IO (DemandAggr e z)
+newDemandAggrRaw pd lu zp =
+    newIORef ddZero >>= \ rf ->
+    return (DemandAggr rf zp lu pd)
 
 ddZero :: DemandData e z
 ddZero = DemandData
@@ -111,7 +115,7 @@ touchDaggr da k =
         let tc' = succ (dd_touchCt dd) in
         let dd' = dd { dd_touchCt = tc', dd_table = tbl' } in
         writeIORef' (da_data da) dd' >>
-        -- traceIO ("touchDaggr " ++ showK k ++ ". tc = " ++ show tc') >>
+        --traceIO ("touchDaggr " ++ showK k ++ ". tc = " ++ show tc') >>
         when (1 == tc') (ln_touch (da_link da))
         
        
@@ -126,7 +130,7 @@ idleDaggr da k tS =
     let tbl' = M.insert k st' (dd_table dd) in
     let dd' = dd { dd_table = tbl', dd_touchCt = tc' } in
     writeIORef' (da_data da) dd' >>
-    -- traceIO ("idleDaggr " ++ showK k ++ ". tc = " ++ show tc') >>
+    --traceIO ("idleDaggr " ++ showK k ++ ". tc = " ++ show tc') >>
     when (0 == tc') (deliverDaggr da)
 
 -- called on update for a demand source
@@ -141,7 +145,7 @@ updateDaggr da k tS tU su =
     let tmup' = Just $! maybe tU (min tU) (dd_tmup dd) in
     let dd' = dd { dd_touchCt = tc', dd_table = tbl', dd_tmup = tmup' } in
     writeIORef' (da_data da) dd' >>
-    -- traceIO ("updateDaggr " ++ showK k ++ ". tc = " ++ show tc') >>
+    --traceIO ("updateDaggr " ++ showK k ++ ". tc = " ++ show tc' ++ "  tU = " ++ show tU) >>
     when (0 == tc') (deliverDaggr da)
 
 -- deliverDaggr is called in the update phase by idle, update, or 
@@ -157,7 +161,6 @@ deliverDaggr :: DemandAggr e z -> IO ()
 deliverDaggr da = 
     readIORef (da_data da) >>= \ dd ->
     stepTime (da_psched da) >>= \ tNow ->
-    -- traceIO ("deliverDaggr @ " ++ show tNow) >>
     assert (0 == dd_touchCt dd) $
     let lst = M.toAscList (dd_table dd) in
     let tSMax = StableT $! tNow `subtractTime` dtDaggrHist in
@@ -183,9 +186,12 @@ deliverDaggr da =
     when bInitFlush (eventually (da_psched da) (flushDaggr da)) >>
     case dd_tmup dd of
         Nothing -> 
+            --traceIO ("daggr idle   @ " ++ show tS) >>
             ln_idle (da_link da) tS 
         Just tU0 ->
             let tU = max tU0 (inStableT tSMin) in
+            --traceIO ("daggr update @ " ++ show tU ++ " N=" ++ show (length lst)) >>
+            --traceIO ("daggr contribs = " ++ show (map (hashUnique . fst) lst)) >>
             let lSigs = fmap ((`s_trim` tU) . st_signal . snd) lst in
             let su = da_nzip da lSigs in
             ln_update (da_link da) tS tU su
@@ -198,7 +204,8 @@ daggrTableGC tGC tT (k,st) =
     let s' = s_trim (st_signal st) tGC in
     let bDone = s_term2 s' tGC tT in
     let st' = st { st_signal = s' } in
-    if bDone then Nothing else st' `seq` Just (k, st')
+    if bDone then Nothing 
+             else st' `seq` Just (k, st')
 
 -- A flush acts as a false update. Flush is called from deliverDaggr
 -- when the DemandAggr's stability is clock-bounded, to run on the
@@ -208,6 +215,7 @@ daggrTableGC tGC tT (k,st) =
 flushDaggr :: DemandAggr e z -> IO ()
 flushDaggr da = initFlush where
     initFlush = 
+        --traceIO ("flushDaggr") >>
         readIORef (da_data da) >>= \ dd ->
         assert (dd_flushSched dd) $
         if dd_flush dd then continue dd else cancel dd
@@ -295,6 +303,7 @@ primaryMonitorLnk md = LnkUp touch update idle cyc where
     touch = 
         readIORef (md_data md) >>= \ mdd ->
         unless (mdd_expect mdd) $
+            -- traceIO ("MonitorDist Touch") >>
             let mdd' = mdd { mdd_expect = True } in
             writeIORef' (md_data md) mdd' >> -- record touch
             schedCleanupMD md >> -- auto cleanup at end of step
@@ -305,6 +314,7 @@ primaryMonitorLnk md = LnkUp touch update idle cyc where
         readIORef (md_cycle md) >>= \ n0 ->
         let nf = S.union n0 n in
         unless (S.size nf == S.size n0) $
+            -- traceIO ("MonitorDist cycle") >>
             writeIORef' (md_cycle md) nf >>
             schedCleanupMD md >> -- clear cycle data at end of step
             -- distribute cycle info to active observers
@@ -312,24 +322,28 @@ primaryMonitorLnk md = LnkUp touch update idle cyc where
             let lst = M.elems (mdd_table mdd) in
             mapM_ (flip ln_cycle nf . mln_link) lst
     idle tS = processUpdates tS $ \ mdd ->
+        --trace ("idle   MD @ " ++ show tS) $
         assert (tS >= mdd_stable mdd) $
         mdd { mdd_stable = tS, mdd_active = True, mdd_expect = False } 
     update tS tU su = processUpdates tS $ \ mdd ->
+        --trace ("update MD @ " ++ show tS ++ " " ++ show tU) $
         assert (tS >= mdd_stable mdd) $
+        assert (isNothing (mdd_tmup mdd)) $
         let s' = s_switch' (mdd_signal mdd) tU su in
-        let tmup' = Just $! maybe tU (min tU) (mdd_tmup mdd) in
         mdd { mdd_signal = s', mdd_stable = tS, mdd_active = True
-            , mdd_expect = False, mdd_tmup = tmup' } 
+            , mdd_expect = False, mdd_tmup = Just tU } 
     processUpdates tS fnUpMDD =
+        -- traceIO ("MonitorDist update " ++ show tS) >>
         readIORef (md_data md) >>= \ mdd ->
         assert (mdd_expect mdd) $
         let mdd' = fnUpMDD mdd in
-        assert ((not . mdd_expect) mdd') $
         writeIORef' (md_data md) mdd' >>
         deliverUpdates tS mdd'
     deliverUpdates tS mdd =
         let lObs = M.elems (mdd_table mdd) in
         let lReadyObs = filter (not . st_expect . mln_signal) lObs in
+        --traceIO ("delivering to observers ct=" ++ (show (length lReadyObs))
+        --                         ++ " of n=" ++ (show (length lObs))) >>
         mapM_ (deliverUpdateMD tS mdd) lReadyObs
 
 
@@ -349,15 +363,16 @@ deliverUpdateMD tMDD mdd mln = deliver where
     tMddObs = maybe tMDD (max tMDD) (mln_init mln) 
     tS = min tMddObs $ st_stable (mln_signal mln)
     tmup = leastTime (mdd_tmup mdd) (mln_tmup mln)
-    maskSig tU =
+    deliver = maybe idle update tmup
+    idle = 
+        --traceIO ("idle monln @ " ++ show tS) >>
+        ln_idle (mln_link mln) tS
+    update tU = 
+        --traceIO ("update monln @" ++ show tU ++ "  " ++ show tS) >>
         let sigZ = s_trim (mdd_signal mdd) tU in
         let sigM = s_trim ((st_signal . mln_signal) mln) tU in
-        s_mask sigZ sigM
-    deliver =
-        -- traceIO ("deliverUpdateMD @ " ++ show tNow) >>
-        case tmup of
-            Nothing -> ln_idle (mln_link mln) tS
-            Just tU -> ln_update (mln_link mln) tS tU (maskSig tU)
+        let su = s_mask sigZ sigM in
+        ln_update (mln_link mln) tS tU su
 
 leastTime :: Maybe T -> Maybe T -> Maybe T
 leastTime (Just a) (Just b) = Just $! min a b
@@ -390,7 +405,7 @@ schedCleanupMD md = schedCleanup where
         when bFlush schedFlush
     schedFlush = eventually (md_psched md) (schedCleanupMD md)
     cleanMDD tNow mdd = 
-        assert ((not . mdd_expect) mdd) $
+        assert (not (mdd_expect mdd)) $
         -- GC the main signal. Keep history for late-arriving observers.
         let tS = inStableT (mdd_stable mdd) in
         let tMDH = tNow `subtractTime` dtMdistHist in
@@ -403,6 +418,7 @@ schedCleanupMD md = schedCleanup where
         let tGCO = if bActive then tS else tDAH in
         let lst = M.toAscList (mdd_table mdd) in
         let tbl' = M.fromAscList $ mapMaybe (cleanMLN tGCO) lst in
+        --trace ("cleanMDD @ " ++ show tGCO ++ " : " ++ show (length lst) ++ " -> " ++ show (M.size tbl')) $
         -- cleaned result
         let mdd' = mdd { mdd_signal = s', mdd_active = bActive
                        , mdd_tmup = Nothing, mdd_table = tbl' }
@@ -452,7 +468,7 @@ touchMLN md lu0 k =
     let mln = fromMaybe (mlnZero lu0) mbMLN in
     let st = mln_signal mln in
     unless (st_expect st) $
-        -- traceIO ("touchMLN " ++ showK k) >>
+        --traceIO ("touchMLN " ++ showK k) >>
         let lu = mln_link mln in
         let bNeedTouch = bInit || (not (mdd_expect mdd)) in
         let st' = st_poke st in
@@ -493,6 +509,7 @@ mlnZero lzOut =
 -- waking from suspend or other pauses in computation.
 updateMLN :: MonitorDist z -> Unique -> StableT -> T -> Sig () -> IO ()
 updateMLN md k tS tU su = updateMLN' md k $ \ mln ->
+    --trace ("update MLN " ++ showK k ++ " " ++ show tS ++ " " ++ show tU) $
     let st' = st_update tS tU su (mln_signal mln) in
     let tmup' = Just $! maybe tU (min tU) (mln_tmup mln) in
     let init' = mln_init mln <|> (Just $! min (StableT tU) tS) in
@@ -500,6 +517,7 @@ updateMLN md k tS tU su = updateMLN' md k $ \ mln ->
 
 idleMLN :: MonitorDist z -> Unique -> StableT -> IO ()
 idleMLN md k tS = updateMLN' md k $ \ mln ->
+    --trace ("idle   MLN " ++ showK k ++ " " ++ show tS) $
     let st' = st_idle tS (mln_signal mln) in
     mln { mln_signal = st' }
 

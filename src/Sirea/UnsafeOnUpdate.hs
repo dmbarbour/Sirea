@@ -33,7 +33,7 @@ module Sirea.UnsafeOnUpdate
     ) where
 
 import Data.IORef
-import Control.Monad (unless)
+import Control.Monad (unless, when)
 import Control.Exception (assert)
 import Sirea.UnsafeLink
 import Sirea.Signal
@@ -44,7 +44,7 @@ import Sirea.PCX
 import Sirea.Partition
 import Sirea.Internal.Tuning (tAncient)
 
---import Debug.Trace
+import Debug.Trace (traceIO) 
 
 -- | unsafeOnUpdateB - perform an IO action for every unique value
 -- in a signal as it becomes stable, then forward the update. There
@@ -79,54 +79,54 @@ mkOnUpdate mkOp cw lu =
     findInPCX cw >>= \ cp ->
     getPSched cp >>= \ pd ->
     mkOp cp >>= \ op ->
-    newIORef (s_never, tAncient) >>= \ rfSig ->
-    newIORef Nothing >>= \ rfA ->
-    let lu' = luOnUpdate pd op rfSig rfA lu in
+    newIORef (P s_never (StableT tAncient)) >>= \ rfSig ->
+    let lu' = luOnUpdate pd op rfSig lu in
     return lu'
+
+-- simple strict pair
+--
+-- The recorded signal actually includes some values from before the
+-- StableT value such that we can filter duplicates. No other record
+-- of signal history is needed.
+data P z = P !(Sig z) {-# UNPACK #-} !StableT
 
 luOnUpdate  :: (Eq a) 
             => PSched -- to run actions at end of step
             -> (T -> Maybe a -> IO ()) -- operation to execute
-            -> IORef (Sig a, T) -- recorded signal; reported time
-            -> IORef (Maybe a)  -- last reported value
+            -> IORef (P a) -- recorded signal; reported time
             -> LnkUp a -- output sink (just forward input, but AFTER running)
             -> LnkUp a -- input source
-luOnUpdate pd op rfSig rfA lu = LnkUp touch update idle cyc where
+luOnUpdate pd op rfSig lu = LnkUp touch update idle cyc where
     touch = ln_touch lu
     cyc = ln_cycle lu
     idle tS =
-        readIORef rfSig >>= \ (s0,tLo) ->
-        let sCln = gcSig tS s0 in
-        let tHi = inStableT tS in
-        assert (tHi >= tLo) $
-        sCln `seq` tHi `seq`
-        writeIORef rfSig (sCln,tHi) >>
-        schedRunUpdates tLo tHi s0 >>
-        ln_idle lu tS 
+        readIORef rfSig >>= \ (P s0 tS0) ->
+        runUpdates tS0 tS s0 >>
+        ln_idle lu tS
     update tS tU su =
-        readIORef rfSig >>= \ (s0,tLo) ->
-        let sf = s_switch' s0 tU su in
-        let sCln = gcSig tS sf in
-        let tHi = inStableT tS in
-        assert (tHi >= tLo) $
-        sCln `seq` tHi `seq` 
-        writeIORef rfSig (sCln,tHi) >>
-        schedRunUpdates tLo tHi sf >>
+        readIORef rfSig >>= \ (P s0 tS0) ->
+        assert (tU >= inStableT tS0) $
+        let s' = s_switch' s0 tU su in
+        runUpdates tS0 tS s' >>
         ln_update lu tS tU su
-    schedRunUpdates tLo tHi sig =
-        let tLoR = tLo `subtractTime` nanosToDt 1 in
-        let lOps = takeWhile ((< tHi) . fst) $
-                   dropWhile ((< tLo) . fst) $
-                   sigToList sig tLoR tHi 
+    lessOneNano tm = tm `subtractTime` nanosToDt 1
+    record tS sig = 
+        let p = P sig tS in 
+        p `seq` writeIORef rfSig p
+    runUpdates tS0 tS s =
+        assert (tS >= tS0) $
+        if (tS0 == tS) then record tS s else
+        let tLo  = inStableT tS0 in
+        let tLoR = lessOneNano tLo in -- for equality filter
+        let tHi  = inStableT tS in
+        let sGC = s_trim s (lessOneNano tHi) in
+        record tS sGC >>
+        let ops = takeWhile ((< tHi) . fst) $
+                  dropWhile ((< tLo) . fst) $
+                  sigToList (s_adjeqf (==) s) tLoR tHi 
         in
-        unless (null lOps) (onStepEnd pd (mapM_ runOp lOps))
-    runOp (t,a) =
-        readIORef rfA >>= \ a0 ->
-        unless (a0 == a) $
-            writeIORef rfA a >>
-            op t a
+        unless (null ops) (schedOps ops)
+    schedOps = onStepEnd pd . mapM_ runOp
+    runOp (t,a) = op t a
 
-
-gcSig :: StableT -> Sig x -> Sig x
-gcSig (StableT tm) s0 = s_trim s0 tm
-
+ 

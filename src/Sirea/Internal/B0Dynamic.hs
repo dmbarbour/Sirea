@@ -150,9 +150,9 @@ data Evaluator m x y = Evaluator
     , ev_dynX     :: !(LnkW (Dyn m) x) -- source links
     }
 data EVD m x y = EVD 
-    { evd_signal  :: !(Sig (B0s1 m x y)) -- signal of dynamic behaviors
-    , evd_stable  :: {-# UNPACK #-} !StableT -- last reported stability
-    , evd_tCut    :: {-# UNPACK #-} !T   -- upper bound for compiled signal
+    { _evd_signal  :: !(Sig (B0s1 m x y)) -- signal of dynamic behaviors
+    , _evd_stable  :: {-# UNPACK #-} !StableT -- last reported stability
+    , _evd_tCut    :: {-# UNPACK #-} !T   -- upper bound for compiled signal
     }
     -- note: tCut is an exclusive upper bound; an update exactly at tCut 
     -- will not have already been compiled. 
@@ -200,22 +200,20 @@ lnkEvalB0 ev = LnkUp touch update idle cyc where
     touch = return () -- dynamic behavior updates delay to next step
     cyc _ = return () -- cycles are broken by the automatic delay
     update tS tU su = 
-        readRef (ev_data ev) >>= \ evd ->
-        let s = s_switch' (evd_signal evd) tU su in
-        let tC = evd_tCut evd in
+        readRef (ev_data ev) >>= \ (EVD s0 tS0 tC) ->
+        let s = s_switch' s0 tU su in
         let tLo = min tC tU in
-        let tHi = inStableT tS `addTime` dtCompile in
-        upd' (evd_stable evd) tS s tLo tHi
+        assert (tU >= inStableT tS0) $ -- respects stability?
+        upd' tS0 tS s tLo
     idle tS =
-        readRef (ev_data ev) >>= \ evd ->
-        let tLo = evd_tCut evd in
+        readRef (ev_data ev) >>= \ (EVD s0 tS0 tC) ->
+        upd' tS0 tS s0 tC
+    upd' tS0 tS s tLo =
         let tHi = inStableT tS `addTime` dtCompile in
-        upd' (evd_stable evd) tS (evd_signal evd) tLo tHi
-    upd' tS0 tS s tLo tHi =
         assert (tS >= tS0) $
         assert (tHi >= tLo) $
-        let sGC = s_trim s (inStableT tS) in
         let tLoR = tLo `subtractTime` nanosToDt 1 in
+        let sGC = s_trim s (inStableT tS) in
         let range = takeWhile ((< tHi) . fst) $
                     dropWhile ((< tLo) . fst) $
                     sigToList s tLoR tHi 

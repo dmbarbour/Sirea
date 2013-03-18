@@ -13,21 +13,19 @@ import Sirea.Internal.B0Impl
 import Sirea.Internal.LTypes
 import Sirea.Partition (P0)
 import Sirea.UnsafeOnUpdate 
-import Sirea.PCX 
-import Sirea.Time
+--import Sirea.PCX 
+--import Sirea.Time
 import Sirea.Signal
 import Sirea.UnsafeLink
-import Sirea.Internal.Tuning (dtPrintExpire)
-import Data.Typeable
 import Data.IORef
 import Data.Maybe (isNothing)
-import Control.Monad (when, liftM, unless)
+import Control.Monad (unless)
 import Control.Exception (assert)
 
 {- IDEA: a more useful, more declarative console?
      Rejected: Console input isn't suitable for persistent, reactive
      models like Sirea. A user-input file is much more promising as
-     primitive input models go.
+     primitive input models go, and more broadly useful for configs.
  -}
 
 {- TODO: a TimeStamp state behavior:
@@ -36,50 +34,24 @@ import Control.Exception (assert)
    Inherently volatile. No need for persistence.
  -}
 
-{- TODO: a useful variation on 'peek' for interpolation.
-     bpeekL :: (Eq a) => DT -> B (S p a) (S p (a,[(T,Maybe a)]))
- -}
-
-
--- | Print allows developer to provide show function (a -> String)
--- and preserves the type of the input. This makes it easier to
--- inject bprint into a behavior for debugging.
+-- | Print uses the show function, and forwards the input unaltered.
+--      bprint = bprintWith show
+-- Note: at the moment, bprint isn't quite complete. It should act
+-- as a resource, or upon a resource, to ensure precise logic. I'll
+-- fix it up later, but the behavior will change subtly.
 bprint :: (Show a) => B (S P0 a) (S P0 a)
 bprint = bprintWith show
 
+-- | Provide your own show function for printing.
 bprintWith :: (a -> String) -> B (S P0 a) (S P0 a)
 bprintWith fn = bvoid $ bfmap fn >>> bprint_
 
   -- TODO: switch to demand monitor + agent resource for console printing
 bprint_ :: B (S P0 String) S1
 bprint_ = unsafeOnUpdateB mkPrinter >>> btrivial
-    where mkPrinter cw = findInPCX cw >>= return . mbPrint . pb_list
-          mbPrint _ _ Nothing = return ()
-          mbPrint pbL t (Just msg) = addToPrinter pbL t msg
-
-addToPrinter :: IORef [(T,String)] -> T -> String -> IO ()
-addToPrinter pbl t msg = 
-    readIORef pbl >>= \ lRC ->
-    let (lRC', bPrint) = updatelRC t msg lRC in
-    writeIORef pbl lRC' >>
-    when bPrint (putStrLn msg)
-
-
-updatelRC :: T -> String -> [(T,String)] -> ([(T,String)],Bool)
-updatelRC t msg lRC = 
-    let (lRC',bPrint) = foldr fn ([],True) lRC in
-    if bPrint then ((t,msg):lRC',True)
-              else (lRC',False)
-    where tExpire = t `subtractTime` dtPrintExpire
-          fn r@(tx,mx) (l,b) =
-            if (tx < tExpire) then (l,b) else
-            let b' = b && (msg /= mx) in
-            (r:l,b')
-
-newtype PrintBuffer = PrintBuffer { pb_list  :: IORef [(T,String)] } deriving (Typeable)
-instance Resource P0 PrintBuffer where
-    locateResource _ _ = liftM PrintBuffer $ newIORef [] 
-           
+    where mkPrinter _ = return (const mbPrint)
+          mbPrint Nothing = return ()
+          mbPrint (Just msg) = putStrLn msg
 
 -- | bundefined - exploratory programming often involves incomplete
 -- behaviors. `bundefined` serves a similar role to `undefined` in

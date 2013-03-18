@@ -8,7 +8,6 @@ module Sirea.Internal.Tuning
     , dtCompile
     , batchesInFlight    
     , dtDaggrHist, dtMdistHist
-    , dtPrintExpire  
     , tAncient  
     ) where
 
@@ -18,10 +17,15 @@ import Sirea.Time (T,DT,mkTime)
 -- periodic updates, heartbeats, graceful startup and shutdown. Also
 -- a reset period - if the main thread seems frozen too long, we'll
 -- model this in the activity signal.
+--
+-- The current heartbeat, 86.4ms, is chosen to be one millionth of a
+-- day, which is fairly convenient when time is represented in MJD.
+-- But any heartbeat between 10-30 Hz is reasonable. (Heartbeat in
+-- Sirea affects GC and performance, not semantics.)
 dtRestart, dtStability, dtHeartbeat, dtGrace :: DT
-dtRestart   = 2.00   -- how long a pause to force a restart
-dtStability = 0.30   -- stability of main signal (affects halting time)
-dtHeartbeat = 0.06   -- heartbeat and periodic increase of stability
+dtRestart   = 6 * dtStability  -- how long a pause to force a restart
+dtStability = 4 * dtHeartbeat  -- stability of main signal (affects halting time)
+dtHeartbeat = 0.0864 -- heartbeat and periodic increase of stability
 dtGrace     = dtHeartbeat -- time allotted for graceful start and stop
 
 -- A small update to stability is not always worth sending. It must
@@ -100,16 +104,8 @@ batchesInFlight = 6
 -- some historical data to accommodate late arriving observers. The
 -- demand sources aspect impacts stability, so is more limited. 
 dtDaggrHist, dtMdistHist :: DT
-dtDaggrHist = dtHeartbeat -- how long to tolerate late-arriving demands
-dtMdistHist = dtHeartbeat -- how long to tolerate late-arriving observers
-
--- For console printing, currently I use a simple expiration model
--- for old sentences. (I'd like to eventually develop a rigorous
--- model for console output, but this is sufficient for now and
--- roughly models a tuple space with expirations.)
---  (note: this won't be used in near future)
-dtPrintExpire :: DT
-dtPrintExpire = 6.0
+dtDaggrHist = 0.05 -- how long to tolerate late-arriving demands
+dtMdistHist = dtDaggrHist -- how long to tolerate late-arriving observers
 
 -- In some cases, I want to initialize structures with a lower bound
 -- for Time. But I don't want to pay code and performance overheads 
