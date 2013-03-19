@@ -26,7 +26,7 @@ import Sirea.Internal.PTypes
 import Sirea.Internal.BCross
 import Sirea.Internal.Thread
 import Sirea.Internal.PulseSensor (getPulseRunner)
-import Sirea.Internal.Tuning (dtRestart, dtHeartbeat, dtGrace)
+import Sirea.Internal.Tuning (dtRestart, dtHeartbeat, dtGrace, dtFinalize)
 import Sirea.Behavior
 import Sirea.Partition
 import Sirea.UnsafeOnUpdate
@@ -205,9 +205,9 @@ apTime = getTCTime . ap_tc0
 maintainApp :: AppPeriodic -> StableT -> IO ()
 maintainApp ap (StableT tS0) = 
     ap_pulse ap >> -- heartbeat
-    apTime ap >>= \ tNow ->
     readIORef (ap_sd ap) >>= \ sd ->
-    if shouldStop sd then haltApp ap tS0 tNow else
+    if shouldStop sd then haltApp ap tS0 else
+    apTime ap >>= \ tNow ->
     let tS = StableT tNow in
     apSched ap (maintainApp ap tS) >>
     if (tNow > (tS0 `addTime` dtRestart))
@@ -219,20 +219,21 @@ maintainApp ap (StableT tS0) =
        else ln_idle (ap_link ap) tS
 
 -- termination signal requested since last heartbeat
-haltApp :: AppPeriodic -> T -> T -> IO ()
-haltApp ap tS0 tNow =
-    let tS = StableT tNow in
-    apSched ap (stoppingApp ap tS) >>
-    ln_update (ap_link ap) tS tS0 s_never
+haltApp :: AppPeriodic -> T -> IO ()
+haltApp ap tHalt =
+    apTime ap >>= \ tNow ->
+    apSched ap (stoppingApp ap (tNow `addTime` dtGrace)) >>
+    let tS = StableT (tNow `addTime` dtFinalize) in
+    ln_update (ap_link ap) tS tHalt s_never
 
 -- After we set the main signal to inactive, we must still wait for
 -- real-time to catch up, and should run a final few heartbeats to
 -- provide any pulse actions.
-stoppingApp :: AppPeriodic -> StableT -> IO ()
+stoppingApp :: AppPeriodic -> T -> IO ()
 stoppingApp ap tFinal = 
     ap_pulse ap >> -- heartbeat
     apTime ap >>= \ tNow ->
-    if (tNow > inStableT tFinal) -- wait for real time to catch up
+    if (tNow > tFinal) -- wait for real time to catch up
         then let onStop = ap_pulse ap >> finiStopData (ap_sd ap) in
              let gs = ap_gs ap in
              runGobStopper gs (addTCRecv (ap_tc0 ap) onStop) >>
@@ -248,7 +249,6 @@ finalizingApp ap =
     readIORef (ap_sd ap) >>= \ sd ->
     unless (isStopped sd) $
         apSched ap (finalizingApp ap)
-
 
 -- | beginSireaApp activates a forever loop to process the SireaApp.
 -- Stopped by asynchronous exception, such as killThread or ctrl+c 

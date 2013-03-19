@@ -35,7 +35,7 @@ import Sirea.Internal.STypes
 import Sirea.Internal.LTypes
 import Sirea.Internal.B0Impl 
 import Sirea.Internal.B0Compile
-import Sirea.Internal.Tuning (dtCompile, tAncient)
+import Sirea.Internal.Tuning (dtCompile, dtFinalize, tAncient)
 import Sirea.Time
 import Sirea.Signal
 
@@ -412,7 +412,9 @@ gcPair (tx,kx) (ty,ky) = (tx >> ty, kx >> ky)
 -- when we switch to a new dynamic behavor, we kill behaviors that
 -- are no longer relevant. This recants signals starting at time tm.
 terminate :: T -> LnkUpM m a -> m ()
-terminate tKill lu = ln_update lu (StableT tKill) tKill s_never
+terminate tKill lu = 
+    let tS = StableT (tKill `addTime` dtFinalize) in
+    ln_update lu tS tKill s_never
 
 -- deliver the updated dynamic behavior input signals
 dynEmit :: (Monad m) => Dyn m a -> m ()
@@ -430,39 +432,53 @@ dynEmit (Dyn rf) =
     writeRef' rf dyn' >>
     case dyn_tmup dyn of
         Nothing ->
-            mapM_ (flip ln_idle tS . snd) bl 
+            deliverS tS bl
         Just tU ->
             let su = s_trim (st_signal (dyn_signal dyn)) tU in
             deliverDyn tS tU su bl
 
 -- Eliminate old links that won't be updated further.
 bl_clear :: T -> [(T,lu)] -> [(T,lu)]
-bl_clear tS bl@(_:r@(hi:_)) =
-    if (tS > fst hi) then bl_clear tS r else bl
+bl_clear tS bl@(_:r@(hi:_)) = 
+    if (tS >= fst hi) then bl_clear tS r else bl
 bl_clear _ bl = bl -- always keep last element
+
+-- Modify stability if we know it is the last update, to ensure GC
+finalStability :: StableT -> T -> StableT
+finalStability tS@(StableT tm) tHi = 
+    if (tm >= tHi) then StableT (tm `addTime` dtFinalize) else tS
+
+-- Deliver stability updates
+deliverS :: (Monad m) => StableT -> [(T,LnkUpM m x)] -> m ()
+deliverS _ [] = return ()
+deliverS tS (x:[]) = ln_idle (snd x) tS
+deliverS tS (lo:r@(hi:_)) = 
+    ln_idle (snd lo) (finalStability tS (fst hi)) >>
+    deliverS tS r
 
 -- deliver updates 
 deliverDyn :: (Monad m) => StableT -> T -> Sig x -> [(T,LnkUpM m x)] -> m ()
 deliverDyn _ _ _ [] = return () -- waiting on first behavior
 deliverDyn tS tU0 su (x:[]) = 
-    -- full update
+    -- full update; full speculated future
     let tU = max tU0 (fst x) in
     let lu = snd x in
     ln_update lu tS tU su
 deliverDyn tS tU0 s0 (lo:r@(hi:_)) = 
     let lu = snd lo in
+    let tSF = finalStability tS (fst hi) in
     case compare tU0 (fst hi) of
         GT -> -- stability update
-            ln_idle lu tS >> 
+            ln_idle lu tSF >> 
             deliverDyn tS tU0 s0 r
         EQ -> -- cutoff update
-            ln_update lu tS tU0 s_never >> 
+            ln_update lu tSF tU0 s_never >> 
             deliverDyn tS tU0 s0 r
         LT -> -- fragment update
             let tU = max tU0 (fst lo) in
             let sLo = s_trim s0 tU in
             let sLoCutHi = s_switch sLo (fst hi) s_never in
-            ln_update lu tS tU sLoCutHi >>
+            ln_update lu tSF tU sLoCutHi >>
             deliverDyn tS tU0 sLo r
            
 -- RESULTS LINK FACTORY.

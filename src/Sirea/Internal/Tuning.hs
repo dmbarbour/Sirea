@@ -8,6 +8,7 @@ module Sirea.Internal.Tuning
     , dtCompile
     , batchesInFlight    
     , dtDaggrHist, dtMdistHist
+    , dtFinalize
     , tAncient  
     ) where
 
@@ -117,6 +118,17 @@ batchesInFlight = 6
 dtDaggrHist, dtMdistHist :: DT
 dtDaggrHist = dtHeartbeat -- how long to tolerate late-arriving demands
 dtMdistHist = dtHeartbeat -- how long to tolerate late-arriving observers
+
+-- Stability values are a heuristic estimate of how far the signal
+-- is valid into the future, and help drive computation. But there
+-- is no clear indicator that a signal is "done", which can be a
+-- problem when performing GC. When stability is used to drive an
+-- effect (such as UnsafeOnUpdate) a failure is even observable.
+--
+-- To help ensure computation completes, we'll add `dtFinalize` to
+-- stability when confident sure we're done with a particular link.
+dtFinalize :: DT
+dtFinalize = 100 * dtHeartbeat
 
 -- In some cases, I want to initialize structures with a lower bound
 -- for Time. But I don't want to pay code and performance overheads 

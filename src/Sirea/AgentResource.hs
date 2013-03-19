@@ -44,6 +44,8 @@ import Sirea.Internal.DemandMonitorData
 import Sirea.Internal.B0Impl (wrapLnEqShift)
 import Sirea.Internal.LTypes
 
+--import Debug.Trace
+
 -- | The RDP behaviors of AgentResources are defined in a typeclass.
 -- The behaviors are indexed by partition and a `duty` type. Use the
 -- `invokeAgent` behavior to compile and install a unique instance
@@ -127,9 +129,10 @@ getARLink :: AR p duty -> IO (LnkUp ())
 getARLink ar = 
     readIORef (ar_data ar) >>= \ ard ->
     case ard_link ard of
-        Just lu -> 
+        Just lu ->  
             return lu
         Nothing ->
+            --traceIO ("new Agent") >>
             ar_make ar >>= \ lu ->
             let ard' = ard { ard_link = Just lu } in
             writeIORef (ar_data ar) ard' >>
@@ -149,6 +152,7 @@ idleAR ar tS =
     let bDone = s_term s' (inStableT tS) in
     let ard' = ard { ard_signal = s' } in
     ard' `seq` writeIORef (ar_data ar) ard' >>
+    --traceIO ("agent idle tS = " ++ show tS) >>
     ln_idle lu tS >>
     when bDone (clearAR ar)
      
@@ -162,6 +166,8 @@ updateAR ar tS tU su =
     let bDone = s_term s' (inStableT tS) in
     let ard' = ard { ard_signal = s' } in
     ard' `seq` writeIORef (ar_data ar) ard' >>
+    --let ssu = sigToList s1 (tU `subtractTime` 1) (tU `addTime` 60) in
+    --traceIO ("agent update tS = " ++ show tS ++ " tU = " ++ show tU ++ show ssu) >>
     ln_update lu tS tU su >>
     when bDone (clearAR ar)
 
@@ -171,7 +177,9 @@ updateAR ar tS tU su =
 -- In practice, this is conservative because the agent isn't cleared
 -- if the signal is ambiguous about future activity.
 clearAR :: AR p duty -> IO ()
-clearAR ar = writeIORef (ar_data ar) ardZero
+clearAR ar = 
+    --traceIO ("clearAR") >>
+    writeIORef (ar_data ar) ardZero
     
 -- | `invokeAgent` will install a unique instance of agent behavior
 -- (one for each unique partition-duty pair). This behavior is built

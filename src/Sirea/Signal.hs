@@ -35,6 +35,7 @@ module Sirea.Signal
  , s_switch, s_switch'
  , s_is_final, s_term
  , s_is_final2, s_term2
+ , s_activeBefore
  , s_delay
  --, s_peek
  , s_adjn, s_adjeqf
@@ -280,8 +281,21 @@ s_term2 s0 tQ tT = assert (tT >= tQ) $ dead && final where
     dead = isNothing v
     final = case dstep ds tT of { DSDone -> True; _ -> False }
 
--- | Same as s_is_final, but the time of the test is not the same
--- as the time of the 
+-- | Test whether a signal is active before a given time. This is a
+-- test that helps discover lower-bounds for activity, but there is
+-- no absolute lower bound (since signals can extend infinitely into
+-- the past). Returns True iff there is activity strictly before the
+-- queried time.
+s_activeBefore :: Sig a -> T -> Bool
+s_activeBefore (Sig (Just _) _) _ = True
+s_activeBefore (Sig Nothing tl) tT = activeTail tT tl
+
+activeTail :: T -> DSeq (Maybe a) -> Bool
+activeTail tT tl =
+    case dstep tl tT of
+        DSNext tm (Just _) _ -> (tm < tT)
+        DSNext _ Nothing tl' -> activeTail tT tl'
+        _ -> False
 
 -- | s_adjn will eliminate adjacent `Nothing` values. These might 
 -- exist after s_full_map to filter a signal by its values.
@@ -290,7 +304,6 @@ s_adjn s0 =
     case s_head s0 of
         Nothing -> mkSig Nothing (ds_adjn0 (s_tail s0))
         hd      -> mkSig hd (ds_adjn1 (s_tail s0))
-
 
 -- | Delay a signal - time-shifts the signal so that the same values
 -- are observed at a later instant in time. Models latency. Activity

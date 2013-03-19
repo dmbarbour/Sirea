@@ -44,7 +44,7 @@ import Sirea.Internal.Tuning (dtDaggrHist, dtClockFlush, dtMdistHist, tAncient)
 import Sirea.Internal.LTypes -- for convenient SigSt, et. al.
 import Sirea.Internal.Choke
 
---import Debug.Trace (traceIO,trace)
+--import Debug.Trace (traceIO)
 --showK = ("U#" ++) . show . hashUnique
 
 writeIORef' :: IORef a -> a -> IO ()
@@ -150,6 +150,9 @@ updateDaggr da k tS tU su =
     let tmup' = Just $! maybe tU (min tU) (dd_tmup dd) in
     let dd' = dd { dd_touchCt = tc', dd_table = tbl', dd_tmup = tmup' } in
     writeIORef' (da_data da) dd' >>
+    --traceIO ("updateDaggr " ++ showK k ++ " tS = " ++ show tS ++ " tU = " ++ show tU) >>
+    --let showSu = sigToList (s_const () $ st_signal st') (inStableT $ st_stable st) (tU `addTime` 60) in
+    --traceIO ("updateDaggr " ++ showK k ++ " " ++ show showSu) >>
     --traceIO ("updateDaggr " ++ showK k ++ ". tc = " ++ show tc' ++ "  tU = " ++ show tU) >>
     --traceIO ("updateDaggr " ++ showK k ++ "  tS = " ++ show tS) >>
     when (0 == tc') (deliverDaggr da)
@@ -293,12 +296,11 @@ data MDD z = MDD
     }
 -- (*) mdd_tmup is needed by observers that are waiting for their 
 --       observer-signal updates. It is cleaned up at end of step.
-
 data MLN z = MLN 
-    { mln_link      :: !(LnkUp z)        -- observer update callbacks
-    , mln_signal    :: !(SigSt ())       -- observer query (the mask)
-    , mln_init      :: !(Maybe StableT)  -- earliest activation time
-    , mln_tmup      :: !(Maybe T)        -- tracks observed update time
+    { mln_link      :: !(LnkUp z)   -- observer update callbacks
+    , mln_signal    :: !(SigSt ())  -- observer query (the mask)
+    , mln_init      :: !StableT     -- earliest possible activity
+    , mln_tmup      :: !(Maybe T)   -- tracks observed update time
     }
 
 -- | Each MonitorDist will handle a set of observers for one signal.
@@ -389,7 +391,7 @@ primaryMonitorLnk md = LnkUp touch update idle cyc where
 -- from being captured in a loop after hibernation etc.
 deliverUpdateMD :: StableT -> MDD z -> MLN z -> IO ()
 deliverUpdateMD tMDD mdd mln = deliver where
-    tMddObs = maybe tMDD (max tMDD) (mln_init mln) 
+    tMddObs = max tMDD (mln_init mln) 
     tS = min tMddObs $ st_stable (mln_signal mln)
     tmup = leastTime (mdd_tmup mdd) (mln_tmup mln)
     deliver = maybe idle update tmup
@@ -520,7 +522,7 @@ mlnZero lzOut =
     MLN { mln_link = lzOut
         , mln_signal = st_zero
         , mln_tmup = Nothing 
-        , mln_init = Nothing
+        , mln_init = StableT tAncient
         }
 
 -- Process an update to the masking signal for an observer. The mask
@@ -530,24 +532,27 @@ mlnZero lzOut =
 -- Link updates will cause a full GC of the MonitorDist (and all 
 -- observer links), at the end of the step.
 --
--- The first update on an MLN will activate it, and determines a
--- minimum stability for further observations (i.e. the observer's
--- signal ever updates earlier than when it begins observing). This 
--- helps control against bad behavior for stability in cycles after
--- waking from suspend or other pauses in computation.
 updateMLN :: MonitorDist z -> Unique -> StableT -> T -> Sig () -> IO ()
 updateMLN md k tS tU su = updateMLN' md k $ \ mln ->
     --trace ("update MLN " ++ showK k ++ " " ++ show tS ++ " " ++ show tU) $
     let st' = st_update tS tU su (mln_signal mln) in
     let tmup' = Just $! maybe tU (min tU) (mln_tmup mln) in
-    let init' = mln_init mln <|> (Just $! min (StableT tU) tS) in
+    let tT = min tU (inStableT tS) in
+    let init' = if (s_activeBefore (st_signal st') tT) 
+                    then mln_init mln
+                    else StableT tT
+    in
     mln { mln_signal = st', mln_tmup = tmup', mln_init = init' }
 
 idleMLN :: MonitorDist z -> Unique -> StableT -> IO ()
 idleMLN md k tS = updateMLN' md k $ \ mln ->
     --trace ("idle   MLN " ++ showK k ++ " " ++ show tS) $
     let st' = st_idle tS (mln_signal mln) in
-    mln { mln_signal = st' }
+    let init' = if (s_activeBefore (st_signal st') (inStableT tS))
+                    then mln_init mln
+                    else tS
+    in
+    mln { mln_signal = st', mln_init = init' }
 
 updateMLN' :: MonitorDist z -> Unique -> (MLN z -> MLN z) -> IO ()
 updateMLN' md k fnup =
