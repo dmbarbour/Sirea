@@ -650,9 +650,11 @@ luEqShift eq rf lu = LnkUp touch update idle cycle where
         let s' = s_switch s0 tU su in
         let sCln = s_trim s' (inStableT tS) in
         writeRef' rf sCln >> -- recorded signal
-        -- if this is a termination update, don't delay it.
-        if (s_is_final s' (inStableT tS)) then ln_update lu tS tU su else
-        deliverEqf s0 tS tU su
+        -- if this is an obvious termination update, don't delay it;
+        -- don't want to increase GC recognition burdens downstream
+        if (s_is_final sCln (inStableT tS)) 
+           then ln_update lu tS tU su 
+           else deliverEqf s0 tS tU su
     deliverEqf s0 tS tU su =
         let tSeek = inStableT tS `addTime` dtEqShift in
         let mbDiffT = firstDiffT eq s0 su tU tSeek in

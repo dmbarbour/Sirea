@@ -54,8 +54,7 @@ bprint = bprintWith show
 bprintWith :: (a -> String) -> B (S P0 a) (S P0 a)
 bprintWith fn = publish |*| invoke where
     publish = bfmap fn >>> fst printDeMon    
-    invoke = --bfmap (const ()) >>> unsafeInvokeAgent (Printer ())
-             bconst () >>> unsafeInvokeAgent (Printer ())
+    invoke = bfmap (const ()) >>> unsafeInvokeAgent (Printer ())
 printDeMon :: DemandMonitor B P0 String (S.Set String)
 printDeMon = demandMonitor "console"
 
