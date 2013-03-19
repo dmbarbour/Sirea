@@ -34,18 +34,25 @@ Description:
 Author: David Barbour
 Maintainer: dmbarbour@gmail.com
 Homepage: http://github.com/dmbarbour/Sirea
+
 Package-Url: 
 Copyright: (c) 2013 by David Barbour
 License: BSD3
+license-file: LICENSE.txt
 Stability: experimental
 build-type: Simple
+cabal-version: >= 1.8
+
+Source-repository head
+  type: git
+  location: http://github.com/dmbarbour/Sirea.git
 
 Library
   hs-Source-Dirs: src
-  Build-Depends: base (>= 4.5)
-    ,parallel (>= 3.0)
-    ,time (>= 1.4)
-    ,containers (>= 0.5)
+  Build-Depends: base (>= 4.5 && < 5)
+    ,parallel (>= 3.0 && < 4)
+    ,time (>= 1.4 && < 2)
+    ,containers (>= 0.5 && < 2)
 
   Exposed-Modules:
     -- getting started
@@ -97,6 +104,6 @@ Library
     Sirea.Internal.PulseSensor
     Sirea.Internal.Tuning
 
-  ghc-options: -threaded -Wall -fno-warn-orphans
+  ghc-options: -Wall -fno-warn-orphans
 
 
