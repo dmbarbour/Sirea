@@ -1,6 +1,6 @@
-Name: sirea-filesys
+Name: sirea-filesystem
 Version: 0.1
-Cabal-Version: >= 1.2
+cabal-Version: >= 1.8
 Synopsis: Simple view and manipulation of filesystem in Sirea.
 Category: Reactivity
 Description:
@@ -19,19 +19,25 @@ Author: David Barbour
 Maintainer: dmbarbour@gmail.com
 Homepage: http://github.com/dmbarbour/Sirea
 Package-Url: 
-Copyright: (c) 2012 by David Barbour
+Copyright: (c) 2013 by David Barbour
 License: BSD3
+license-file: LICENSE.txt
 Stability: experimental
 build-type: Simple
 
 Library
   hs-Source-Dirs: src
-  Build-Depends: base (>= 4.5)
+  Build-Depends: base (>= 4.5 && < 5)
+    ,fsnotify
+    ,system-filepath (>= 0.4.6)
+    ,system-filei
+
+    ,
     ,sirea-core (>= 0.1)
 
   Exposed-Modules:
-    Sirea.System.Filesys
+    Sirea.System.Filesystem
 
-  ghc-options: -threaded -Wall -fno-warn-orphans
+  ghc-options: -Wall -fno-warn-orphans
 
 
