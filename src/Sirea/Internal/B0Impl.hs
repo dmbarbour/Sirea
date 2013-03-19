@@ -40,6 +40,8 @@ import Data.Function (on)
 --import Data.Maybe (fromMaybe)
 import qualified Data.List as L
 
+-- import Debug.Trace
+
 instance (Monad m) => Category (B0 m) where
   id  = B0_mkLnk id (const return)
   (.) = flip B0_pipe
@@ -599,51 +601,6 @@ forceDelayB0 :: (Monad m) => B0 m x x
 forceDelayB0 = tshiftB0 (lc_map toGoal)
     where toGoal lc = lc { lc_dtCurr = (lc_dtGoal lc) }
 
-{-
--- | look ahead in a signal slightly. Reduces stability of signal,
--- i.e. updates at time T can affect peek signal at time T-dt.
-peekB0 :: (Monad m) => DT -> B0 m (S p x) (S p (Either x ()))
-peekB0 dt = mkLnkB0 lc_fwd mkLnPeek where
-    mkLnPeek (LnkSig (LCX lc)) (LnkSig lu) =
-        cc_newRef (lc_cc lc) s_never >>= \ rf ->
-        return (LnkSig (lnPeek dt rf lu))
-    mkLnPeek _ _ = return LnkDead
-    
--- If signal changes at tUpdate, then my anticipated value at 
--- (tU - dt) must change to match the updated signal. Stability is
--- therefore reduced by dt. While the signal value in the range of
--- (tU-dt) to tU is not relevant, s_peek needs the signal activity.
---
--- TODO: Consider adjusting lnPeek to keep only the activity info.
--- This could improve GC and memory costs, albeit potentially with
--- a CPU overhead. 
-lnPeek :: (Monad m) => DT -> Ref m (Sig x) -> LnkUpM m (Either x ()) -> LnkUpM m x
-lnPeek dt rf lu = LnkUp touch update idle cycle where
-    touch = ln_touch lu
-    cycle = ln_cycle lu
-    adjTS = adjStableT (`subtractTime` dt)
-    idle tS0 =
-        let tS = adjTS tS0 in
-        readRef rf >>= \ s0 ->
-        let sCln = gcSig tS s0 in
-        writeRef' rf sCln >>
-        ln_idle lu tS
-    update tS0 tU0 su =
-        let tS = adjTS tS0 in
-        readRef rf >>= \ s0 ->
-        let s' = s_switch' s0 tU0 su in
-        let sCln = gcSig tS s' in
-        writeRef' rf sCln >>
-        let tU = tU0 `subtractTime` dt in
-        let sPk = s_peek dt (s_trim s' tU) in
-        ln_update lu tS tU sPk
-
--}
-        
--- GC a signal based on stability
-gcSig :: StableT -> Sig x -> Sig x
-gcSig (StableT tS) s = s_trim s tS
-
 -- | keepAliveB will keep the first element alive so long as other
 -- parts of the signal are alive. (used by unsafeOnUpdateBLN)
 keepAliveB0 :: (Monad m) => B0 m (S p x :&: y) (S p x :&: y)
@@ -686,21 +643,22 @@ luEqShift eq rf lu = LnkUp touch update idle cycle where
     touch = ln_touch lu
     cycle = ln_cycle lu
     idle tS = 
-        modifyRef' rf (gcSig tS) >>
+        modifyRef' rf (`s_trim` inStableT tS) >>
         ln_idle lu tS
     update tS tU su =
-        let tSeek = inStableT tS `addTime` dtEqShift in
         readRef rf >>= \ s0 -> -- old signal for comparison
+        let s' = s_switch s0 tU su in
+        let sCln = s_trim s' (inStableT tS) in
+        writeRef' rf sCln >> -- recorded signal
+        -- if this is a termination update, don't delay it.
+        if (s_is_final s' (inStableT tS)) then ln_update lu tS tU su else
+        deliverEqf s0 tS tU su
+    deliverEqf s0 tS tU su =
+        let tSeek = inStableT tS `addTime` dtEqShift in
         let mbDiffT = firstDiffT eq s0 su tU tSeek in
         case mbDiffT of
-            Nothing -> -- signals are equal forever
-                writeRef' rf (gcSig tS s0) >>
-                ln_idle lu tS
-            Just tU' -> 
-                let su' = s_trim su tU' in
-                let sf = s_switch' s0 tU' su' in
-                writeRef' rf (gcSig tS sf) >>
-                ln_update lu tS tU' su'
+            Nothing  -> ln_idle lu tS -- both signals are constant
+            Just tU' -> ln_update lu tS tU' su
 
 -- find time of first difference between two signals in a region. OR
 -- if we don't find a difference, seek any existing point of change 

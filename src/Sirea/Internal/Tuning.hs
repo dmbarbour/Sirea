@@ -116,8 +116,8 @@ batchesInFlight = 6
 -- some historical data to accommodate late arriving observers. The
 -- demand sources aspect impacts stability, so is more limited. 
 dtDaggrHist, dtMdistHist :: DT
-dtDaggrHist = dtHeartbeat -- how long to tolerate late-arriving demands
-dtMdistHist = dtHeartbeat -- how long to tolerate late-arriving observers
+dtDaggrHist = 0.05 -- how long to tolerate late-arriving demands
+dtMdistHist = 0.05 -- how long to tolerate late-arriving observers
 
 -- Stability values are a heuristic estimate of how far the signal
 -- is valid into the future, and help drive computation. But there
@@ -127,8 +127,11 @@ dtMdistHist = dtHeartbeat -- how long to tolerate late-arriving observers
 --
 -- To help ensure computation completes, we'll add `dtFinalize` to
 -- stability when confident sure we're done with a particular link.
+--
+-- However, this should be set to 0 while debugging. A large value
+-- will pave over bugs, but it's better to remove them.
 dtFinalize :: DT
-dtFinalize = 100 * dtHeartbeat
+dtFinalize = 0 -- 100 * dtHeartbeat
 
 -- In some cases, I want to initialize structures with a lower bound
 -- for Time. But I don't want to pay code and performance overheads 

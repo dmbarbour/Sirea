@@ -24,7 +24,7 @@ alwaysEq = (const . const) True
 
 instance (Monad m) => BFmap (B0 m) where 
     bfmap    = fmapB0
-    bconst c = constB0 c >>> unsafeEqShiftB0 alwaysEq where
+    bconst c = constB0 c >>> unsafeEqShiftB0 alwaysEq
     bstrat   = stratB0 
     btouch   = touchB0
     badjeqf  = adjeqfB0 >>> unsafeEqShiftB0 (==)
