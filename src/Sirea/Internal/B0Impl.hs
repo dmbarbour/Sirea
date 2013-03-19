@@ -37,6 +37,7 @@ import Control.Category
 import Control.Parallel.Strategies (Eval, runEval)
 import Control.Exception (assert)
 import Data.Function (on)
+import Data.Maybe (isNothing)
 --import Data.Maybe (fromMaybe)
 import qualified Data.List as L
 
@@ -693,7 +694,7 @@ firstDiffT eq as bs tLower tUpper =
                             else Nothing
           activeWhileEq Nothing Nothing = Just ()
           activeWhileEq _ _ = Nothing
-          sampleActive = (/= Nothing) . snd
+          sampleActive = not . isNothing . snd
 
 -- TODO: consider an additional optimization to recognize when we've
 -- reached the end of the current signal (s_is_final) and avoid the

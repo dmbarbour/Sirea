@@ -81,7 +81,7 @@ mkPrinter cp = findInPCX cp >>= return . doPrint . inPrintMem where
 -- pure Haskell functions, but can work within RDP's compilation and
 -- anticipation framework.
 bundefined :: (SigInP p y) => B (S p x) y
-bundefined = bconst () >>> undefinedB
+bundefined = bfmap (const ()) >>> undefinedB
 
 -- might be nice to put some equivalent to 'assert' here, too.
 

@@ -66,7 +66,7 @@ dtClockFlush = dtHeartbeat / 3
 -- signal?
 dtEqShift, dtAlign :: DT
 dtEqShift = 4 * dtHeartbeat -- comparison of values
-dtAlign = 2 * dtHeartbeat -- extra search for alignment
+dtAlign = 4 * dtHeartbeat -- extra search for alignment
 
 -- When we 'btouch', how far (relative to stability) do we cause the
 -- signal to be evaluated. Forcing evaluation is mostly useful to 
