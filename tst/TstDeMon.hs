@@ -44,7 +44,7 @@ main :: IO ()
 main = runSireaApp $ allTests
 
 tstCycle :: B (S P0 ()) (S P0 ())
-tstCycle = snd dm >>> bdelay 1.0 >>> bfmap addOne >>> bprint >>> fst dm
+tstCycle = snd dm >>> bdelay 0.1 >>> bfmap addOne >>> bprint >>> fst dm
      where dm = demandMonitor "tstCycle"
            addOne = succ . S.findMax . S.insert (0 :: Int)
 
