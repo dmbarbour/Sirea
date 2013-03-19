@@ -26,7 +26,7 @@ import Sirea.Internal.PTypes
 import Sirea.Internal.BCross
 import Sirea.Internal.Thread
 import Sirea.Internal.PulseSensor (getPulseRunner)
-import Sirea.Internal.Tuning (dtRestart, dtStability, dtHeartbeat, dtGrace)
+import Sirea.Internal.Tuning (dtRestart, dtHeartbeat, dtGrace)
 import Sirea.Behavior
 import Sirea.Partition
 import Sirea.UnsafeOnUpdate
@@ -173,7 +173,7 @@ beginApp cw rfSD lu =
                 , ap_link = lu }
     in
     apTime ap >>= \ tNow ->
-    let tS = StableT (tNow `addTime` dtStability) in
+    let tS = StableT tNow in
     let tU = tNow `addTime` dtGrace in
     ln_update (ap_link ap) tS tU (s_always ()) >>
     apSched ap (maintainApp ap tS)
@@ -208,7 +208,7 @@ maintainApp ap (StableT tS0) =
     apTime ap >>= \ tNow ->
     readIORef (ap_sd ap) >>= \ sd ->
     if shouldStop sd then haltApp ap tS0 tNow else
-    let tS = StableT (tNow `addTime` dtStability) in
+    let tS = StableT tNow in
     apSched ap (maintainApp ap tS) >>
     if (tNow > (tS0 `addTime` dtRestart))
        then let tR = tNow `addTime` dtGrace in
@@ -221,7 +221,7 @@ maintainApp ap (StableT tS0) =
 -- termination signal requested since last heartbeat
 haltApp :: AppPeriodic -> T -> T -> IO ()
 haltApp ap tS0 tNow =
-    let tS = StableT (tNow `addTime` dtStability) in
+    let tS = StableT tNow in
     apSched ap (stoppingApp ap tS) >>
     ln_update (ap_link ap) tS tS0 s_never
 

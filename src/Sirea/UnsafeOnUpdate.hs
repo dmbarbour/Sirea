@@ -33,7 +33,7 @@ module Sirea.UnsafeOnUpdate
     ) where
 
 import Data.IORef
-import Control.Monad (unless, when)
+import Control.Monad (unless)
 import Control.Exception (assert)
 import Sirea.UnsafeLink
 import Sirea.Signal
@@ -44,7 +44,7 @@ import Sirea.PCX
 import Sirea.Partition
 import Sirea.Internal.Tuning (tAncient)
 
-import Debug.Trace (traceIO) 
+--import Debug.Trace (traceIO) 
 
 -- | unsafeOnUpdateB - perform an IO action for every unique value
 -- in a signal as it becomes stable, then forward the update. There

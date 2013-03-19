@@ -1,8 +1,8 @@
 
 -- A single module for all those configuration tuning variables used by Sirea.
 module Sirea.Internal.Tuning
-    ( dtRestart, dtStability, dtHeartbeat, dtGrace
-    , dtFutureChoke
+    ( dtRestart, dtHeartbeat, dtGrace
+    , dtFutureChoke, dtClockFlush
     , dtEqShift, dtAlign
     , dtTouch
     , dtCompile
@@ -14,17 +14,20 @@ module Sirea.Internal.Tuning
 import Sirea.Time (T,DT,mkTime)
 
 -- The main Sirea application has a few tuning parameters related to
--- periodic updates, heartbeats, graceful startup and shutdown. Also
--- a reset period - if the main thread seems frozen too long, we'll
--- model this in the activity signal.
+-- periodic updates, heartbeats, startup, restart, and shutdown. RDP
+-- models these formally via activity of the main input signal. The
+-- main application is treated like any dynamic execution (even runs
+-- within a dynamic evaluation).
 --
 -- The current heartbeat, 86.4ms, is chosen to be one millionth of a
 -- day, which is fairly convenient when time is represented in MJD.
 -- But any heartbeat between 10-30 Hz is reasonable. (Heartbeat in
 -- Sirea affects GC and performance, not semantics.)
-dtRestart, dtStability, dtHeartbeat, dtGrace :: DT
-dtRestart   = 6 * dtStability  -- how long a pause to force a restart
-dtStability = 4 * dtHeartbeat  -- stability of main signal (affects halting time)
+--
+-- The grace period is added to any startup or shutdown, to support
+-- speculative evaluation from the start.
+dtRestart, dtHeartbeat, dtGrace :: DT
+dtRestart   = 2.0  -- how long a pause to force a restart
 dtHeartbeat = 0.0864 -- heartbeat and periodic increase of stability
 dtGrace     = dtHeartbeat -- time allotted for graceful start and stop
 
@@ -43,6 +46,14 @@ dtGrace     = dtHeartbeat -- time allotted for graceful start and stop
 -- future.
 dtFutureChoke :: DT
 dtFutureChoke = 3 * dtHeartbeat
+
+-- In some cases, such as demand aggregators, stability is bounded
+-- by the clock. In these cases, we'll want to ensure a significant
+-- update to the clock before updating stability. (If we allow tiny
+-- updates to the clock, we'll end up cycling more than needed.)
+dtClockFlush :: DT
+dtClockFlush = dtHeartbeat / 3
+
 
 -- TODO: develop a combined choke*eqshift that can support some sort
 -- of exponential backoff. Not critical for now, but could save much
@@ -104,8 +115,8 @@ batchesInFlight = 6
 -- some historical data to accommodate late arriving observers. The
 -- demand sources aspect impacts stability, so is more limited. 
 dtDaggrHist, dtMdistHist :: DT
-dtDaggrHist = 0.05 -- how long to tolerate late-arriving demands
-dtMdistHist = dtDaggrHist -- how long to tolerate late-arriving observers
+dtDaggrHist = dtHeartbeat -- how long to tolerate late-arriving demands
+dtMdistHist = dtHeartbeat -- how long to tolerate late-arriving observers
 
 -- In some cases, I want to initialize structures with a lower bound
 -- for Time. But I don't want to pay code and performance overheads 

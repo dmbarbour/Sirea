@@ -38,31 +38,7 @@ tstNums = bvoid $ inject >>> monitor >>> assertb "tstNums" ((== [3,4,5,7]) . S.t
           monitor = snd deMon
           deMon = demandMonitor "tstNums"
 
-
-
 allTests = tstInactive |*| tstActive1 |*| tstActive2 |*| tstNums |*| tstInactive2
-
-printNums = bvoid $ inject >>> monitor >>> bprint
-    where inject = input 12 |*| input 60 |*| input 42 |*| input 108          
-          input n = bconst (int n) >>> fst deMon
-          monitor = snd deMon
-          deMon = demandMonitor "tstNums"
-
-printTimes = bvoid $ inject >>> snd deMon >>> bprint
-    where inject = input 1 |*| input 4 |*| input 2 |*| input 3
-          input dt = bclockSeconds >>> bfmap (`addTime` dt) >>> fst deMon
-          deMon = demandMonitor "times"
-
-printInactive = snd deMon >>> {- pStable >>> -} bprint
-    where input n = bconst (int n) >>> fst deMon
-          deMon = demandMonitor "pi"
-
-pStable = bvoid (unsafeLinkB_ (const (return p))) where
-    p = LnkUp touch update idle cyc 
-    touch = return () -- traceIO "touch"
-    update tS tU _ = traceIO ("p update " ++ show tS ++ " " ++ show tU) 
-    idle tS = traceIO ("p idle   " ++ show tS) 
-    cyc _ = traceIO ("cyc") 
 
 main :: IO ()
 main = runSireaApp $ allTests
