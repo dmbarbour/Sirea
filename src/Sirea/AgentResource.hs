@@ -61,7 +61,7 @@ class (Partition p, Typeable duty) => AgentBehavior p duty where
     -- | This should be instantiated as: agentBehaviorSpec _ = ...
     -- The `duty` parameter is undefined, used only for typeful
     -- construction. 
-    agentBehaviorSpec :: duty -> B (S p ()) (S p ())
+    agentBehaviorSpec :: duty -> B (S p ()) S1
 
 -- AgentResource ensures single instance for invokeAgent. A record
 -- of the signal is maintained here in order to ensure an old agent
@@ -103,7 +103,7 @@ newAR cw = mfix $ \ ar -> -- fix cyclic dependencies
     return (AR da make rf)
     
 -- functions getABS, getDuty, getPCX mostly for type wrangling
-getABS :: (AgentBehavior p duty) => AR p duty -> B (S p ()) (S p ())
+getABS :: (AgentBehavior p duty) => AR p duty -> B (S p ()) S1
 getABS = agentBehaviorSpec . getDuty
 
 getDuty :: AR p duty -> duty

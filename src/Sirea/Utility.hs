@@ -12,15 +12,20 @@ import Sirea.Internal.B0
 import Sirea.Internal.B0Impl
 import Sirea.Internal.LTypes
 import Sirea.Partition (P0)
-import Sirea.UnsafeOnUpdate 
---import Sirea.PCX 
---import Sirea.Time
+import Sirea.UnsafeOnUpdate
+import Sirea.AgentResource 
+import Sirea.DemandMonitor
 import Sirea.Signal
 import Sirea.UnsafeLink
+import Sirea.PCX
+import Sirea.Time (T)
 import Data.IORef
 import Data.Maybe (isNothing)
+import Data.Typeable
+import qualified Data.Set as S
 import Control.Monad (unless)
 import Control.Exception (assert)
+import Control.Applicative
 
 {- IDEA: a more useful, more declarative console?
      Rejected: Console input isn't suitable for persistent, reactive
@@ -34,24 +39,43 @@ import Control.Exception (assert)
    Inherently volatile. No need for persistence.
  -}
 
--- | Print uses the show function, and forwards the input unaltered.
+-- | Print lines to the console or standard output. Demand to print
+-- a line will cause it to be printed (if the demand stabilizes). 
+-- Continuous demand results in a line being printed only once. If
+-- multiple clients need the printer concurrently, then concurrent
+-- lines for an instant will be printed in lexicographic order.
+--
 --      bprint = bprintWith show
--- Note: at the moment, bprint isn't quite complete. It should act
--- as a resource, or upon a resource, to ensure precise logic. I'll
--- fix it up later, but the behavior will change subtly.
+--
 bprint :: (Show a) => B (S P0 a) (S P0 a)
 bprint = bprintWith show
 
 -- | Provide your own show function for printing.
 bprintWith :: (a -> String) -> B (S P0 a) (S P0 a)
-bprintWith fn = bvoid $ bfmap fn >>> bprint_
+bprintWith fn = publish |*| invoke where
+    publish = bfmap fn >>> fst printDeMon
+    invoke = bconst () >>> unsafeInvokeAgent (Printer ())
 
-  -- TODO: switch to demand monitor + agent resource for console printing
-bprint_ :: B (S P0 String) S1
-bprint_ = unsafeOnUpdateB mkPrinter >>> btrivial
-    where mkPrinter _ = return (const mbPrint)
-          mbPrint Nothing = return ()
-          mbPrint (Just msg) = putStrLn msg
+printDeMon :: DemandMonitor B P0 String (S.Set String)
+printDeMon = demandMonitor "console"
+
+newtype Printer = Printer () deriving (Typeable)
+instance AgentBehavior P0 Printer where
+    agentBehaviorSpec _ = getLines >>> printLines >>> btrivial where
+        getLines = snd printDeMon
+        printLines = unsafeOnUpdateB mkPrinter
+newtype PrintMem = PrintMem { inPrintMem :: IORef (S.Set String) } 
+    deriving (Typeable)
+instance Resource P0 PrintMem where
+    locateResource _ _ = PrintMem <$> newIORef S.empty
+        
+mkPrinter :: PCX P0 -> IO (T -> Maybe (S.Set String) -> IO ())
+mkPrinter cp = findInPCX cp >>= return . doPrint . inPrintMem where
+    doPrint rf _ Nothing = writeIORef rf S.empty
+    doPrint rf _ (Just ss) =
+        readIORef rf >>= \ ss0 ->
+        writeIORef rf ss >>
+        mapM_ putStrLn (S.toAscList (S.difference ss ss0))
 
 -- | bundefined - exploratory programming often involves incomplete
 -- behaviors. `bundefined` serves a similar role to `undefined` in
