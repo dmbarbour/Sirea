@@ -1,19 +1,14 @@
 Name: sirea-filesystem
 Version: 0.1
 cabal-Version: >= 1.8
-Synopsis: Simple view and manipulation of filesystem in Sirea.
-Category: Reactivity
+Synopsis: Simple view and manipulation of filesystem from Sirea.
+Category: Sirea
 Description:
   This package allows developers to observe a files in a reactive 
   manner, and a few simplistic approaches to manipulation of files.
   The features here are very basic, most applicable to small files
   that can be loaded or saved all at once (as opposed to very large 
-  files, streaming files, etc.).
-  
-  Files can offer a simple, persistent input model for Sirea apps,
-  e.g. a viable alternative to console input is to manipulate a file
-  that the application is watching. RDP's design is such that an app
-  should not need to be restarted when control files change.
+  files, streaming files, etc.). 
 
 Author: David Barbour
 Maintainer: dmbarbour@gmail.com
@@ -28,15 +23,15 @@ build-type: Simple
 Library
   hs-Source-Dirs: src
   Build-Depends: base (>= 4.5 && < 5)
-    ,fsnotify
-    ,system-filepath (>= 0.4.6)
-    ,system-filei
-
-    ,
     ,sirea-core (>= 0.1)
+    ,system-filepath (>= 0.4.7)
+    ,system-fileio (>= 0.3.11)
+    ,fsnotify
+    ,bytestring (>= 0.9)
+    ,text (>= 0.11)
 
   Exposed-Modules:
-    Sirea.System.Filesystem
+    Sirea.Filesystem
 
   ghc-options: -Wall -fno-warn-orphans
 
