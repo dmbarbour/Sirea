@@ -85,6 +85,7 @@ Library
     Sirea.Trans.Error
     Sirea.Trans.Reader
 
+  Other-Modules:
     -- implementation details
     Sirea.Internal.CC
     Sirea.Internal.B0Type

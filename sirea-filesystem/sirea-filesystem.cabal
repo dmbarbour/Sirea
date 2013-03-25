@@ -20,19 +20,43 @@ license-file: LICENSE.txt
 Stability: experimental
 build-type: Simple
 
+Flag polling 
+  Description: use the polling implementation for testing or compatibility
+  Default: False
+
 Library
   hs-Source-Dirs: src
   Build-Depends: base (>= 4.5 && < 5)
     ,sirea-core (>= 0.1)
+    ,containers (>= 0.5)
     ,system-filepath (>= 0.4.7)
     ,system-fileio (>= 0.3.11)
-    ,fsnotify
     ,bytestring (>= 0.9)
     ,text (>= 0.11)
 
   Exposed-Modules:
     Sirea.Filesystem
 
+  Other-Modules: 
+    Sirea.Filesystem.Polling
+    Sirea.Filesystem.Manager
+    Sirea.Filesystem.OSManager
+
+  Extensions: CPP
   ghc-options: -Wall -fno-warn-orphans
 
+  if os(linux) && !flag(polling)
+    CPP-Options: -DOS_Linux
+    Other-Modules: Sirea.Filesystem.Linux
+    Build-Depends: hinotify >= 0.3.5
+  if os(windows) && !flag(polling)
+    CPP-Options: -DOS_Windows
+    Other-Modules: Sirea.Filesystem.Windows
+    Build-Depends: Win32-notify >= 0.3
+  if os(darwin) && !flag(polling)
+    CPP-Options: -DOS_OSX
+    Other-Modules: Sirea.Filesystem.OSX
+    Build-Depends: hfsevents >= 0.1.3
+  if flag(polling)
+    CPP-Options: -DUSE_POLLING
 

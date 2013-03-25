@@ -7,6 +7,7 @@ module Sirea.Time
     , DT
     , dtToNanos,nanosToDt
     , addTime,subtractTime,diffTime
+    , fromUTC
     ) where
 
 import Data.Int (Int32,Int64)
