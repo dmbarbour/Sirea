@@ -5,18 +5,22 @@
 -- can violate RDP's invariants if not used carefully, but they are
 -- safe with respect to Haskell's IO monad (no unsafePerformIO).
 --
--- The issue with Haskell IO in RDP is that it is rarely idempotent
--- or commutative. They also have very poor support for speculation,
--- which may increase latencies and rework. Discipline and caution,
--- and knowledge of larger context.
+-- Haskell IO in Sirea is rarely idempotent or commutative, and has
+-- poor support for speculation, increasing latencies and rework. In
+-- Sirea, it is essential to avoid blocking IO within a partition.
+-- And sequential operations might not interleave the way one might
+-- expect (due to bursty and non-deterministic stability updates).
 --
--- This module supports many simple IO integration models based on
--- different assumptions and focuses. Each model may also have a few
--- variants.
+-- This module supports currently supports one IO adapter model, in 
+-- a few variations:
 --
---   OnUpdate - perform output action when input changes.
+--   OnUpdate - perform output action whenever input signal changes.
+--
+-- Eventually, I would like to support more models for ease of use:
+-- 
 --   ReadOnce - perform input action when input changes.
---   OnEvents - ReadOnce + schedule reads with event API.
+--     perhaps some minimal support for speculation.
+--   OnEvents - ReadOnce + schedule reads via event API.
 --   IOPolled - perform ad-hoc actions as stability updates.
 --   IOAction - fusion of OnUpdate and Polled.
 --
@@ -26,13 +30,9 @@ module Sirea.UnsafeIO
     ( unsafeOnUpdateB
     , unsafeOnUpdateBL
     , unsafeOnUpdateBLN
-    -- , unsafeReadOnceB
-    -- , unsafeOnEventsB
     ) where
 
 import Data.IORef
-import Data.Maybe (mapMaybe)
-import Control.Monad (unless)
 import Control.Exception (assert)
 import Sirea.UnsafeLink
 import Sirea.Signal
@@ -46,8 +46,6 @@ import Sirea.Internal.Tuning (tAncient)
 -- | unsafeOnUpdateB - perform an IO action for every unique value
 -- in a signal as it becomes stable, then forward the update. There
 -- is also a one-time IO action on initial construction. 
---
--- The IO operations are performed at the end of the step.
 unsafeOnUpdateB :: (Eq a, Partition p) 
                 => (PCX p -> IO (T -> a -> IO ()))
                 -> B (S p a) (S p a)
@@ -74,10 +72,9 @@ mkOnUpdate :: (Eq a, Partition p)
            -> PCX W -> LnkUp a -> IO (LnkUp a)
 mkOnUpdate mkOp cw lu =
     findInPCX cw >>= \ cp ->
-    getPSched cp >>= \ pd ->
     mkOp cp >>= \ op ->
     newIORef (P s_never (StableT tAncient)) >>= \ rfSig ->
-    let lu' = luOnUpdate pd op rfSig lu in
+    let lu' = luOnUpdate op rfSig lu in
     return lu'
 
 -- simple strict pair
@@ -88,12 +85,11 @@ mkOnUpdate mkOp cw lu =
 data P z = P !(Sig z) {-# UNPACK #-} !StableT
 
 luOnUpdate  :: (Eq a) 
-            => PSched -- to run actions at end of step
-            -> (T -> a -> IO ()) -- operation to execute
+            => (T -> a -> IO ()) -- operation to execute
             -> IORef (P a) -- recorded signal; reported time
             -> LnkUp a -- output sink (just forward input, but AFTER running)
             -> LnkUp a -- input source
-luOnUpdate pd op rfSig lu = LnkUp touch update idle cyc where
+luOnUpdate op rfSig lu = LnkUp touch update idle cyc where
     touch = ln_touch lu
     cyc = ln_cycle lu
     idle tS =
@@ -118,21 +114,39 @@ luOnUpdate pd op rfSig lu = LnkUp touch update idle cyc where
         let tHi  = inStableT tS in
         let sGC = s_trim s (lessOneNano tHi) in
         record tS sGC >>
-        let ops = mapMaybe seconds $
-                  takeWhile ((< tHi) . fst) $
+        let ops = takeWhile ((< tHi) . fst) $
                   dropWhile ((< tLo) . fst) $
                   sigToList (s_adjeqf (==) s) tLoR tHi 
         in
-        unless (null ops) (schedOps ops)
-    schedOps = onStepEnd pd . mapM_ runOp
-    runOp (t,a) = op t a
+        mapM_ runOp ops
+    runOp (a,Just b) = op a b
+    runOp _ = return ()
 
-seconds :: (a,Maybe b) -> Maybe (a,b)
-seconds (a,Just b) = Just (a,b)
-seconds _ = Nothing
+{-
+-- | unsafeReadOnceB is suitable for resources that are constant or
+-- can reasonably be assumed constant. Such resources are rare, but
+-- do exist (e.g. environment variables). One-time construction can
+-- support caches and similar. 
+--
+-- Note: unsafeReadOnce is lazy. It will not execute if there is no
+-- consumer for the generated value. It also runs in the middle of a
+-- step, so there should be no assumptions about whether updates are
+-- consistent.
+unsafeReadOnceB :: (Eq a, Partition p) 
+                => (PCX p -> IO (T -> a -> IO b)) 
+                -> B (S p a) (S p b)
+unsafeReadOnceB = unsafeOnEventsB . const
+
+-- | unsafeReadOnceBI 
 
 
--- | unsafeReadOnceB
+-- | unsafeOnEventsB allows a reader to hook a simple events API.
+-- This is exactly the same as unsafeReadOnceB, except that a notify
+-- operation is provided. The notify operation informs Sirea that
+-- more should be read for a given time. Notification is idempotent,
+-- and accumulative. 
+
+-}
 
 
 

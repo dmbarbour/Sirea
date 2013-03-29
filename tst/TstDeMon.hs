@@ -6,7 +6,7 @@ module Main
 
 import Sirea.Prelude
 import Sirea.UnsafeLink
-import Sirea.UnsafeOnUpdate
+import Sirea.UnsafeIO
 import Sirea.Clock
 import Sirea.Time
 import Sirea.DemandMonitor
