@@ -12,7 +12,7 @@ import Sirea.Internal.B0
 import Sirea.Internal.B0Impl
 import Sirea.Internal.LTypes
 import Sirea.Partition (P0)
-import Sirea.UnsafeOnUpdate
+import Sirea.UnsafeIO
 import Sirea.AgentResource 
 import Sirea.DemandMonitor
 import Sirea.Signal
@@ -68,10 +68,9 @@ newtype PrintMem = PrintMem { inPrintMem :: IORef (S.Set String) }
 instance Resource P0 PrintMem where
     locateResource _ _ = PrintMem <$> newIORef S.empty
         
-mkPrinter :: PCX P0 -> IO (T -> Maybe (S.Set String) -> IO ())
+mkPrinter :: PCX P0 -> IO (T -> S.Set String -> IO ())
 mkPrinter cp = findInPCX cp >>= return . doPrint . inPrintMem where
-    doPrint rf _ Nothing = writeIORef rf S.empty
-    doPrint rf _ (Just ss) =
+    doPrint rf _ ss =
         readIORef rf >>= \ ss0 ->
         writeIORef rf ss >>
         mapM_ putStrLn (S.toAscList (S.difference ss ss0))

@@ -18,9 +18,9 @@ import Debug.Trace
 assertb :: (Show a) => String -> (a -> Bool) -> B (S P0 a) (S P0 a)
 assertb tstName test = bvoid $ bfmap (\a -> (test a,show a)) >>> unsafeOnUpdateB mkAssert
     where mkAssert _ = return doAssert
-          doAssert t = maybe (return ()) $ \ (b,a) ->
-                        if b then putStrLn ("PASS: " ++ tstName ++ " @ " ++ show t ++ " (" ++ a ++ ")")
-                             else putStrLn ("FAIL: " ++ tstName ++ " @ " ++ show t ++ " (" ++ a ++ ")")
+          doAssert t (b,a) =
+            if b then putStrLn ("PASS: " ++ tstName ++ " @ " ++ show t ++ " (" ++ a ++ ")")
+                 else putStrLn ("FAIL: " ++ tstName ++ " @ " ++ show t ++ " (" ++ a ++ ")")
 
 tstInactive = snd amon >>> assertb "tstInactive" (== False)
     where amon = activityMonitor "tstInactive"

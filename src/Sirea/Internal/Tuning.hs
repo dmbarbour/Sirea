@@ -123,7 +123,7 @@ dtMdistHist = 0.05 -- how long to tolerate late-arriving observers
 -- is valid into the future, and help drive computation. But there
 -- is no clear indicator that a signal is "done", which can be a
 -- problem when performing GC. When stability is used to drive an
--- effect (such as UnsafeOnUpdate) a failure is even observable.
+-- effect (such as unsafeOnUpdate) a failure is even observable.
 --
 -- To help ensure computation completes, we'll add `dtFinalize` to
 -- stability when confident sure we're done with a particular link.

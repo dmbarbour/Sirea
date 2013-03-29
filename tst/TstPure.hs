@@ -14,9 +14,9 @@ import Control.Monad (unless)
 assertb :: String -> (a -> Bool) -> B (S P0 a) (S P0 a)
 assertb tstName test = bvoid $ bfmap test >>> unsafeOnUpdateB mkAssert
     where mkAssert _ = return doAssert
-          doAssert _ = maybe (return ()) $ \ b ->
-                        if b then putStrLn ("PASS: " ++ tstName)
-                             else ioError $ userError ("FAIL: " ++ tstName)
+          doAssert _ b = 
+            if b then putStrLn ("PASS: " ++ tstName)
+                 else ioError $ userError ("FAIL: " ++ tstName)
 
 -- test for dead code due to binl or binr - shouldn't even create bcx.
 assertDeadOnInput :: String -> B (S P0 x) (S P0 x)

@@ -71,7 +71,7 @@ Library
     -- user support
     Sirea.Utility
     Sirea.UnsafeLink
-    Sirea.UnsafeOnUpdate
+    Sirea.UnsafeIO
     Sirea.DemandMonitor
     Sirea.DemandListMonitor
     Sirea.AgentResource

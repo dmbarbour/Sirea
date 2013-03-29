@@ -10,8 +10,8 @@
 -- Safe RDP behaviors are idempotent. Use of AgentResource will not
 -- impact them, except for performance (eliminating redundant 
 -- computations). But AgentResource primarily benefits unsafe RDP
--- behaviors - e.g. it doesn't matter that your UnsafeOnUpdate
--- behavior is non-idempotent if it is invoked as a singleton.
+-- behaviors - e.g. it doesn't matter that your unsafeOnUpdate
+-- behaviors are not idempotent if strictly invoked as singletons.
 --
 -- Communication with the invoked behaviors is performed through
 -- demand monitors or shared state (blackboard metaphors). 
@@ -189,7 +189,7 @@ clearAR ar =
 -- Logically, use of `invokeAgent` should have the same results as
 -- many concurrent instances due to RDP's idempotence. However, the
 -- unique installation may be much more efficient and will simplify
--- safe use of non-idempotent adapters (e.g. UnsafeOnUpdate). 
+-- safe use of non-idempotent adapters (e.g. unsafeOnUpdate). 
 --
 -- Caution: invokeAgent is unsafe because cyclic invocations could
 -- ultimately cause the agent to keep itself alive. This is usually

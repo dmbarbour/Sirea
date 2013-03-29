@@ -1,38 +1,37 @@
 {-# LANGUAGE TypeOperators, GADTs #-}
 
--- | UnsafeOnUpdate provides quick and dirty behaviors to integrate 
--- output effects. While the name says `unsafe` (and it is, for RDP
--- invariants), this is far safer than using unsafeLinkB. Commands 
--- are activated when the input signal stabilizes on a new value -
--- a simple semantic that developers can easily grok and leverage.
+-- | UnsafeIO provides a few quick and dirty behaviors to integrate 
+-- Haskell IO with Sirea. These are 'unsafe' in the sense that they
+-- can violate RDP's invariants if not used carefully, but they are
+-- safe with respect to Haskell's IO monad (no unsafePerformIO).
 --
--- IO actions are not generally idempotent or commutative. Thus, the
--- unsafeOnUpdate actions may be unsafe to duplicate or rearrange in
--- manners that should be safe for RDP. These safety concerns can be
--- mitigated with some simple disciplines:
+-- The issue with Haskell IO in RDP is that it is rarely idempotent
+-- or commutative. They also have very poor support for speculation,
+-- which may increase latencies and rework. Discipline and caution,
+-- and knowledge of larger context.
 --
---   * favor resources insensitive to concurrent update events
---   * consider enforcing uniqueness of unsafeOnUpdate per resource
+-- This module supports many simple IO integration models based on
+-- different assumptions and focuses. Each model may also have a few
+-- variants.
 --
--- The Sirea.AgentResource module would help for the latter option,
--- while message-passing is often suitable for concurrent events.
+--   OnUpdate - perform output action when input changes.
+--   ReadOnce - perform input action when input changes.
+--   OnEvents - ReadOnce + schedule reads with event API.
+--   IOPolled - perform ad-hoc actions as stability updates.
+--   IOAction - fusion of OnUpdate and Polled.
 --
--- Weaknesses of UnsafeOnUpdate:
---   
---   * output only, no speculation of consequences, poor feedback
---   * driven by stability, bursty, unsuitable for real-time control
---   * neither idempotent nor commutative, unsafe for RDP invariants
+-- AgentResource and PCX may help lift these into proper APIs. 
 --
--- UnsafeOnUpdate is useful for logging, debugging, and integration
--- with some imperative APIs. It's convenient for hacking.
---
-module Sirea.UnsafeOnUpdate 
+module Sirea.UnsafeIO
     ( unsafeOnUpdateB
     , unsafeOnUpdateBL
     , unsafeOnUpdateBLN
+    -- , unsafeReadOnceB
+    -- , unsafeOnEventsB
     ) where
 
 import Data.IORef
+import Data.Maybe (mapMaybe)
 import Control.Monad (unless)
 import Control.Exception (assert)
 import Sirea.UnsafeLink
@@ -44,15 +43,13 @@ import Sirea.PCX
 import Sirea.Partition
 import Sirea.Internal.Tuning (tAncient)
 
---import Debug.Trace (traceIO) 
-
 -- | unsafeOnUpdateB - perform an IO action for every unique value
 -- in a signal as it becomes stable, then forward the update. There
 -- is also a one-time IO action on initial construction. 
 --
 -- The IO operations are performed at the end of the step.
 unsafeOnUpdateB :: (Eq a, Partition p) 
-                => (PCX p -> IO (T -> Maybe a -> IO ()))
+                => (PCX p -> IO (T -> a -> IO ()))
                 -> B (S p a) (S p a)
 unsafeOnUpdateB = unsafeLinkB . mkOnUpdate
 
@@ -60,7 +57,7 @@ unsafeOnUpdateB = unsafeLinkB . mkOnUpdate
 -- prevent dead-code elimination. The behavior will be dropped if 
 -- the `S p a` signal is not used downstream. 
 unsafeOnUpdateBL :: (Eq a, Partition p) 
-                 => (PCX p -> IO (T -> Maybe a -> IO ())) 
+                 => (PCX p -> IO (T -> a -> IO ())) 
                  -> B (S p a) (S p a)
 unsafeOnUpdateBL = unsafeLinkBL . mkOnUpdate
 
@@ -68,12 +65,12 @@ unsafeOnUpdateBL = unsafeLinkBL . mkOnUpdate
 -- any of the signals are used in the pipeline. This is useful to
 -- debug a behavior without preventing dead-code elimination. 
 unsafeOnUpdateBLN :: (Eq a, Partition p)  
-                  => (PCX p -> IO (T -> Maybe a -> IO ())) 
+                  => (PCX p -> IO (T -> a -> IO ())) 
                   -> B (S p a :&: x) (S p a :&: x)
 unsafeOnUpdateBLN = unsafeLinkBLN . mkOnUpdate
 
 mkOnUpdate :: (Eq a, Partition p) 
-           => (PCX p -> IO (T -> Maybe a -> IO ()))
+           => (PCX p -> IO (T -> a -> IO ()))
            -> PCX W -> LnkUp a -> IO (LnkUp a)
 mkOnUpdate mkOp cw lu =
     findInPCX cw >>= \ cp ->
@@ -92,7 +89,7 @@ data P z = P !(Sig z) {-# UNPACK #-} !StableT
 
 luOnUpdate  :: (Eq a) 
             => PSched -- to run actions at end of step
-            -> (T -> Maybe a -> IO ()) -- operation to execute
+            -> (T -> a -> IO ()) -- operation to execute
             -> IORef (P a) -- recorded signal; reported time
             -> LnkUp a -- output sink (just forward input, but AFTER running)
             -> LnkUp a -- input source
@@ -121,12 +118,22 @@ luOnUpdate pd op rfSig lu = LnkUp touch update idle cyc where
         let tHi  = inStableT tS in
         let sGC = s_trim s (lessOneNano tHi) in
         record tS sGC >>
-        let ops = takeWhile ((< tHi) . fst) $
+        let ops = mapMaybe seconds $
+                  takeWhile ((< tHi) . fst) $
                   dropWhile ((< tLo) . fst) $
                   sigToList (s_adjeqf (==) s) tLoR tHi 
         in
         unless (null ops) (schedOps ops)
     schedOps = onStepEnd pd . mapM_ runOp
     runOp (t,a) = op t a
+
+seconds :: (a,Maybe b) -> Maybe (a,b)
+seconds (a,Just b) = Just (a,b)
+seconds _ = Nothing
+
+
+-- | unsafeReadOnceB
+
+
 
  

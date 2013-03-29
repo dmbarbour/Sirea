@@ -29,7 +29,7 @@ import Sirea.Internal.PulseSensor (getPulseRunner)
 import Sirea.Internal.Tuning (dtRestart, dtHeartbeat, dtGrace, dtFinalize)
 import Sirea.Behavior
 import Sirea.Partition
-import Sirea.UnsafeOnUpdate
+import Sirea.UnsafeIO
 import Sirea.PCX
 import Sirea.B
 import Sirea.Time
@@ -300,8 +300,7 @@ bUnsafeExit = unsafeOnUpdateB $ \ cp0 ->
                    myThreadId >>= \ tidP0 ->
                    forkIO (killThread tidP0) 
     in
-    let op _ = maybe (return ()) (const kill) in
-    return op
+    return ((const . const) kill)
 
 newtype ExitR = ExitR { inExitR :: IORef Bool } deriving (Typeable)
 instance Resource P0 ExitR where
