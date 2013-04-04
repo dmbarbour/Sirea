@@ -133,6 +133,7 @@ idleDaggr da k tS =
     let tc' = pred (dd_touchCt dd) in
     let tbl' = M.insert k st' (dd_table dd) in
     let dd' = dd { dd_table = tbl', dd_touchCt = tc' } in
+    --seqst st' `seq`
     writeIORef' (da_data da) dd' >>
     --traceIO ("idleDaggr " ++ showK k ++ ". tc = " ++ show tc') >>
     --traceIO ("idleDaggr " ++ showK k ++ "  tS = " ++ show tS) >>
@@ -149,6 +150,7 @@ updateDaggr da k tS tU su =
     let tbl' = M.insert k st' (dd_table dd) in
     let tmup' = Just $! maybe tU (min tU) (dd_tmup dd) in
     let dd' = dd { dd_touchCt = tc', dd_table = tbl', dd_tmup = tmup' } in
+    --seqst st' `seq`
     writeIORef' (da_data da) dd' >>
     --traceIO ("updateDaggr " ++ showK k ++ " tS = " ++ show tS ++ " tU = " ++ show tU) >>
     --let showSu = sigToList (s_const () $ st_signal st') (inStableT $ st_stable st) (tU `addTime` 60) in
@@ -156,6 +158,16 @@ updateDaggr da k tS tU su =
     --traceIO ("updateDaggr " ++ showK k ++ ". tc = " ++ show tc' ++ "  tU = " ++ show tU) >>
     --traceIO ("updateDaggr " ++ showK k ++ "  tS = " ++ show tS) >>
     when (0 == tc') (deliverDaggr da)
+
+{-
+-- | sequence a contained signal up to stability
+seqst :: SigSt a -> ()
+seqst st = s_tseq mbwhnf (inStableT $ st_stable st) (st_signal st) 
+
+mbwhnf :: Maybe a ->()
+mbwhnf (Just a) = a `seq` ()
+mbwhnf Nothing = ()
+-}
 
 -- deliverDaggr is called in the update phase by idle, update, or 
 -- flush. It will compute and deliver an update.
@@ -166,6 +178,7 @@ deliverDaggr da =
     stepTime (da_psched da) >>= \ tNow ->
     assert (0 == dd_touchCt dd) $
     let lst = M.toAscList (dd_table dd) in
+    --traceIO ("deliverDaggr ct=" ++ (show . length) lst) >>
     let tMax = tNow `subtractTime` dtDaggrHist in  
     let mbtSL = leastActiveStability tNow (fmap snd lst) in
     let tS = ddStability dd mbtSL tMax in
@@ -206,6 +219,8 @@ ddNeedsFlush dd = maybe (not (M.null (dd_table dd))) -- GC flush?
 -- Garbage Collection of DemandAggr elements. A demand source can
 -- be eliminated if it isn't active (even if unstable, since Daggr
 -- doesn't utilize input stability).
+--
+-- Signals are also forced up to their
 daggrTableGC :: T -> T -> (k, SigSt e) -> Maybe (k, SigSt e)
 daggrTableGC tGC tT (k,st) =
     let s' = s_trim (st_signal st) tGC in

@@ -41,6 +41,8 @@ Library
     Sirea.Filesystem.Polling
     Sirea.Filesystem.Manager
     Sirea.Filesystem.OSManager
+    Sirea.Filesystem.WorkerPool
+    Sirea.Filesystem.KeyedSched
 
   Extensions: CPP
   ghc-options: -Wall -fno-warn-orphans

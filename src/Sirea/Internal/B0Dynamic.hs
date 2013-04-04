@@ -39,7 +39,7 @@ import Sirea.Internal.Tuning (dtCompile, dtFinalize, tAncient)
 import Sirea.Time
 import Sirea.Signal
 
---import Debug.Trace
+-- import Debug.Trace
 
 type Key = Int
 
@@ -429,6 +429,7 @@ dynEmit (Dyn rf) =
                    , dyn_blink  = bl'
                    , dyn_tmup   = Nothing }
     in
+    --trace ("dynEmit ct=" ++ (show (length bl))) $
     writeRef' rf dyn' >>
     case dyn_tmup dyn of
         Nothing ->
@@ -661,7 +662,6 @@ emitMergedSignal mln lu =
             , mld_tmup = Nothing
             , mld_cycle = S.empty }
     in
-    -- trace ("dynamic merge @ " ++ show tS ++ " lst=" ++ show (map fst lst)) $ 
     writeRef' (mln_data mln) mld' >>
     case mld_tmup mld of
         Nothing -> ln_idle lu tS 

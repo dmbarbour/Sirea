@@ -105,6 +105,6 @@ Library
     Sirea.Internal.PulseSensor
     Sirea.Internal.Tuning
 
-  ghc-options: -Wall -fno-warn-orphans
+  ghc-options: -Wall -fno-warn-orphans -auto-all
 
 

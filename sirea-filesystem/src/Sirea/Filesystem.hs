@@ -30,10 +30,16 @@
 --
 module Sirea.Filesystem 
     ( FS
-    -- * Main Filesystem Operations
+    -- * Basic File Operations
     , breadFile
     , bwriteFile
+    -- * Listing a directory
     , blistDirectory
+    , FileDesc
+    , fdIsFile
+    , fdIsDir
+    , fdModified
+    , fdPath
 
     -- , loadConfFile
     -- , filePathDetails
@@ -47,13 +53,15 @@ module Sirea.Filesystem
     ) where 
 
 import Prelude hiding (FilePath)
-import Filesystem.Path (FilePath) -- cross platform paths
-import qualified Filesystem.Path as P
-import qualified Filesystem as IOFS -- cross platform filesystem ops
+import Filesystem.Path (FilePath) 
+import qualified Filesystem.Path as FS
+import qualified Filesystem as FS 
+import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
-import qualified Data.Text as Txt
-import qualified Data.Text.Encoding as Txt
-import qualified Data.Text.Encoding.Error as Txt
+import Data.Text (Text)
+import qualified Data.Text as Text
+import qualified Data.Text.Encoding as Text
+import qualified Data.Text.Encoding.Error as Text
 import Data.Function (on)
 import Data.IORef
 import Data.Unique
@@ -66,24 +74,38 @@ import Control.Monad (join,void)
 import Control.Applicative
 import Control.Exception (SomeException,assert,try)
 
+import Sirea.Filesystem.Manager
+
 import Sirea.Prelude
-import Sirea.Behavior
 import Sirea.UnsafeLink
 import Sirea.AgentResource
 import Sirea.Partition
 import Sirea.PCX
-import Sirea.Time
 
 import Debug.Trace (traceIO)
+
+-- TUNING
+-- How many files shall we allow to read or write concurrently?
+numFileLoaders :: Int
+numFileLoaders = 6
 
 -- | Sirea performs FileSystem operations in the FS partition.
 type FS = Pt (Filesystem ()) -- simple loop partition.
 data Filesystem x deriving (Typeable)
 
+    
 
--- How many files shall we allow to read or write concurrently?
-numFileLoaders :: Int
-numFileLoaders = 6
+-- Resource: I'll keep a basic reflection of the filesystem being
+-- observed or manipulated.
+data FileRfl = FileRfl !FileSt !WriteMap !ObsMap
+type FileSt = Maybe ByteString
+type WriteMap = M.Map Unique (Signal FileSt)
+type ObsMap = M.Map Unique Alert
+type Alert = IO () -- alerts run once then must be rescheduled
+data DirRfl = DirRfl !FileRflMap !DirList !ObsMap !SchedMap 
+type FileRflMap = M.Map FilePath FileRfl
+type DirList = M.Map FilePath FileDesc
+
 
 --
 -- sirea-filesystem leverages the events model of the underlying OS
@@ -91,39 +113,21 @@ numFileLoaders = 6
 -- directories, and pumps all events back to the partition thread.
 --
 --
---     Notify
---       | A  watch or unwatch dirs
+--     Notification Manager
+--       | A  setWatchList up, events down
 --       V |
 --    Sirea FS Pt
 --       ||||||
 --       Loader Threads
 --
-
--- EventPump carries much data to support the above architecture.
-data EventPump = EventPump
-    { ep_watch    :: !(IORef (M.Map FilePath DirWatch))    
-    , ep_psched   :: !PSched
-    } deriving (Typeable)
-instance (Typeable x) => Resource (Pt (Filesystem x)) EventPump where 
-    locateResource _ = newEventPump
-data DirWatch = DirWatch
-
-newEventPump :: (Partition p) => PCX p -> IO EventPump
-newEventPump cp = 
-    getPSched cp >>= \ pd ->
-    newChan >>= \ ch ->
-    newIORef M.empty >>= \ rfW ->
-    return (EventPump ch rfW wp pd)
-
-
-
+-- 
 
 -- | Read the current contents of a file. If the file does not exist
 -- or there are errors (e.g. lack of permission), Nothing will be 
 -- returned. Read cannot promise observation of every intermediate
 -- state in the filesystem, but it will observe every state written
 -- by this Sirea process.
-breadFile :: B (S FS FilePath) (S FS (Maybe B.ByteString))
+breadFile :: B (S FS FilePath) (S FS (Maybe ByteString))
 breadFile = bundefined -- might want to substitute something here for now
 
 -- | Read a file as text. This simply maps a UTF-8 decode over the 
@@ -136,9 +140,9 @@ breadFile = bundefined -- might want to substitute something here for now
 -- Sirea.Filesystem treats binary as the primary view to simplify
 -- interaction between readers and writers of different kinds.
 -- 
-breadFileText :: B (S FS FilePath) (S FS (Maybe Txt.Text))
+breadFileText :: B (S FS FilePath) (S FS (Maybe Text))
 breadFileText = breadFile >>> bfmap (fmap toText) where
-    toText = Txt.decodeUtf8With Txt.ignore
+    toText = Text.decodeUtf8With Text.ignore
 
 -- | Read a file as a string. This is not ideal for performance, but
 -- is convenient. Note that this translates to Text first.
@@ -146,7 +150,7 @@ breadFileText = breadFile >>> bfmap (fmap toText) where
 --   breadFileString = breadFileText >>> bfmap (fmap unpack)
 --
 breadFileString :: B (S FS FilePath) (S FS (Maybe String))
-breadFileString = breadFileText >>> bfmap (fmap Txt.unpack)
+breadFileString = breadFileText >>> bfmap (fmap Text.unpack)
 
 
 -- | Write a file, or remove it. When writing a file, intermediate
@@ -171,20 +175,24 @@ breadFileString = breadFileText >>> bfmap (fmap Txt.unpack)
 -- The response is simple boolean, with True being OK or success. A
 -- failure, whether due to permissions or write conflict, is False.
 --
-bwriteFile :: B (S FS (FilePath, Maybe B.ByteString)) (S FS Bool)
+bwriteFile :: B (S FS (FilePath, Maybe ByteString)) (S FS Bool)
 bwriteFile = bundefined
 
 -- | Write text to file as UTF-8.
-bwriteFileText :: B (S FS (FilePath, Maybe Txt.Text)) (S FS Bool)
-bwriteFileText = bfmap (second (fmap Txt.encodeUtf8)) >>> bwriteFile
+bwriteFileText :: B (S FS (FilePath, Maybe Text)) (S FS Bool)
+bwriteFileText = bfmap (second (fmap Text.encodeUtf8)) >>> bwriteFile
 
 -- | Write a string to file as UTF-8.
 bwriteFileString :: B (S FS (FilePath, Maybe String)) (S FS Bool)
-bwriteFileString = bfmap (second (fmap Txt.pack)) >>> bwriteFileText
+bwriteFileString = bfmap (second (fmap Text.pack)) >>> bwriteFileText
 
 
-blistDirectory :: B (S FS FilePath) (S FS [FilePath])
+-- | List contents of a directory, including relevant metadata.
+blistDirectory :: B (S FS FilePath) (S FS [FileDesc])
 blistDirectory = bundefined
+
+
+
 
 
 {-
@@ -212,48 +220,5 @@ bworkingDir, bhomeDir, bdesktopDir, bdocumentsDir :: B (S FS ()) (S FS FilePath)
 bappDataDir, bappCacheDir, bappConfigDir :: Text -> B (S FS ()) (S FS FilePath)
 -}
 
------------------------------------------------------------------
-
--- A pool of worker threads. Effectively a semaphore. But in this
--- case, new threads will spin up when necessary and self-destruct
--- when they run out of work. (Threads are cheap in Haskell.) The
--- main reason to limit concurrent work is to control resources,
--- e.g. number of open file descriptors and the amount of memory in
--- use but inaccessible due to only partial completion.
---
--- Intended for short-lived work, e.g. to read or write one file.
--- The IO operations should have their own way of calling home when
--- a result is needed. Workers will silently kill exceptions, but
--- the IO ops should catch them first (now asserted for debugging).
---
-type WPD = Either Int [IO ()]
-type WPool = IORef WPD 
-
-newWorkerPool :: Int -> IO WPool
-newWorkerPool n = assert (n > 0) $ newIORef (Left n)
-
-addWorkToPool :: WPool -> IO () -> IO ()
-addWorkToPool wp op = join $ atomicModifyIORef wp add where
-    add (Left 0) = (Right [op],return ())
-    add (Left n) = assert (n > 0) $ (Left (pred n), forkWorker wp op)
-    add (Right ops) = (Right opsop, return ()) where
-        opsop = ops ++ [op]
-
-forkWorker :: WPool -> IO () -> IO ()
-forkWorker wp op = void $ forkIO $ workerLoop wp op
-
-workerLoop :: WPool -> IO () -> IO ()
-workerLoop wp op = (try op >>= assertNoE) >> doMoreWork wp
-
-assertNoE :: Either SomeException () -> IO ()
-assertNoE (Left _) = assert False $ return ()
-assertNoE _ = return ()
-    
-doMoreWork :: WPool -> IO ()
-doMoreWork wp = join $ atomicModifyIORef wp take where
-    take (Left n) = (Left (succ n), return ())
-    take (Right []) = error "invalid state for worker pool"
-    take (Right (op:[])) = (Left 0, workerLoop wp op)
-    take (Right (op:ops)) = (Right ops, workerLoop wp op)
 
 

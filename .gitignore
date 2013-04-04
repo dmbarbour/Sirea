@@ -3,6 +3,7 @@ tmp/
 *~
 *.hi
 *.o
+*.prof
 src/FRP/Sirea/BdeepGen
 cabal-dev/
 .shelly

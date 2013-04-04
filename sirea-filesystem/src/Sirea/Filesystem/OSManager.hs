@@ -4,6 +4,8 @@
 -- Select the OS-specific manager.
 module Sirea.Filesystem.OSManager (newManager) where
 
+import Sirea.Filesystem.Manager
+
 #if defined(USE_POLLING)
 import Sirea.Filesystem.Polling
 #elif defined(OS_Linux)

@@ -32,11 +32,14 @@ module Sirea.Internal.DiscreteTimedSeq
     , ds_adjn0, ds_adjn1
     , ds_ap
     , ds_merge 
+    , ds_mergeZip
     , ds_mask0, ds_mask1
     ) where
 
 import Sirea.Time (T)
 import Control.Exception (assert)
+import Control.Applicative
+import Data.Maybe (isNothing)
 
 -- | DStep is the result of a search. 
 data DStep a 
@@ -116,6 +119,14 @@ ds_map_step _ DSDone = DSDone
 ds_map_step f (DSWait ds) = DSWait (ds_map f ds)
 ds_map_step f (DSNext tx x ds) = DSNext tx (f x) (ds_map f ds)
 
+-- a couple rules to help with ds_mergeZip
+{-# RULES
+"ds_map/id" ds_map id = id
+"ds_map_step/id" ds_map_step id = id
+"ds_map/fmap_id" ds_map (fmap id) = id
+"ds_map_step/fmap_id" ds_map_step (fmap id) = id
+  #-}
+
 -- | ds_query obtains a value of a DSeq at a given time, treating
 -- it like a signal. The previous value must be provided. The
 -- future sequence is part of the result.
@@ -161,7 +172,7 @@ ds_sigup_i' ys tm xs =
                  xsu `seq` ds_first tx x xsu
             else ys
 
--- | filter the sequence
+-- | filter a sequence
 ds_filter :: (a -> Bool) -> DSeq a -> DSeq a
 ds_filter fnKeep ds = DSeq $ \ tq ->
     case dstep ds tq of
@@ -173,16 +184,17 @@ ds_filter fnKeep ds = DSeq $ \ tq ->
                 else dstep rest tq
 
 -- | filter adjacent entries by a given equality function, with an 
--- initial value. The test value to the filter updates whenever a
--- value is accepted into the sequence (i.e. not equal).
+-- initial value. Will compare against the last reported value or
+-- the initial value.
 ds_adjeqfx :: (a -> a -> Bool) -> a -> DSeq a -> DSeq a
-ds_adjeqfx eq x ds = DSeq $ \ tq ->
-    case dstep ds tq of
-        DSDone      -> DSDone
-        DSWait ds'  -> DSWait $ ds_adjeqfx eq x ds'
-        DSNext tx x' ds' -> if (eq x x') 
-            then dstep (ds_adjeqfx eq x ds') tq
-            else DSNext tx x' (ds_adjeqfx eq x' ds')
+ds_adjeqfx eq x xs = DSeq $ \ tq -> ds_adjeqfx_step eq x tq (dstep xs tq)
+
+ds_adjeqfx_step :: (a -> a -> Bool) -> a -> T -> DStep a -> DStep a
+ds_adjeqfx_step _ _ _ DSDone = DSDone
+ds_adjeqfx_step eq x _ (DSWait xs') = DSWait (ds_adjeqfx eq x xs')
+ds_adjeqfx_step eq x tq (DSNext tx x' xs') =
+    if (eq x x') then ds_adjeqfx_step eq x tq (dstep xs' tq)
+                 else DSNext tx x' (ds_adjeqfx eq x' xs')
 
 -- | apply elements of one sequence to another on matching times.
 ds_ap :: (x -> y) -> x -> DSeq (x -> y) -> DSeq x -> DSeq y
@@ -192,8 +204,7 @@ ds_ap f x fs xs = DSeq $ \ tq ->
     ds_ap_step f x uf ux
 
 -- internal operation for ds_ap
-ds_ap_step :: (x -> y) -> x 
-                      -> DStep (x -> y) -> DStep x -> DStep y
+ds_ap_step :: (x -> y) -> x -> DStep (x -> y) -> DStep x -> DStep y
 ds_ap_step _ x uf DSDone = ds_map_step ($ x) uf
 ds_ap_step f _ DSDone ux = ds_map_step f ux
 ds_ap_step f x (DSWait fs) (DSWait xs) = DSWait (ds_ap f x fs xs)
@@ -210,71 +221,74 @@ ds_ap_step f x (DSNext tf f' fs') (DSNext tx x' xs') =
           xs = ds_first tx x' xs'
 
 -- | ds_merge treats the sequences as signals, and combines two
--- signals favoring the RHS while active. This is basically a
+-- signals favoring the LHS while active. This is basically a
 -- specialized zip for merging. In particular, it will avoid
--- introducing duplicate updates except at transitions between
+-- introducing false updates except at transitions between
 -- signal sources.
-ds_merge :: (Maybe a) -> (Maybe a) 
-         -> DSeq (Maybe a) -> DSeq (Maybe a) -> DSeq (Maybe a)
-ds_merge x y xs ys = DSeq $ \ tq ->
-    let ux = dstep xs tq in
-    let uy = dstep ys tq in
-    ds_merge_step x y tq ux uy
+--
+ds_merge :: (Maybe a) -> (Maybe a) -> DSeq (Maybe a) 
+         -> DSeq (Maybe a) -> DSeq (Maybe a)
+ds_merge = mg where
+    mg x y xs ys = DSeq $ \ tq -> ms x y tq (dstep xs tq) (dstep ys tq)
+    ms Nothing _ _ DSDone uy = uy -- left is done, so stay in right
+    ms _ Nothing _ ux DSDone = ux -- right is done, so stay in left
+    ms (Just _) _ _ DSDone _ = DSDone -- forever in left; left masks right
+    ms _ y@(Just _) _ ux DSDone = ds_map_step (<|> y) ux -- flip-flop with y
+    ms x y _ (DSWait xs) (DSWait ys) = DSWait (mg x y xs ys) -- both inputs waiting
+    ms Nothing y tq (DSNext _ Nothing xs) uy = ms Nothing y tq (dstep xs tq) uy    -- false update left
+    ms x Nothing tq ux (DSNext _ Nothing ys) = ms x Nothing tq ux (dstep ys tq)    -- false update right
+    ms _ y _ (DSNext tx x' xs') (DSWait ys) = msL tx x' xs' y ys                   -- update left
+    ms x _ tq ux@(DSWait xs) (DSNext ty y' ys') = msR x tq ux xs ty y' ys'         -- update right
+    ms x y tq ux@(DSNext tx x' xs') (DSNext ty y' ys') =
+        case compare tx ty of
+            LT -> msL tx x' xs' y (ds_first ty y' ys')
+            GT -> msR x tq ux (ds_first tx x' xs') ty y' ys'
+            EQ -> DSNext tx (x' <|> y') (mg x' y' xs' ys')
+    msL tx x' xs' y ys = DSNext tx (x' <|> y) (mg x' y xs' ys)         -- update on left
+    msR Nothing _ _ xs ty y' ys' = DSNext ty y' (mg Nothing y' xs ys') -- update on right is exposed
+    msR x@(Just _) tq ux _ _ y' ys' = ms x y' tq ux (dstep ys' tq)     -- update on right is masked
 
-ds_merge_step :: (Maybe a) -> (Maybe a) -> T
-    -> DStep (Maybe a) -> DStep (Maybe a) -> DStep (Maybe a)
-ds_merge_step _ y _ ux DSDone = if kp y then DSDone else ux
-ds_merge_step x _ _ DSDone uy = if kp x then uz else uy
-    where uz = ds_map_step (\ z -> if kp z then z else x) uy
-ds_merge_step x y _ (DSWait xs) (DSWait ys) = DSWait (ds_merge x y xs ys)
-ds_merge_step x y tq (DSNext tx x' xs') uy@(DSWait ys) =
-    ds_merge_step_left x y tq tx x' xs' uy ys
-ds_merge_step x y tq ux@(DSWait xs) (DSNext ty y' ys') =
-    ds_merge_step_right x y tq ux xs ty y' ys'
-ds_merge_step x y tq ux@(DSNext tx x' xs') uy@(DSNext ty y' ys') =
-    case (compare tx ty) of
-        LT -> ds_merge_step_left x y tq tx x' xs' uy ys
-        GT -> ds_merge_step_right x y tq ux xs ty y' ys'
-        EQ -> let rest = ds_merge x' y' xs' ys' in
-              if kp y' then DSNext ty y' rest
-                       else DSNext tx x' rest
-    where xs = ds_first tx x' xs'
-          ys = ds_first ty y' ys'
-
--- refactored functions from ds_merge
-ds_merge_step_left :: Maybe a -> Maybe a -> T -> T 
-    -> Maybe a -> DSeq (Maybe a) -> DStep (Maybe a) -> DSeq (Maybe a)
-    -> DStep (Maybe a)
-ds_merge_step_left _ y tq tx x' xs' uy ys =
-    if kp y then ds_merge_step x' y tq (dstep xs' tq) uy
-            else DSNext tx x' (ds_merge x' y xs' ys) 
-
-ds_merge_step_right :: Maybe a -> Maybe a -> T
-    -> DStep (Maybe a) -> DSeq (Maybe a)
-    -> T -> Maybe a -> DSeq (Maybe a)
-    -> DStep (Maybe a)
-ds_merge_step_right x y tq ux xs ty y' ys' =
-    let rest = ds_merge x y' xs ys' in
-    if kp y' then DSNext ty y' rest
-      else if kp y then DSNext ty x rest
-        else ds_merge_step x y' tq ux (dstep ys' tq) 
-
-kp :: Maybe a -> Bool
-kp Nothing  = False
-kp _        = True
+-- | ds_mergeZip will combine two signals when both are active, or
+-- otherwise use just one of the two signals. The performance of
+-- mergeZip is potentially intermediate to merge and zip, with the
+-- ability to better handle inactivity of a signal. Inactive if both
+-- inputs are inactive.
+--
+ds_mergeZip :: (a -> b -> c) -> (a -> c) -> (b -> c)
+            -> (Maybe a) -> (Maybe b)
+            -> DSeq (Maybe a) -> DSeq (Maybe b) -> DSeq (Maybe c)
+ds_mergeZip zab ina inb = mz where
+    mz a b as bs = DSeq $ \ tq -> mzs a b tq (dstep as tq) (dstep bs tq) -- merge zip query
+    mzs Nothing _ _ DSDone bs = ds_map_step (fmap inb) bs -- transfer b values
+    mzs _ Nothing _ as DSDone = ds_map_step (fmap ina) as -- transfer a values
+    mzs (Just af) _ _ DSDone bs = ds_map_step (fmap (zab af)) bs -- zip with final a
+    mzs _ (Just bf) _ as DSDone = ds_map_step (fmap (flip zab bf)) as -- zip with final b
+    mzs a b _ (DSWait as) (DSWait bs) = DSWait (mz a b as bs) -- waiting, no updates yet
+    mzs Nothing b tq (DSNext _ Nothing as') sb = mzs Nothing b tq (dstep as' tq) sb -- false update left
+    mzs a Nothing tq sa (DSNext _ Nothing bs') = mzs a Nothing tq sa (dstep bs' tq) -- false update right
+    mzs _ b _ (DSNext ta a' as') (DSWait bs) = DSNext ta (mbz a' b) (mz a' b as' bs) -- step left
+    mzs a _ _ (DSWait as) (DSNext tb b' bs') = DSNext tb (mbz a b') (mz a b' as bs') -- step right
+    mzs a b _ (DSNext ta a' as') (DSNext tb b' bs') =
+        case compare ta tb of
+            LT -> DSNext ta (mbz a' b ) (mz a' b  as' bs )
+            GT -> DSNext tb (mbz a  b') (mz a  b' as  bs')
+            EQ -> DSNext ta (mbz a' b') (mz a' b' as' bs')
+        where as = ds_first ta a' as'
+              bs = ds_first tb b' bs'
+    mbz (Just a) (Just b) = Just (zab a b)
+    mbz Nothing mb = fmap inb mb
+    mbz ma Nothing = fmap ina ma
 
 -- | use second signal to control the activity of the first.
 -- | ds_mask0 assumes x hidden by y
-ds_mask0 :: (Maybe a) 
-    -> DSeq (Maybe a) -> DSeq (Maybe b_) -> DSeq (Maybe a)
+ds_mask0 :: (Maybe a) -> DSeq (Maybe a) -> DSeq (Maybe b_) -> DSeq (Maybe a)
 ds_mask0 x xs ys = DSeq $ \ tq ->
     let ux = dstep xs tq in
     let uy = dstep ys tq in
     ds_mask0_step x tq ux uy
 
 -- | ds_mask1 assumes x not hidden by y (x might be 'Nothing' anyway)
-ds_mask1 :: (Maybe a) 
-    -> DSeq (Maybe a) -> DSeq (Maybe b_) -> DSeq (Maybe a)
+ds_mask1 :: (Maybe a) -> DSeq (Maybe a) -> DSeq (Maybe b_) -> DSeq (Maybe a)
 ds_mask1 x xs ys = DSeq $ \ tq ->
     let ux = dstep xs tq in
     let uy = dstep ys tq in
@@ -282,95 +296,78 @@ ds_mask1 x xs ys = DSeq $ \ tq ->
 
 -- find next element, mask currently hiding x
 ds_mask0_step :: Maybe a -> T -> DStep (Maybe a)
-    -> DStep (Maybe b_) -> DStep (Maybe a)
+              -> DStep (Maybe b_) -> DStep (Maybe a)
 ds_mask0_step _ _ _ DSDone = DSDone       -- masked from now on
 ds_mask0_step Nothing _ DSDone _ = DSDone -- signal inactive
-ds_mask0_step (Just c) tq DSDone uy = ds_const0_step c tq uy
+ds_mask0_step (Just c) tq DSDone uy = ds_const0_step c tq uy -- mask a constant
 ds_mask0_step x _ (DSWait xs) (DSWait ys) = DSWait (ds_mask0 x xs ys)
+ds_mask0_step Nothing tq (DSNext _ Nothing xs') uy =
+    ds_mask0_step Nothing tq (dstep xs' tq) uy -- false step left
+ds_mask0_step x tq ux (DSNext _ Nothing ys') =
+    ds_mask0_step x tq ux (dstep ys' tq) -- false step right
 ds_mask0_step _ tq (DSNext _ x' xs') uy@(DSWait _) =
-    ds_mask0_step x' tq (dstep xs' tq) uy
-ds_mask0_step x tq ux@(DSWait xs) (DSNext ty y' ys') =
-    ds_mask0_step_right x tq ux xs ty y' ys'
-ds_mask0_step x tq ux@(DSNext tx x' xs') uy@(DSNext ty y' ys') =
+    ds_mask0_step x' tq (dstep xs' tq) uy -- step left masked
+ds_mask0_step x tq ux@(DSWait xs) (DSNext ty (Just _) ys') =
+    ds_mask0_step_unmask x tq ux xs ty ys'
+ds_mask0_step x tq ux@(DSNext tx x' xs') uy@(DSNext ty (Just _) ys') =
     case (compare tx ty) of
         LT -> ds_mask0_step x' tq (dstep xs' tq) uy
-        GT -> ds_mask0_step_right x tq ux xs ty y' ys'
-        EQ -> if (kp y') then
-                if (kp x') then DSNext tx x' (ds_mask1 x' xs' ys')
-                  else dstep (ds_mask1 x' xs' ys') tq
-                else dstep (ds_mask0 x' xs' ys') tq
-    where xs = ds_first tx x' xs'
+        GT -> ds_mask0_step_unmask x tq ux (ds_first tx x' xs') ty ys'
+        EQ -> ds_mask0_step_unmask x' tq (dstep xs' tq) xs' ty ys'
 
--- refactored from ds_mask0_step.
-ds_mask0_step_right :: Maybe a -> T -> DStep (Maybe a) 
-    -> DSeq (Maybe a) -> T -> Maybe b_ -> DSeq (Maybe b_)
-    -> DStep (Maybe a)
-ds_mask0_step_right x tq ux xs ty y' ys' =
-    if (kp y') then 
-        if (kp x) then DSNext ty x (ds_mask1 x xs ys')
-          else ds_mask1_step x tq ux (dstep ys' tq)
-       else ds_mask0_step x tq ux (dstep ys' tq)
+-- unmask a signal, handle the case there is Nothing to unmask
+ds_mask0_step_unmask :: Maybe a -> T -> DStep (Maybe a) -> DSeq (Maybe a) 
+                     -> T -> DSeq (Maybe b_) -> DStep (Maybe a)
+ds_mask0_step_unmask Nothing tq ux _ _ ys = ds_mask1_step Nothing tq ux (dstep ys tq)
+ds_mask0_step_unmask x _ _ xs ty ys = DSNext ty x (ds_mask1 x xs ys)
 
 -- find next element, mask exposes x
 ds_mask1_step :: Maybe a -> T -> DStep (Maybe a) 
-    -> DStep (Maybe b_) -> DStep (Maybe a)
+              -> DStep (Maybe b_) -> DStep (Maybe a)
 ds_mask1_step _ _ ux DSDone = ux   -- unmasked from now on
-ds_mask1_step Nothing _ DSDone _ = DSDone -- signal inactive
-ds_mask1_step (Just c) tq DSDone uy = ds_const1_step c tq uy 
+ds_mask1_step Nothing _ DSDone _ = DSDone -- signal inactive from now on
+ds_mask1_step (Just c) tq DSDone uy = ds_const1_step c tq uy -- mask a constant
 ds_mask1_step x _ (DSWait xs) (DSWait ys) = DSWait (ds_mask1 x xs ys)
-ds_mask1_step x tq (DSNext tx x' xs') uy@(DSWait ys) =
-    ds_mask1_step_left x tq tx x' xs' uy ys
-ds_mask1_step x tq ux@(DSWait xs) (DSNext ty y' ys') =
-    ds_mask1_step_right x tq ux xs ty y' ys'
-ds_mask1_step x tq ux@(DSNext tx x' xs') uy@(DSNext ty y' ys') =
+ds_mask1_step Nothing tq (DSNext _ Nothing xs') uy =
+    ds_mask1_step Nothing tq (dstep xs' tq) uy -- false step left (still Nothing)
+ds_mask1_step x tq ux (DSNext _ (Just _) ys') =
+    ds_mask1_step x tq ux (dstep ys' tq) -- false step right (still exposed)
+ds_mask1_step _ _ (DSNext tx x' xs') (DSWait ys) =
+    DSNext tx x' (ds_mask1 x' xs' ys) -- step left exposed
+ds_mask1_step x tq ux@(DSWait xs) (DSNext ty Nothing ys') =
+    ds_mask1_step_right x tq ux xs ty ys'
+ds_mask1_step x tq ux@(DSNext tx x' xs') (DSNext ty Nothing ys') =
     case (compare tx ty) of
-        LT -> ds_mask1_step_left x tq tx x' xs' uy ys
-        GT -> ds_mask1_step_right x tq ux xs ty y' ys'
-        EQ -> if (kp y') then ds_mask1_step_left x tq tx x' xs' (dstep ys' tq) ys'
-                else if (kp x) then DSNext tx Nothing (ds_mask0 x' xs' ys')
-                  else dstep (ds_mask0 x' xs' ys') tq
-    where xs = ds_first tx x' xs'
-          ys = ds_first ty y' ys'
+        LT -> DSNext tx x' (ds_mask1 x' xs' (ds_first ty Nothing ys'))
+        GT -> ds_mask1_step_right x tq ux (ds_first tx x' xs') ty ys'
+        EQ -> if isNothing x then ds_mask0_step x' tq (dstep xs' tq) (dstep ys' tq) 
+                             else DSNext tx Nothing (ds_mask0 x' xs' ys')
 
--- refactored from ds_mask1_step.
-ds_mask1_step_left :: Maybe a -> T -> T 
-    -> Maybe a -> DSeq (Maybe a) 
-    -> DStep (Maybe b_) -> DSeq (Maybe b_)
-    -> DStep (Maybe a)
-ds_mask1_step_left x tq tx x' xs' uy ys =
-    if (kp x || kp x') then DSNext tx x' (ds_mask1 x' xs' ys)
-      else ds_mask1_step x' tq (dstep xs' tq) uy
-
--- refactored from ds_mask1_step.
-ds_mask1_step_right :: Maybe a -> T 
-    -> DStep (Maybe a) -> DSeq (Maybe a)
-    -> T -> Maybe b_ -> DSeq (Maybe b_) 
-    -> DStep (Maybe a)
-ds_mask1_step_right x tq ux xs ty y' ys' =
-    if (kp y') then ds_mask1_step x tq ux (dstep ys' tq)
-      else if (kp x) then DSNext ty Nothing (ds_mask0 x xs ys')
-        else ds_mask0_step x tq ux (dstep ys' tq)
-
+-- mask a signal; handle case where there is Nothing to mask
+ds_mask1_step_right :: Maybe a -> T -> DStep (Maybe a) -> DSeq (Maybe a) 
+                    -> T -> DSeq (Maybe b_) -> DStep (Maybe a)
+ds_mask1_step_right Nothing tq ux _ _ ys = ds_mask0_step Nothing tq ux (dstep ys tq)
+ds_mask1_step_right x _ _ xs ty ys = DSNext ty Nothing (ds_mask0 x xs ys)
 
 -- | filter duplicate 'Nothing' values. 
 -- assume prior element was 'Nothing'
 ds_adjn0 :: DSeq (Maybe a) -> DSeq (Maybe a)
-ds_adjn0 ds = DSeq $ \ tq ->
-    case dstep ds tq of
-        DSDone -> DSDone
-        DSWait ds' -> DSWait (ds_adjn0 ds')
-        DSNext _ Nothing ds' -> dstep (ds_adjn0 ds') tq
-        DSNext tm v ds' -> DSNext tm v (ds_adjn1 ds')
+ds_adjn0 ds = DSeq $ \ tq -> ds_adjn0_step tq (dstep ds tq)
 
--- same as ds_adjn1, but assuming prior value was Just
+-- separated for smoother recursive case
+ds_adjn0_step :: T -> DStep (Maybe a) -> DStep (Maybe a)
+ds_adjn0_step _ DSDone = DSDone
+ds_adjn0_step _ (DSWait ds') = DSWait (ds_adjn0 ds')
+ds_adjn0_step tq (DSNext _ Nothing ds') = ds_adjn0_step tq (dstep ds' tq)
+ds_adjn0_step _ (DSNext tx x ds') = DSNext tx x (ds_adjn1 ds')
+
+-- | same as ds_adjn0, but assuming prior value was Just
 ds_adjn1 :: DSeq (Maybe a) -> DSeq (Maybe a)
-ds_adjn1 ds = DSeq $ \ tq ->
+ds_adjn1 ds = DSeq $ \ tq -> 
     case dstep ds tq of
         DSDone -> DSDone
         DSWait ds' -> DSWait (ds_adjn1 ds')
         DSNext tm Nothing ds' -> DSNext tm Nothing (ds_adjn0 ds')
         DSNext tm v ds' -> DSNext tm v (ds_adjn1 ds')
-
-
 
 

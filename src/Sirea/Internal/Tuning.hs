@@ -20,16 +20,17 @@ import Sirea.Time (T,DT,mkTime)
 -- main application is treated like any dynamic execution (even runs
 -- within a dynamic evaluation).
 --
--- The current heartbeat, 86.4ms, is chosen to be one millionth of a
--- day, which is fairly convenient when time is represented in MJD.
--- But any heartbeat between 10-30 Hz is reasonable. (Heartbeat in
--- Sirea affects GC and performance, not semantics.)
+-- The current heartbeat, 43.2ms, is chosen to a tiny fraction of a
+-- day rather (convenient for time represented in MJD). But any 
+-- heartbeat between 10-30 Hz is reasonable. (Heartbeat in Sirea 
+-- affects GC and efficiency, and simple IO adapters. But it does
+-- not affect semantics or logical frequencies.)
 --
 -- The grace period is added to any startup or shutdown, to support
 -- speculative evaluation from the start.
 dtRestart, dtHeartbeat, dtGrace :: DT
 dtRestart   = 2.0  -- how long a pause to force a restart
-dtHeartbeat = 0.0864 -- heartbeat and periodic increase of stability
+dtHeartbeat = 0.0432 -- heartbeat and periodic increase of stability
 dtGrace     = dtHeartbeat -- time allotted for graceful start and stop
 
 -- A small update to stability is not always worth sending. It must
@@ -46,14 +47,14 @@ dtGrace     = dtHeartbeat -- time allotted for graceful start and stop
 -- choke processing of updates that apply to values in the distant
 -- future.
 dtFutureChoke :: DT
-dtFutureChoke = 3 * dtHeartbeat
+dtFutureChoke = 4 * dtHeartbeat
 
 -- In some cases, such as demand aggregators, stability is bounded
 -- by the clock. In these cases, we'll want to ensure a significant
 -- update to the clock before updating stability. (If we allow tiny
 -- updates to the clock, we'll end up cycling more than needed.)
 dtClockFlush :: DT
-dtClockFlush = dtHeartbeat / 3
+dtClockFlush = dtHeartbeat / 2
 
 
 -- TODO: develop a combined choke*eqshift that can support some sort
@@ -65,7 +66,7 @@ dtClockFlush = dtHeartbeat / 3
 -- we seek for a point of ideal alignment to 'swap in' the updated
 -- signal?
 dtEqShift, dtAlign :: DT
-dtEqShift = 4 * dtHeartbeat -- comparison of values
+dtEqShift = 6 * dtHeartbeat -- comparison of values
 dtAlign = 4 * dtHeartbeat -- extra search for alignment
 
 -- When we 'btouch', how far (relative to stability) do we cause the
@@ -82,7 +83,7 @@ dtTouch = dtEqShift / 10
 -- potentially much more rework when signals change. I plan to make
 -- this more adaptive, eventually.
 dtCompile :: DT
-dtCompile = 3 * dtHeartbeat -- how far to anticipate dynamic behaviors
+dtCompile = dtFutureChoke -- how far to anticipate dynamic behaviors
 
 -- Communication between partitions in Sirea occurs via bcross, and
 -- uses coarse-grained batches to support snapshot consistency and
@@ -127,11 +128,8 @@ dtMdistHist = 0.05 -- how long to tolerate late-arriving observers
 --
 -- To help ensure computation completes, we'll add `dtFinalize` to
 -- stability when confident sure we're done with a particular link.
---
--- However, this should be set to 0 while debugging. A large value
--- will pave over bugs, but it's better to remove them.
 dtFinalize :: DT
-dtFinalize = 0 -- 100 * dtHeartbeat
+dtFinalize = 0 -- dtRestart
 
 -- In some cases, I want to initialize structures with a lower bound
 -- for Time. But I don't want to pay code and performance overheads 
