@@ -139,7 +139,7 @@ The best way to learn RDP is probably to use it, and to implement examples a few
 Signal Values
 -------------
 
-**Note:** RDP developers do not use first-class signals. RDP developers do not use second-class signals. RDP developers do not directly use signals. However, an understanding of signals is essential for understanding RDP. Concrete knowledge of signals is also necessary to adapt Sirea to more external resources. 
+**Note:** RDP developers do not use first-class signals. RDP developers do not use second-class signals. RDP developers do not directly observe or manipulate signals. However, an understanding of signals is essential for understanding RDP. Concrete knowledge of signals and their representation is also necessary to adapt Sirea to external resources (adapters to other paradigms are almost never purely RDP code). 
 
 A **Signal** is a value. A signal describes another value as it changes over time. Often, the the time-varying value will represent state of an external resource. For example, if I were to continuously observe the state of the "w" key on my keyboard, it would be in an up state most of the time, and in a down state for the brief times I press the button, as when writing "down", "when", or "writing". I could represent this in a signal by mapping the position of the "w" key on a precise timeline.
 
@@ -171,37 +171,18 @@ The use of `Maybe` allows sequential signals to be combined on a single update s
 
 ### Representing Concrete Signals
 
-Above I provided a potential representation for signals:
+Sirea has gone through a few implementations of signals. The current representation is essentially the same as the list described above, except it is strict (on the spine) and efficiently packed.
 
-        (Nothing, [(t0, Just Up), (t1, Just Down), (t2, Just Up), 
-                   (t3, Just Down), (t4, Just Up), (t5, Nothing)])
+        data Sig a = Sig !(Maybe a) !(Seq a)
+        data Seq a = Step {-# UNPACK #-} !T a !(Seq a)
+                   | Stop {-# UNPACK #-} !T !(Seq a)
+                   | Done
 
-This was actually one of my earlier representations for concrete signals in Sirea, but it has a severe weakness. Consider processing a signal with `bconst 3`. The result is a structure like:
+A consequence of the strict sequence is that Sirea cannot directly represent infinite signals unless they are constant. Sirea will always need to deliver updates for signals that change even if those changes could be predicted ages in advance (e.g. for a logical clock signal that updates every second, on the second). 
 
-        (Nothing, [(t0, Just 3), (t1, Just 3), (t2, Just 3), 
-                   (t3, Just 3), (t4, Just 3), (t5, Nothing)])
+An advantage of the current design is that it becomes relatively easy to reason about memory and performance, and there is no risk of divergence for operations that might process the whole future of a signal (e.g. to filter out *false updates* where values in adjacent steps are equal, or to remove adjacent stops). Also, it's safer than a lazy list to integrate with external communications.
 
-Here, all but the first and last of these updates are redundant. This has a space cost, but it also has consequences for downstream processing (e.g. to zip this signal with another). Efficiency can be improved by filtering the redundant updates. The same signal would be more efficiently represented as:
-
-        (Nothing, [(t0, Just 3), (t5, Nothing)])
-
-Assuming `t0` and `t5` are very close to one another, they can be filtered from the signal with no ill effects. However, in the general case the `t5` value is indefinite. Attempting to compute the first "change" after `t0` can take an unbounded amount of time, which would be in violation of Sirea's soft real-time goals. 
-
-To support filtering, Sirea uses a more sophisticated structure in place of the list:
-
-        newtype DSeq a = DSeq { dstep :: (T -> DStep a) }
-
-        data DStep a 
-            = DSDone
-            | DSWait !(DSeq a)
-            | DSNext {-# UNPACK #-} !T a !(DSeq a)
-
-
-The `DSeq` constrains the search for the next change based on the given `T` argument. `DSNext` and `DSDone` correspond to a list element and end-of-list respectively. `DSWait` indicates that the next update (if one exists) is beyond the upper limit of the search, and returns the partially processed signal. This structure allows incremental processing and filtering of signals.
-
-The concrete signal type in Sirea is `Sig a`,
-
-        newtype Sig a = Sig !(Maybe a) !(DSeq (Maybe a))
+For the most part, the representation shouldn't matter to users. Signals have an abstract API, which should be used for most purposes, including most adapters.
 
 ### Updating Signals
 
@@ -287,7 +268,7 @@ Developers may be familiar with pipelines from using command line interfaces, mo
 
         load "myImage.svg" >>> renderJPG >>> save "myImage.jpg"
 
-This behavior, while active, would *continuously* load "myImage.svg", render it to a JPG value, then save that result to "myImage.jpg". Of course, this is continuous only in the logical, abstract sense; the implementation would only fully load, render, and save when first activated and when "myImage.svg" changes. (*Note:* To activate this behavior, it must be part of a larger behavior. 
+This behavior, while active, would *continuously* load "myImage.svg", render it to a JPG value, then save that result to "myImage.jpg". Of course, this is continuous only in the logical, abstract sense; the implementation would only fully load, render, and save when first activated and when "myImage.svg" changes. (*Aside:* the *"when first activated"* is often one time too many; an alternative would be to observe timestamps and to activate this behavior when a difference is detected.)
 
 The notion of behaviors as dataflow *"networks"* is due to use of the complex signal types. Each concrete signal type `(S p a)` will have its own stream of signal updates. Different concrete signals may also be distributed across partitions. The signal type `(S P1 x :&: S P2 y)` describes a pair of concrete signals distributed across two partitions. Composition of distributed signals `(x :&: y)` involves composing `x` and `y` independently. This is supported by three primitive behaviors:
 

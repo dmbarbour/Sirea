@@ -94,7 +94,6 @@ Library
     Sirea.Internal.B0Dynamic
     Sirea.Internal.B0
     Sirea.Internal.STypes
-    Sirea.Internal.DiscreteTimedSeq
     Sirea.Internal.DemandMonitorData
     Sirea.Internal.Choke
     Sirea.Internal.SigType
