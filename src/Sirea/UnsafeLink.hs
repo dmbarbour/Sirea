@@ -34,7 +34,7 @@ unsafeFmapB :: (Sig a -> Sig b) -> B (S p a) (S p b)
 unsafeFmapB = wrapB . const . unsafeFmapB0
 
 unsafeFmapB0 :: (Monad m) => (Sig a -> Sig b) -> B0 m (S p a) (S p b)
-unsafeFmapB0 = mkLnkPure lc_fwd . ln_lumap .ln_sfmap
+unsafeFmapB0 = mkLnkPure lc_fwd . ln_lumap . ln_sfmap
 
 -- | unsafeLinkB is used when the link has some side-effects other
 -- than processing the signal, and thus needs to receive a signal

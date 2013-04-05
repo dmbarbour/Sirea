@@ -2,93 +2,189 @@
 
 -- | Clock is a behavior representing access to the current time. In
 -- Sirea, access to time is an ambient authority, available in every
--- partition. A clock should be considered a stateful resource. This
--- is because the zero time (midnight, November 17, 1858, Greenwich)
--- is completely arbitrary; RDP behaviors should generally behave in
--- relative time. (Astronomical time supports coordination of state
--- and shared resources across independent behaviors.)
+-- partition. A clock must be considered a stateful resource because
+-- it logically involves access to an external clock (which provides
+-- the 0 time) even though it's implemented as a simple transform of 
+-- the input signal.
 --
--- The clock provides a view of logical time. Because Sirea has only
--- discrete signals, the Sirea.Clock signal is discrete, updating in
--- a tick tock tick tock rhythm. The clock's behavior is independent
--- of demand, and observers will experience logically simultaneous
--- updates (no propagation delay). Logical clocks support precise, 
--- deterministic reasoning about timing.
+-- These clocks are logical. bclockSeconds will update every second,
+-- on the second, starting from the 0 time. Time values in Sirea are
+-- MJD, so 0 time is midnight, November 17, 1858, Greenwich. Clocks
+-- are specified with a period and offset. In the resource discovery 
+-- concept, you effectively can discover any clock you can specify.
+-- (You aren't creating the clock, just finding one that fits your
+-- needs.) Clocks can be accessed in terms of tick count or time.
 --
--- Clocks are excellent for synchronization and scheduling patterns
--- between collaborative agents. If developers can establish a plan
--- of action far enough in advance (so the plan propagates ahead of
--- time) then distributed agents can take coordinated, simultaneous
--- or interleaved actions. Cron jobs and similar are also easy to 
--- model with a clock.
---
--- Alternatives to logical clocks:
---   time based decisions (Sirea.TimeTrigger)
---   animated state models (see the sirea-state package)
+-- Clocks are useful for various synchronization, scheduling, and
+-- testing patterns. But high-frequency (low period) clocks are very
+-- expensive to model. Computation grows directly with frequency. 
+-- Alternatives to clocks may offer greater precision at lower cost. 
+-- See Sirea.TimeTrigger, Sirea.TimeStamp, and animated state models
+-- (in sirea-state) for possible alternatives.
 -- 
 module Sirea.Clock
     ( ClockSpec(..)
-    , bclockOfFreq, bclockOfFreqAndPhase
+    , bclockTickTime, bclockTick, bclockTime
+    , btickOfFreq, bclockOfFreq
     , bclockHours, bclockMinutes, bclockSeconds
-    , freqToClockSpec, freqAndPhaseToClockSpec
-    , csHours, csMinutes, csSeconds
     ) where
 
+import Control.Arrow (first)
 import Control.Exception (assert)
 import Data.Ratio
+import Data.IORef
+import Data.Maybe (isNothing)
 import Sirea.B
 import Sirea.Time
 import Sirea.UnsafeLink
 import Sirea.Behavior
 import Sirea.Signal
+import Sirea.Internal.SigType
 import Sirea.Partition (Partition)
 
 -- | ClockSpec specifies when a clock ticks and tocks.
 --
---     clock_period: period for clock updates. Positive. 
---     clock_offset: first clock relative each day. Non-negative.
+--     clock_period: period in seconds (recip of frequency)
+--     clock_offset: 0 offset in seconds.
 --
--- A new period starts at `midnight` (according to UTC) every day.
--- It is best to choose a clock period that evenly divides one day.
--- Clock period shouldn't be more than a day, and clock offset must
--- be less than the period. 
+-- These logical clocks are MJD-relative, but use a simplified time
+-- concept (e.g. excluding leap-seconds). Within their simplified
+-- time model, they are perfect - never skipping or slowing, and 
+-- always ticking on some exact value. Sirea will report the clock
+-- within the limits of its own precision (i.e. up to once per nano
+-- second, as of this writing).
 --
--- The offset can prevent clocks from all updating at one instant.
--- Simultaneous updates are more efficient, but can be problematic
--- if it focuses too much work at a single instant (i.e. causing a
--- system to pause while logical time catches up with real time).
--- Still, in most of cases, you'll want offset to be 0 and period 
--- to correspond to a simple rational frequency.
--- 
--- Caution: High rate clocks become expensive to compute and memory
--- intensive. Many resources buffer signals partially into memory. A
--- 1 MHz signal buffered for 1 second will cost many megabytes and 
--- corresponding CPU MHz to compute. 
---
--- If precise actions are needed on a clock, but flexibly such that
--- most ticks are ignored, consider use of animated state instead of
--- or in addition to a clock. Animated state might model timeouts or
--- updates on ad-hoc schedules. 
+-- All periods are valid, but a clock with period 0 will never tick
+-- and one with a negative period will tick downwards (which is only
+-- relevant if you're observing tick-count instead of time). All 
+-- offsets are valid. 
 -- 
 data ClockSpec = ClockSpec
-    { clock_period :: !DT
-    , clock_offset :: !DT
+    { clock_period :: !Rational -- period in seconds
+    , clock_offset :: !Rational -- offset from MJD 0 in seconds
     } deriving (Show,Eq)
 
--- | Observe a logical clock that matches a given ClockSpec. 
-bclock :: (Partition p) => ClockSpec -> B (S p ()) (S p T)
-bclock cs = assert (clockSpecValid cs) $ 
-    unsafeLinkBL (const (return . clockFn cs))
+-- | Observe a clock with both tick-count and associated time. When
+-- you start observing will not affect the clock, i.e. logically the
+-- clock is an external resource that behaves independently of any
+-- observer.
+bclockTickTime :: (Partition p) => ClockSpec -> B (S p ()) (S p (Integer,T))
+bclockTickTime cs@(ClockSpec p o) = 
+    if (p < 0) then bclockTickTime (ClockSpec (negate p) o) >>> bfmap (first negate) else
+    if (p == 0) then bconst (0, tickToTime cs 0) else
+    if (abs p < hfThresh) then unsafeLinkBL (mkClockHF cs) else
+    unsafeLinkBL (mkClock cs)
 
-clockFn :: ClockSpec -> LnkUpM m T -> LnkUpM m ()
-clockFn cs lu = LnkUp touch update idle cyc where
+-- high frequency clocks get special handling
+hfThresh :: Rational
+hfThresh = 3 % (1000*1000*1000)
+
+-- | Observe a clock in terms of tick-count. The tick counts will be
+-- quite large, unless you use a corresponding offset.
+bclockTick :: (Partition p) => ClockSpec -> B (S p ()) (S p Integer)
+bclockTick cs = bclockTickTime cs >>> bfmap fst
+
+-- | Observe a clock in terms of current time.
+bclockTime :: (Partition p) => ClockSpec -> B (S p ()) (S p T)
+bclockTime cs = bclockTickTime cs >>> bfmap snd
+
+-- find time associated with a particular tick count for a clock spec.    
+tickToTime :: ClockSpec -> Integer -> T
+tickToTime (ClockSpec p o) n =
+    let rSecs = o + (p * fromInteger n) in
+    let nanos = (numerator rSecs * nanosInSec) `div` denominator rSecs in
+    mkTime 0 nanos
+
+-- find tick associated with particular time for a clock spec.
+timeToTick :: ClockSpec -> T -> Integer
+timeToTick cs@(ClockSpec p o) tm =
+    let nanos = (tmDay tm) * nanosInDay + tmNanos tm in
+    let rSecs = nanos % nanosInSec in
+    let nF = (rSecs - o) / p in
+    floor nF
+
+nanosInDay, nanosInSec :: Integer
+nanosInDay = 24*60*60 * nanosInSec
+nanosInSec = 1000*1000*1000
+
+-- | For testing, it is often convenient to just obtain a signal
+-- that increments periodically at a predictable rate. There may
+-- be other uses for it.
+btickOfFreq :: (Partition p) => Rational -> B (S p ()) (S p Integer)
+btickOfFreq = bclockTick . freqToCS
+
+-- | Obtain a clock in terms of frquency instead of period.
+bclockOfFreq :: (Partition p) => Rational -> B (S p ()) (S p T)
+bclockOfFreq = bclockTime . freqToCS
+
+-- frequency to clockspeck
+freqToCS :: Rational -> ClockSpec
+freqToCS r = if (0 == r) then ClockSpec 0 0 else ClockSpec (recip r) 0
+
+-- | A logical hour-clock. Updates every hour on the hour.
+bclockHours :: (Partition p) => B (S p ()) (S p T)
+bclockHours = bclockOfFreq (1 % 3600)
+
+-- | A logical minute-clock. Updates every minute on the minute.
+bclockMinutes :: (Partition p) => B (S p ()) (S p T)
+bclockMinutes = bclockOfFreq (1 % 60)
+
+-- | A logical second-clock. Updates every second on the second.
+bclockSeconds :: (Partition p) => B (S p ()) (S p T)
+bclockSeconds = bclockOfFreq 1
+
+-- very high frequency clocks will need to compute ticks from times
+-- rather than vice versa.
+mkClockHF :: ClockSpec -> pcx -> LnkUp (Integer,T) -> IO (LnkUp ())
+mkClockHF _ _ = error "TODO: support very high-frequency clocks"
+
+-- Clock implementation. Logical clocks are external resources, but
+-- their behavior is predictable so is computed locally. A concern
+-- is that signals are spine-strict: we can't lazily compute the 
+-- infinite future, and must turn some stability updates into real
+-- updates. The last reported tick/time is recorded.
+--
+mkClock :: ClockSpec -> pcx -> LnkUp (Integer,T) -> IO (LnkUp ())
+mkClock cs _ ln = error "TODO: finish implementing clocks"
+{-    newIORef Nothing >>= \ rf -> -- track time to consider updates.
+    return (lnClock cs rf ln)
+
+
+
+lnClock :: ClockSpec -> IORef (Maybe T) -> LnkUp (Integer,T) -> LnkUp ()
+lnClock cs rf lu = LnkUp touch update idle cycle where
     touch = ln_touch lu
-    idle = ln_idle lu
-    cyc = ln_cycle lu
-    update tS tU su =
-        let sClock = clockSig cs tU in
-        let su' = s_mask sClock su in
-        ln_update lu tS tU su' 
+    update tS tU su = 
+        let tLo = min (inStableT tS) tU in
+        let (tEnd,bActiveEnd) = sigEnd tSegStart su in
+        let tHi = tEnd `addTime` dtClockStep in
+        let mem = if bActiveEnd then Just tHi else Nothing in
+        writeIORef rf mem >>
+        let sClock = clockSig cs tLo tHi in
+    
+    
+        remember bActiveEnd tHi >>
+
+        if bActiveEnd then update1 tS tU su (tEnd `addTime` dtClockSeg)
+                      else update0 tS tU su tEnd
+    remember True tHi = writeIORef rf (Just tHi)
+    remember 
+        
+        
+-- Find the last values in a signal, given some
+-- proposed initial values.
+sigEnd :: T -> Sig a -> (T, Maybe a)
+sigEnd t (Sig hd tl) = seqEnd t hd tl
+
+seqEnd :: T -> a -> Seq a -> (T, a)
+seqEnd t a Done = (t,a)
+seqEnd _ _ (Step t a s) = seqEnd t a s
+
+
+-- generate a segment of logical clock signal starting at given time
+-- and stretching through another given time. This method is for low
+-- frequency clocks.
+clockSig :: ClockSpec -> T -> (T,Sig (Integer,T))
 
 -- An observation of a clock signal starting near a given instant.
 -- Note that the clock signal does not depend on the time we begin
@@ -109,27 +205,6 @@ clockSig cs t0 =
     
 
 
-nanosInDay :: Integer
-nanosInDay = 24   {- hr    -} * 
-             60   {- mn/hr -} * 
-             60   {- s/mn  -} * 
-             1000 {- ms/s  -} * 
-             1000 {- us/ms -} * 
-             1000 {- ns/us -}
-
-clockSig' :: ClockSpec -> Integer -> Integer -> Sig T
-clockSig' cs nDays nNanos =
-    let periodNanos = dtToNanos (clock_period cs) in
-    let offsetNanos = dtToNanos (clock_offset cs) in
-    let nInterval = (nNanos - offsetNanos) `div` periodNanos in
-    assert (nInterval >= 0) $
-    let clockNanos = offsetNanos + (nInterval * periodNanos) in
-    assert (clockNanos < nanosInDay) $
-    let t0 = mkTime nDays clockNanos in
-    let ts = timeAfterTime cs t0 in
-    let lUpd = map (\t->(t,Just t)) ts in
-    listToSig (Just t0) lUpd
-
 -- Times after a given time. 
 -- The series of updates is repeated each day. 
 timeAfterTime :: ClockSpec -> T -> [T]
@@ -139,72 +214,4 @@ timeAfterTime cs t0 = t0 `seq` (t1:timeAfterTime cs t1)
                   then mkTime (tmDay t0') (dtToNanos (clock_offset cs))
                   else t0'
 
--- | It is often desirable to specify a clock based on frequency.
--- Frequency is ticks per second, but sub-second frequencies are
--- allowed. Frequency must still select a valid ClockSpec.
---
--- Note that high frequencies will become a space and CPU burden.
--- The practical period for a clock really ranges from a few minutes
--- down to a millisecond or so.   
-bclockOfFreq :: (Partition p) => Rational -> B (S p ()) (S p T)
-bclockOfFreq = bclock . freqToClockSpec
-
--- | Frequency is updates per second, and phase how far into each
--- period we perform the update. E.g. if frequency was 2 and phase
--- is 0.5, then we update twice per second at 0.25 and 0.75. 
--- Phase must be bounded by [0.0,1.0). 
-bclockOfFreqAndPhase :: (Partition p) => Rational -> Rational -> B (S p ()) (S p T)
-bclockOfFreqAndPhase dFreq dPhase = bclock $ freqAndPhaseToClockSpec dFreq dPhase
-
--- | A few common low-frequency clocks. These each report the full time, 
--- but do so at a very slow rate (relative to processor speeds).
-bclockHours, bclockMinutes, bclockSeconds :: (Partition p) => B (S p ()) (S p T)
-bclockHours   = bclock csHours 
-bclockMinutes = bclock csMinutes
-bclockSeconds = bclock csSeconds
-
-csHours, csMinutes, csSeconds :: ClockSpec
-csHours = ClockSpec { clock_period = nanosToDt (60 * 60 * 1000 * 1000 * 1000), clock_offset = 0 }
-csMinutes = ClockSpec { clock_period = nanosToDt (60 * 1000 * 1000 * 1000), clock_offset = 0 }
-csSeconds = ClockSpec { clock_period = nanosToDt (1000 * 1000 * 1000), clock_offset = 0 }
-
-clockSpecValid :: ClockSpec -> Bool
-clockSpecValid cs =
-    (clock_period cs > 0) &&
-    (clock_offset cs >= 0) &&
-    (clock_period cs > clock_offset cs) &&
-    (one_full_day >= clock_period cs)
-    where one_full_day = nanosToDt nanosInDay
-
--- | Translate a frequency value to a ClockSpec.
-freqToClockSpec :: Rational -> ClockSpec
-freqToClockSpec hz = freqAndPhaseToClockSpec hz 0
-
--- | Translate frequency and phase to a ClockSpec.
---
--- Frequency is obvious, ticks per second. In general, it is best to
--- choose a value that evenly divides a day. Also, this computation
--- may break down near the extremes, though it should work well 
--- enough for practical frequencies (e.g. 0.05 to 2000.0).
---
--- Here, phase is in the range [0.0,1.0), relative offset within one 
--- period of the clock. A clock with 0 phase will always tick at 
--- midnight (UTC). 
-freqAndPhaseToClockSpec :: Rational -> Rational -> ClockSpec
-freqAndPhaseToClockSpec dFreq dPhase = 
-    assert ((minFreq <= dFreq) && (dFreq <= maxFreq)) $
-    assert ((0 <= dPhase) && (dPhase < 1)) $
-    let dPeriod = (1000000000 / dFreq) in
-    let nPeriod = ceiling dPeriod in
-    let nPhase  = floor (dPeriod * dPhase) in
-    assert ((1 <= nPeriod) && (nPeriod <= nanosInDay)) $
-    assert ((0 <= nPhase) && (nPhase < nPeriod)) $
-    let dtPeriod = nanosToDt nPeriod in
-    let dtPhase  = nanosToDt nPhase in
-    ClockSpec { clock_period = dtPeriod
-              , clock_offset = dtPhase }
-    where minFreq = 1 % 86400
-          maxFreq = 1000000000
-
-
-
+-}

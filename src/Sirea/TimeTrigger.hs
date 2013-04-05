@@ -27,46 +27,32 @@ import Sirea.Signal
 import Sirea.Partition
 
 import Sirea.Internal.SigType
-import Sirea.Internal.DiscreteTimedSeq
 
 -- | btimeTrigger returns True whenever logical time is greater than
 -- or equal to the signaled time. This supports time-based triggers.
 -- It is more efficient and precise than use of Sirea.Clock with 
 -- explicit comparisons.
 btimeTrigger :: (Partition p) => B (S p T) (S p Bool)
-btimeTrigger = unsafeFmapB s_timeTrigger
-
--- time trigger 0 assumes there is no pending trigger
-dsTimeTrigger0 :: DSeq (Maybe T) -> DSeq (Maybe Bool)
-dsTimeTrigger0 ds = DSeq $ dsTimeTriggerStep0 . dstep ds
-
-dsTimeTriggerStep0 :: DStep (Maybe T) -> DStep (Maybe Bool)
-dsTimeTriggerStep0 DSDone = DSDone
-dsTimeTriggerStep0 (DSWait ds) = DSWait (dsTimeTrigger0 ds)
-dsTimeTriggerStep0 (DSNext t0 Nothing ds) =
-    DSNext t0 Nothing (dsTimeTrigger0 ds)
-dsTimeTriggerStep0 (DSNext t0 (Just tx) ds) =
-    if (t0 < tx) then DSNext t0 (Just False) (dsTimeTrigger1 tx ds)
-                 else DSNext t0 (Just True) (dsTimeTrigger0 ds)
-
--- time trigger 1 has a pending trigger at a given instant
-dsTimeTrigger1 :: T -> DSeq (Maybe T) -> DSeq (Maybe Bool)
-dsTimeTrigger1 tx ds = DSeq $ \ tq -> dsTimeTriggerStep1 tx tq (dstep ds tq)
-
-dsTimeTriggerStep1 :: T -> T -> DStep (Maybe T) -> DStep (Maybe Bool)
-dsTimeTriggerStep1 tx _ DSDone = DSNext tx (Just True) ds_done
-dsTimeTriggerStep1 tx tq (DSWait ds) =
-    if (tq < tx) then DSWait (dsTimeTrigger1 tx ds)
-                 else DSNext tx (Just True) (dsTimeTrigger0 ds)
-dsTimeTriggerStep1 tx _ step@(DSNext t0 v ds) =
-    if (tx < t0) then DSNext tx (Just True) (dsTimeTrigger0 (ds_first t0 v ds))
-                 else dsTimeTriggerStep0 step
+btimeTrigger = unsafeFmapB (s_adjeqf (==) . s_timeTrigger)
 
 -- | Compute logical time trigger events on a signal. 
 s_timeTrigger :: Sig T -> Sig Bool
-s_timeTrigger sT = 
-    case s_head sT of
-        Nothing -> mkSig Nothing (dsTimeTrigger0 (s_tail sT))
-        Just tx -> mkSig (Just False) (dsTimeTrigger1 tx (s_tail sT))
+s_timeTrigger (Sig Nothing ts) = Sig Nothing (tt0 ts)
+s_timeTrigger (Sig (Just tm) ts) = Sig (Just False) (tt1 tm ts) 
+
+-- tt0 - no active trigger
+tt0 :: Seq (Maybe T) -> Seq (Maybe Bool)
+tt0 Done = Done
+tt0 (Step t Nothing s) = Step t Nothing (tt0 s)
+tt0 (Step t (Just tx) s) =
+    if (t < tx) then Step t (Just False) (tt1 tx s)
+                else Step t (Just True) (tt0 s)
+
+-- tt1 - pending trigger
+tt1 :: T -> Seq (Maybe T) -> Seq (Maybe Bool)
+tt1 tT Done = Step tT (Just True) Done
+tt1 tT s@(Step t _ _) = 
+    if (tT < t) then Step tT (Just True) (tt0 s) 
+                else tt0 s
 
 

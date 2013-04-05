@@ -171,18 +171,14 @@ The use of `Maybe` allows sequential signals to be combined on a single update s
 
 ### Representing Concrete Signals
 
-Sirea has gone through a few implementations of signals. The current representation is essentially the same as the list described above, except it is strict (on the spine) and efficiently packed.
+Sirea has gone through a few implementations of signals. The current representation is essentially the same as the list described above, except it is strict (on the head and spine) and slightly more efficiently packed.
 
-        data Sig a = Sig !(Maybe a) !(Seq a)
-        data Seq a = Step {-# UNPACK #-} !T a !(Seq a)
-                   | Stop {-# UNPACK #-} !T !(Seq a)
-                   | Done
+        data Sig a = Sig !(Maybe a) !(Seq (Maybe a))
+        data Seq a = Step {-# UNPACK #-} !T a !(Seq a) | Done
 
-A consequence of the strict sequence is that Sirea cannot directly represent infinite signals unless they are constant. Sirea will always need to deliver updates for signals that change even if those changes could be predicted ages in advance (e.g. for a logical clock signal that updates every second, on the second). 
+A consequence of the spine-strict sequence is that Sirea cannot directly represent infinite signals unless they are constant. A changing signal, even one that is utterly predictable (like a logical clock that updates once a second on the second), will have updates over time. Advantages of this design are that it is easy to reason about memory and performance in a loop, and it generalizes well to networked systems. There is also no risk of divergence when eliminating false updates.
 
-An advantage of the current design is that it becomes relatively easy to reason about memory and performance, and there is no risk of divergence for operations that might process the whole future of a signal (e.g. to filter out *false updates* where values in adjacent steps are equal, or to remove adjacent stops). Also, it's safer than a lazy list to integrate with external communications.
-
-For the most part, the representation shouldn't matter to users. Signals have an abstract API, which should be used for most purposes, including most adapters.
+Signals have an abstract API. The representation is rarely accessed directly.
 
 ### Updating Signals
 
@@ -498,7 +494,7 @@ RDP behaviors do not directly express cycles, but can indirectly introduce feedb
 
         readFile "foo.txt" >>> bdelay 0.1 >>> bfmap foo >>> writeFile "foo.txt"
 
-This behavior presumably models a 10Hz cycle that continuously reads and writes the same file assuming there are no filesystem errors or write conflicts. The frequency determined by `bdelay 0.1` - each cycle delays 0.1 seconds. This delay is *logical*, but Sirea applies a choking mechanism such that it delays update once it runs a few cycles ahead of stability. Logical cycles will ultimately result in corresponding thread scheduler frequencies (albeit, only loosely aligned).
+This behavior presumably models a 10Hz cycle that continuously reads and writes the same file assuming there are no filesystem errors or write conflicts. The frequency determined by `bdelay 0.1` - each cycle delays 0.1 seconds. This delay is *logical* (i.e. the thread is not paused), but ultimately results in a corresponding wall-clock delays and thread frequencies.
 
 *Note:* RDP developers are not encouraged to use cyclic feedback. It is possible, and sometimes unavoidable (due to unknown dependencies in open systems), but feedback is difficult to control and reason about. Fine-grained resources, e.g. using separate state resources for requests and results, can help avoid cycles.
 

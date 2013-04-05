@@ -131,6 +131,7 @@ dtMdistHist = 0.05 -- how long to tolerate late-arriving observers
 dtFinalize :: DT
 dtFinalize = 0 -- dtRestart
 
+
 -- In some cases, I want to initialize structures with a lower bound
 -- for Time. But I don't want to pay code and performance overheads 
 -- for a symbolic representation of this lower bound. So I'll just

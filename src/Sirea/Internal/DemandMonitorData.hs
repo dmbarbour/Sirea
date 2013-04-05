@@ -133,7 +133,6 @@ idleDaggr da k tS =
     let tc' = pred (dd_touchCt dd) in
     let tbl' = M.insert k st' (dd_table dd) in
     let dd' = dd { dd_table = tbl', dd_touchCt = tc' } in
-    --seqst st' `seq`
     writeIORef' (da_data da) dd' >>
     --traceIO ("idleDaggr " ++ showK k ++ ". tc = " ++ show tc') >>
     --traceIO ("idleDaggr " ++ showK k ++ "  tS = " ++ show tS) >>
@@ -150,7 +149,6 @@ updateDaggr da k tS tU su =
     let tbl' = M.insert k st' (dd_table dd) in
     let tmup' = Just $! maybe tU (min tU) (dd_tmup dd) in
     let dd' = dd { dd_touchCt = tc', dd_table = tbl', dd_tmup = tmup' } in
-    --seqst st' `seq`
     writeIORef' (da_data da) dd' >>
     --traceIO ("updateDaggr " ++ showK k ++ " tS = " ++ show tS ++ " tU = " ++ show tU) >>
     --let showSu = sigToList (s_const () $ st_signal st') (inStableT $ st_stable st) (tU `addTime` 60) in
@@ -158,16 +156,6 @@ updateDaggr da k tS tU su =
     --traceIO ("updateDaggr " ++ showK k ++ ". tc = " ++ show tc' ++ "  tU = " ++ show tU) >>
     --traceIO ("updateDaggr " ++ showK k ++ "  tS = " ++ show tS) >>
     when (0 == tc') (deliverDaggr da)
-
-{-
--- | sequence a contained signal up to stability
-seqst :: SigSt a -> ()
-seqst st = s_tseq mbwhnf (inStableT $ st_stable st) (st_signal st) 
-
-mbwhnf :: Maybe a ->()
-mbwhnf (Just a) = a `seq` ()
-mbwhnf Nothing = ()
--}
 
 -- deliverDaggr is called in the update phase by idle, update, or 
 -- flush. It will compute and deliver an update.
@@ -220,14 +208,19 @@ ddNeedsFlush dd = maybe (not (M.null (dd_table dd))) -- GC flush?
 -- be eliminated if it isn't active (even if unstable, since Daggr
 -- doesn't utilize input stability).
 --
--- Signals are also forced up to their
+-- Signals are evaluated as they are collected to help eliminate
+-- implicit state that might be part of a loop.
 daggrTableGC :: T -> T -> (k, SigSt e) -> Maybe (k, SigSt e)
 daggrTableGC tGC tT (k,st) =
-    let s' = s_trim (st_signal st) tGC in
+    let s' = s_tseq mbwhnf tGC (st_signal st) in
     let bDone = s_term2 s' tGC tT in
     let st' = st { st_signal = s' } in
     if bDone then Nothing 
              else st' `seq` Just (k, st')
+
+mbwhnf :: Maybe a -> ()
+mbwhnf Nothing = ()
+mbwhnf (Just a) = a `seq` ()
 
 -- Compute the DemandAggr's peculiar form of sticky stability, which
 -- ensures that stability updates reflect progress in cycles or

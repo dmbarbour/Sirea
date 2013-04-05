@@ -31,7 +31,6 @@ import Sirea.Internal.B0Type
 import Sirea.Internal.Tuning (dtTouch, dtEqShift, dtAlign)
 import Sirea.Time
 import Sirea.Signal
-
 import Control.Applicative ((<$>))
 import Control.Category
 import Control.Parallel.Strategies (Eval, runEval)
@@ -512,9 +511,7 @@ luTouch rf lu = LnkUp touch update idle cycle where
     process (StableT tStable) =
         let tTgt = tStable `addTime` dtTouch in
         readRef rf >>= \ s0 ->
-        let seqSig = s_tseq (`seq` ()) tTgt s0 in
-        let sf = s_trim s0 tTgt in -- trim to reduce rework
-        seqSig `seq`
+        let sf = s_tseq (`seq` ()) tTgt s0 in
         writeRef' rf sf
 
 -- | stratB currently evaluates based on stability, not sampling. It

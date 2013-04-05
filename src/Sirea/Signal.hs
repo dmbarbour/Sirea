@@ -32,7 +32,6 @@ module Sirea.Signal
  --, s_weave, s_full_weave
  , s_mask
  , s_merge
- , s_mergeZip
  , s_switch, s_switch'
  , s_is_final, s_term
  , s_is_final2, s_term2
@@ -47,7 +46,6 @@ module Sirea.Signal
 
 import Sirea.Time
 import Sirea.Internal.SigType
-import Sirea.Internal.DiscreteTimedSeq
 import Control.Exception (assert)
 import Control.Applicative
 import Data.Maybe (isNothing)
@@ -68,28 +66,23 @@ instance Alternative Sig where
 
 -- | listToSig allows developers to turn a list of signal updates
 -- into a signal. The list must be ordered in strict monotonic time,
--- which means no repeating times. It should not be divergent when
--- computing the next change. The value prior to the first update is
--- also provided. 
+-- and must be of finite size. 
 listToSig :: (Maybe a) -> [(T,Maybe a)] -> Sig a
-listToSig v0 = mkSig v0 . ds_fromList 
+listToSig v0 = Sig v0 . seqFromList 
 
 -- | Sample a signal for its value at given instant. The signal
 -- may be inactive at the given instant, in which case 'Nothing'
 -- is returned. In addition, the trimmed signal is returned for 
 -- further sampling (to avoid redundant computation)
 s_sample :: Sig a -> T -> (Maybe a, Sig a)
-s_sample s0 tm =
-    let sf = s_trim s0 tm in
-    (s_head sf, sf)
+s_sample s0 tm = let sf@(Sig hd _) = s_trim s0 tm in (hd, sf)
 
 -- | Trim a signal to clear unnecessary history data. Collecting the
 -- past while computing the future can ensure predictable space cost
 -- and avoid space-time leaks.
 s_trim :: Sig a -> T -> Sig a
-s_trim s0 tm = 
-    let (x,ds) = ds_query (s_head s0) tm (s_tail s0) in
-    mkSig x ds
+s_trim (Sig x xs) tm = Sig x' xs' where
+    (x',xs') = seqQuery x tm xs
 
 -- | Discrete sample of a signal: rather than finding a value at a
 -- given instant, returns the first instant of change between two
@@ -112,43 +105,41 @@ s_trim s0 tm =
 -- multiple samples in a given time range (though sigToList is more
 -- efficient).
 s_sample_d :: Sig a -> T -> T -> (Maybe (T, Maybe a), Sig a)
-s_sample_d s0 tLower tUpper =
-    assert (tLower < tUpper) $
-    let (x,xs) = ds_query (s_head s0) tLower (s_tail s0) in
-    case dstep xs tUpper of
-        DSDone -> (Nothing, mkSig x ds_done)
-        DSWait xs' -> (Nothing, mkSig x xs')
-        DSNext tx x' xs' -> 
-            assert (tLower < tx) $ -- true if signal well formed
-            (Just (tx,x'), mkSig x' xs')
+s_sample_d (Sig hd tl) tLower tUpper =
+    assert (tLower <= tUpper) $
+    let (x,xs) = seqQuery hd tLower tl in
+    case xs of
+        Done -> (Nothing, Sig x Done)
+        Step tx x' xs' ->
+            assert (tx > tLower) $
+            if (tx > tUpper) then (Nothing, Sig x xs) 
+                             else (Just (tx,x'), Sig x' xs')
 
 -- | sigToList will obtain the [(T,Maybe a)] states in a given time
 -- range, similar to s_sample_d. Note that there will always be at
 -- least one value for the signal's state at the lower bound time.
 sigToList :: Sig a -> T -> T -> [(T, Maybe a)]
-sigToList s0 tLower tUpper =
+sigToList (Sig hd tl) tLower tUpper =
     assert (tLower <= tUpper) $
-    let (x,xs) = ds_query (s_head s0) tLower (s_tail s0) in
-    (tLower,x):(ds_takeList tUpper xs)
+    let (x,xs) = seqQuery hd tLower tl in
+    (tLower,x):(seqTakeList tUpper xs)
 
 -- | a signal that is never active (`Nothing` at all times)
 -- Same as `empty` from Alternative.
 s_never  :: Sig a_
-s_never = mkSig Nothing ds_done
+s_never = Sig Nothing Done
 
 -- | a signal that is always active with a specific value c
 -- Same as `pure` from Applicative.
 s_always :: c -> Sig c
-s_always c = mkSig (Just c) ds_done
+s_always c = Sig (Just c) Done
 
 -- | replace all values in a signal with a constant c, such that the
 -- signal varies between Just c and Nothing. This will also filter 
 -- unnecessary updates from values now trivially known to be equal.
 s_const :: c -> Sig a_ -> Sig c
-s_const c s0 = 
-    case s_head s0 of
-        Nothing -> mkSig Nothing (ds_const0 c (s_tail s0))
-        Just _  -> mkSig (Just c) (ds_const1 c (s_tail s0))
+s_const c (Sig Nothing tl) = Sig Nothing (seqConst0 c tl)
+s_const c (Sig (Just _) tl) = Sig (Just c) (seqConst1 c tl) 
 
 -- | Map applies a function across the active values of a signal.
 -- Same as the Functor fmap.
@@ -158,9 +149,7 @@ s_fmap = s_full_map . fmap
 -- | Full map applies a function across all values, including 
 -- inactivity of the signal. 
 s_full_map :: (Maybe a -> Maybe b) -> Sig a -> Sig b
-s_full_map f s0 = mkSig y ys
-    where y = f (s_head s0)
-          ys = ds_map f (s_tail s0)
+s_full_map f (Sig x xs) = Sig (f x) (seqMap f xs)
 
 -- | Ap applies one signal to another. 
 s_ap :: Sig (a -> b) -> Sig a -> Sig b
@@ -173,11 +162,9 @@ s_zip = s_full_zip . liftA2
 
 -- | Full zip applies a function across periods of inactivity, too.
 s_full_zip :: (Maybe a -> Maybe b -> Maybe c) -> Sig a -> Sig b -> Sig c
-s_full_zip jf sa sb = mkSig (f b) (ds_ap f b fs bs)
-    where f  = jf (s_head sa)
-          fs = ds_map jf (s_tail sa)
-          b  = s_head sb
-          bs = s_tail sb
+s_full_zip jf (Sig a as) (Sig b bs) = Sig (f b) (seqAp f b fs bs) where
+    f = jf a
+    fs = seqMap jf as
 
 {-
 -- IDEA: `weave` functions that pick one element as the contributing
@@ -217,76 +204,63 @@ s_full_weave :: (Maybe a -> Maybe a -> Bool)
 -- active, but the value is always from the signal on the left.
 --    s_mask = s_zip const (but somewhat optimized)
 s_mask :: Sig a -> Sig b_ -> Sig a
-s_mask sa sb = 
-    case s_head sb of
-        Nothing -> mkSig Nothing (tail_with ds_mask0)
-        _       -> mkSig (s_head sa) (tail_with ds_mask1)
-    where tail_with msk = msk (s_head sa) (s_tail sa) (s_tail sb)
+s_mask (Sig a as) (Sig Nothing bs) = Sig Nothing (seqMask0 a as bs)
+s_mask (Sig a as) (Sig (Just _) bs) = Sig a (seqMask1 a as bs)
 
 -- | Merge two signals by using the left signal when it is active,
 -- otherwise the right signal.
 --    s_merge = s_full_zip (<|>)
 -- But is much more optimizable than general zips.
 s_merge :: Sig a -> Sig a -> Sig a
-s_merge (Sig l0 ltl) (Sig r0 rtl) = Sig (l0 <|> r0) (ds_merge l0 r0 ltl rtl)
-
--- | MergeZip will combine two signals such that if they are active
--- at the same time they will be composed, but if only one or the
--- other is active they will be merged.
-s_mergeZip :: (a -> b -> c) -> (a -> c) -> (b -> c)
-           -> Sig a -> Sig b -> Sig c
-s_mergeZip zab ina inb (Sig a as) (Sig b bs) = Sig c cs where
-    c = (zab <$> a <*> b) <|> (ina <$> a) <|> (inb <$> b)
-    cs = ds_mergeZip zab ina inb a b as bs 
+s_merge (Sig l0 ltl) (Sig r0 rtl) = Sig (l0 <|> r0) (seqMerge l0 r0 ltl rtl)
 
 -- | Switch from the left signal to the right signal at a given
 -- instant. The left signal is used until just before the instant,
 -- then the right signal is used starting at that instant.
 s_switch :: Sig a -> T -> Sig a -> Sig a
-s_switch (Sig hd0 tl0) t (Sig hdf tlf) = Sig hd0 (ds_sigup tl0 t hdf tlf)
+s_switch (Sig hd0 tl0) t (Sig hdf tlf) = Sig hd0 (seqSigup tl0 t hdf tlf)
 
 -- | Switch but with slightly stricter semantics - ensures that the
 -- structure of the signal up to T is flat, i.e. so we don't keep
 -- keep now defunct future values in memory. This can improve GC.
 s_switch' :: Sig a -> T -> Sig a -> Sig a
-s_switch' (Sig hd0 tl0) t (Sig hdf tlf) = Sig hd0 (ds_sigup' tl0 t hdf tlf)
+s_switch' = s_switch -- current signal rep. is spine strict
 
 -- | Test whether a signal is in its final state from a particular
 -- instant. This is useful for garbage collection and optimizations.
 -- This is a semi-decision; it may return False if the answer is
 -- unknown (or would risk divergence) at the given instant.
 s_is_final :: Sig a -> T -> Bool
-s_is_final s0 tm = s_is_final2 s0 tm tm
+s_is_final (Sig _ tl) tm = 
+    case seqTrim tm tl of
+        Done -> True
+        _ -> False
 
 -- | Same as s_is_final, but the time of the test is not the same as
 -- the time for the query. s_is_final s tQuery tTest. tTest >= tQuery.
 s_is_final2 :: Sig a -> T -> T -> Bool
-s_is_final2 (Sig hd0 tl0) tQ tT = assert (tT >= tQ) $
-    let (_,ds) = ds_query hd0 tQ tl0 in
-    case dstep ds tT of
-        DSDone -> True
-        _ -> False
+s_is_final2 s tQ tT = assert (tT >= tQ) $ s_is_final s tQ -- current impl only needs one param
 
 -- | Test whether a signal has terminated after a given instant.
 --     s_term s t = isNothing (s_sample s t) && (s_is_final s t)
 s_term :: Sig a -> T -> Bool
-s_term s0 tm = s_term2 s0 tm tm
+s_term s tQ = s_term2 s tQ tQ
 
 -- | Test whether a signal has terminated after a given instant, but
 -- time of test may be different from the time of query. This allows
 -- testing further ahead to make the decision.
 --     s_term s tQuery tTest. tTest >= tQuery.
 s_term2 :: Sig a -> T -> T -> Bool
-s_term2 (Sig hd0 tl0) tQ tT = assert (tT >= tQ) $ 
-    let (v,ds) = ds_query hd0 tQ tl0 in
-    isNothing v && termTail tT ds
+s_term2 (Sig hd tl) tQ tT = assert (tT >= tQ) $ 
+    let (x,xs) = seqQuery hd tQ tl in
+    isNothing x && termTail tT xs
 
-termTail :: T -> DSeq (Maybe a) -> Bool
-termTail tT ds = 
-    case dstep ds tT of
-        DSDone -> True
-        DSNext _ Nothing ds' -> termTail tT ds'
-        _ -> False
+termTail :: T -> Seq (Maybe a) -> Bool
+termTail _ Done = True
+termTail tT (Step tx x xs) = 
+    if (tx > tT) then False else
+    if isNothing x then termTail tT xs
+                   else False
         
 -- | Test whether a signal is active before a given time. This is a
 -- test that helps discover lower-bounds for activity, but there is
@@ -297,18 +271,16 @@ s_activeBefore :: Sig a -> T -> Bool
 s_activeBefore (Sig (Just _) _) _ = True
 s_activeBefore (Sig Nothing tl) tT = activeTail tT tl
 
-activeTail :: T -> DSeq (Maybe a) -> Bool
-activeTail tT tl =
-    case dstep tl tT of
-        DSNext tm (Just _) _ -> (tm < tT)
-        DSNext _ Nothing tl' -> activeTail tT tl'
-        _ -> False
+activeTail :: T -> Seq (Maybe a) -> Bool
+activeTail _ Done = False
+activeTail tq (Step _ Nothing s) = activeTail tq s
+activeTail tq (Step tx (Just _) _) = (tq < tx)
 
 -- | s_adjn will eliminate adjacent `Nothing` values. These might 
 -- exist after s_full_map to filter a signal by its values.
 s_adjn :: Sig a -> Sig a
-s_adjn (Sig Nothing xs) = Sig Nothing (ds_adjn0 xs)
-s_adjn (Sig x xs) = Sig x (ds_adjn1 xs)
+s_adjn (Sig Nothing xs) = Sig Nothing (seqAdjn0 xs)
+s_adjn (Sig x@(Just _) xs) = Sig x (seqAdjn1 xs)
 
 -- | Delay a signal - time-shifts the signal so that the same values
 -- are observed at a later instant in time. Models latency. Activity
@@ -318,15 +290,12 @@ s_adjn (Sig x xs) = Sig x (ds_adjn1 xs)
 -- function should never be used in FFI adapters. Wrap the adapter
 -- with RDP 'bdelay' behaviors instead.
 s_delay :: DT -> Sig a -> Sig a
-s_delay dt (Sig x xs) = Sig x (ds_delay dt xs)
+s_delay dt (Sig x xs) = Sig x (seqDelay dt xs)
 
--- utility for s_delay (specific to DT, so in this file)
-ds_delay :: DT -> DSeq a -> DSeq a
-ds_delay dt ds = DSeq $ \ tq ->
-    case dstep ds (subtractTime tq dt) of
-        DSDone -> DSDone
-        DSWait ds' -> DSWait (ds_delay dt ds')
-        DSNext tm v ds' -> DSNext (addTime tm dt) v (ds_delay dt ds')
+-- utility for s_delay
+seqDelay :: DT -> Seq a -> Seq a
+seqDelay _ Done = Done
+seqDelay dt (Step t v s) = Step (addTime t dt) v (seqDelay dt s)
 
 -- | Erase adjacent signal values that are equal in value. You can
 -- provide the equality function that compares one value to another.
@@ -334,71 +303,26 @@ ds_delay dt ds = DSeq $ \ tq ->
 -- performance, but must be used judiciously (the filter itself has 
 -- a cost).
 s_adjeqf :: (a -> a -> Bool) -> Sig a -> Sig a
-s_adjeqf eq (Sig x xs) = Sig x (ds_adjeqfx meq x xs) where
+s_adjeqf eq (Sig x xs) = Sig x (seqAdjeqf meq x xs) where
     meq (Just a) (Just a') = eq a a'
     meq Nothing Nothing = True
     meq _ _ = False
 
--- IDEA:
--- Flatten a signal, essentially by rebuilding its spine to avoid
--- redundant computations (i.e. by isolating those computations to
--- lazy evaluations).  
---
--- This is easily doable with an up-front query (i.e. flatten up to
--- a particular time), but seems more difficult if I want to perform
--- it lazily, at least without unsafe IO to cache query results on
--- the go.
 
-{-
-
--- | Combine a list of signals into a signal of lists.
--- logic to remove signals from the output if they don't contribute,
--- which is important to avoid compounding the history over time in
--- a loop. The resulting signal is always active, having value [] if
--- no signals are active.
-s_lzip :: [Sig a] -> Sig [a]
-s_lzip = s_full_map wrapAlways . s_adjn . s_lzip'
-
-wrapAlways :: (Monoid a) => Maybe a -> Maybe a
-wrapAlways Nothing = Just mempty
-wrapAlways x = x
-
--- s_lzip' will be inactive if all of the input signals are inactive.
-s_lzip' :: [Sig a] -> Sig [a]
-s_lzip' [] = s_never
-s_lzip' (x:[]) = s_fmap (:[]) x
-s_lzip' xs = 
-    let n = length xs `div` 2 in
-    let (as,bs) = splitAt n xs in
-    let (Sig a az) = s_lzip' as in
-    let (Sig b bz) = s_lzip' bs in
-    let c = mbConcat a b in
-    let cz = ds_mergeZip (++) id id a b az bz in
-    mkSig c cz
-
-mbConcat :: Maybe [a] -> Maybe [a] -> Maybe [a]
-mbConcat (Just xs) (Just ys) = Just (xs++ys)
-mbConcat Nothing y = y
-mbConcat x Nothing = x
--}
-
--- | evaluate up to a given time.
--- Note: not very useful unless we have a flat 'spine' of the signal
--- so I'll need some way to flatten the spine of a signal lazily.
--- What might be better is a combined sequence-trim operation. 
-s_tseq :: (Maybe a -> ()) -> T -> Sig a -> ()
-s_tseq eSeq tm s0 = seqHead `seq` seqBody where
-    seqHead = eSeq (s_head s0) 
-    seqBody = foldr seq () ((eSeq . snd) `fmap` body)
-    body = ds_takeList tm (s_tail s0)
---{-# DEPRECATED s_tseq #-}
+-- | Combination trim and sequence of a signal's values up to a
+-- given time.
+s_tseq :: (Maybe a -> ()) -> T -> Sig a -> Sig a
+s_tseq f tm (Sig hd tl) = f hd `seq` ts hd tl where
+    ts x Done = (Sig x Done)
+    ts x s@(Step t v s') =
+        if (tm < t) then (Sig x s) else
+        f v `seq` ts v s'
 
 -- TODO?
 -- Apply a strategy to initialize parallel evaluation of a signal 
 -- during sampling. I.e. if you sample at time T, may initialize 
 -- parallel computation of the signal at time T+dt. 
 -- s_strat :: DT -> Sig (Eval a) -> Sig a
-
 
 -- IDEAS:
 --  choke: should be done with intermediate state, as RDP behavior,
