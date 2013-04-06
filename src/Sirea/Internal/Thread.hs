@@ -14,7 +14,7 @@ import Data.IORef
 import Control.Monad (join)
 import Control.Exception (assert)
 import Control.Concurrent.MVar
-import Debug.Trace
+--import Debug.Trace
 
 data StopData = SD
     { shouldStop   :: !Bool
@@ -58,7 +58,7 @@ simplePartitionLoop :: IORef StopData -> Stepper -> IO ()
 simplePartitionLoop rfStop stepper =
     readIORef rfStop >>= \ sd ->
     if (shouldStop sd) then stop 
-      else wait >> run >>= \ _ -> loop
+      else do wait; run; loop
     where stop = finiStopData rfStop
           wait = newEmptyMVar >>= \ mv ->
                  addStepperEvent stepper (putMVar mv ()) >>

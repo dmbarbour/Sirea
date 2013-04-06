@@ -69,7 +69,6 @@ runSireaApp app = buildSireaApp (app >>> btrivial) >>= beginSireaApp
 -- 
 --     Stepper - for user-controlled event loops
 --     Stopper - to halt the application gracefully
---     PCX P0  - integrate resources controlled by main thread (*) 
 --
 -- These types are defined in the Partition and PCX modules. The P0
 -- partition is thus similar to other partitions, excepting Stopper
@@ -77,13 +76,14 @@ runSireaApp app = buildSireaApp (app >>> btrivial) >>= beginSireaApp
 -- continue to runStepper until Stopper callback event is executed
 -- to support graceful shutdown.
 --
--- (*) It is not recommended to actually use sireaContext, since any
--- explicit use is difficult to abstract and reuse. It is included 
--- not for utility, but for completeness, matching other partitions.
+-- Note: If you want to integrate main thread resources, you should
+-- abstract it through behaviors and AgentResource. Direct access to
+-- PCX P0 is not available because it is too difficult to reuse code
+-- specific to the P0 partition. 
+--
 data SireaAppObject = SireaAppObject 
     { sireaStepper :: Stepper
     , sireaStopper :: Stopper
-    , sireaContext :: PCX P0
     }
 
 -- AppPeriodic data is used internally on the man clock step.
@@ -122,11 +122,8 @@ buildSireaApp app =
     let lcaps = LnkSig (LCX lc0) in
     let (_, mkLn) = compileB0 b lcaps LnkDead in
     mkLn >>= \ lnk0 ->
-    let bDead = ln_dead lnk0 in
     let lu = ln_lnkup lnk0 in
-    buildSireaBLU cw lu >>= \ sireaAppObj ->
-    when bDead ((runStopper . sireaStopper) sireaAppObj) >> 
-    return sireaAppObj
+    buildSireaBLU cw lu
 
 -- To help make resets a bit more robust, I'm going to leverage the
 -- dynamic behaviors model (which will basically compile the app per
@@ -153,8 +150,7 @@ buildSireaBLU cw lu =
     let stepper = tcToStepper tc0 in
     let stopper = makeStopper rfSD in
     return $ SireaAppObject { sireaStepper = stepper
-                            , sireaStopper = stopper
-                            , sireaContext = cp0  }
+                            , sireaStopper = stopper }
           
 -- task to initialize application (performed on first runStepper)
 -- a slight delay is introduced before everything really starts.
