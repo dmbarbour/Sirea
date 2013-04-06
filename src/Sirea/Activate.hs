@@ -210,7 +210,8 @@ maintainApp ap (StableT tS0) =
        then let tR = tNow `addTime` dtGrace in
             let tU = tS0 in
             let su = s_switch s_never tR (s_always ()) in
-            traceIO ("Sirea app restart: " ++ show tS0 ++ " -> " ++ show tR) >>
+            let dt = tR `diffTime` tS0 in
+            traceIO ("Sirea app restart; inactive for " ++ show dt ++ " seconds") >>
             ln_update (ap_link ap) tS tU su
        else ln_idle (ap_link ap) tS
 
