@@ -50,61 +50,41 @@ module Sirea.Filesystem
     , breadFileString
     , bwriteFileText
     , bwriteFileString
+
+    -- * Quick access to directories.
+    , bworkingDir
+    , bhomeDir
+    , bdesktopDir
+    , bdocumentsDir    
     ) where 
 
 import Prelude hiding (FilePath)
 import Filesystem.Path (FilePath) 
-import qualified Filesystem.Path as FS
-import qualified Filesystem as FS 
+import qualified Filesystem as FS
 import Data.ByteString (ByteString)
-import qualified Data.ByteString as B
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as Text
 import qualified Data.Text.Encoding.Error as Text
-import Data.Function (on)
 import Data.IORef
 import Data.Unique
 import Data.Typeable
-import qualified Data.Map.Strict as M
 import Control.Arrow (second)
-import Control.Concurrent.Chan
-import Control.Concurrent
-import Control.Monad (join,void)
 import Control.Applicative
-import Control.Exception (SomeException,assert,try)
 
-import Sirea.Filesystem.Manager
+import Sirea.Filesystem.LocalMirror
 
 import Sirea.Prelude
 import Sirea.UnsafeLink
-import Sirea.AgentResource
-import Sirea.Partition
 import Sirea.PCX
 
 import Debug.Trace (traceIO)
 
--- TUNING
--- How many files shall we allow to read or write concurrently?
-numFileLoaders :: Int
-numFileLoaders = 6
 
 -- | Sirea performs FileSystem operations in the FS partition.
 type FS = Pt (Filesystem ()) -- simple loop partition.
 data Filesystem x deriving (Typeable)
-
     
-
--- Resource: I'll keep a basic reflection of the filesystem being
--- observed or manipulated.
-data FileRfl = FileRfl !FileSt !WriteMap !ObsMap
-type FileSt = Maybe ByteString
-type WriteMap = M.Map Unique (Signal FileSt)
-type ObsMap = M.Map Unique Alert
-type Alert = IO () -- alerts run once then must be rescheduled
-data DirRfl = DirRfl !FileRflMap !DirList !ObsMap !SchedMap 
-type FileRflMap = M.Map FilePath FileRfl
-type DirList = M.Map FilePath FileDesc
 
 
 --
@@ -149,8 +129,13 @@ breadFileText = breadFile >>> bfmap (fmap toText) where
 --
 --   breadFileString = breadFileText >>> bfmap (fmap unpack)
 --
+-- A relevant concern is that strings are not compact or efficient,
+-- and unless you're careful to process the string immediately with
+-- bfmap, it is possible the expanded version will be kept in cache.
+-- Text type is much better for efficient processing.
 breadFileString :: B (S FS FilePath) (S FS (Maybe String))
-breadFileString = breadFileText >>> bfmap (fmap Text.unpack)
+breadFileString = breadFile >>> bfmap (fmap toString) where
+    toString = Text.unpack . Text.decodeUtf8With Text.ignore
 
 
 -- | Write a file, or remove it. When writing a file, intermediate
@@ -176,49 +161,44 @@ breadFileString = breadFileText >>> bfmap (fmap Text.unpack)
 -- failure, whether due to permissions or write conflict, is False.
 --
 bwriteFile :: B (S FS (FilePath, Maybe ByteString)) (S FS Bool)
-bwriteFile = bundefined
+bwriteFile = bvoid writeFile >>> verifyFile where
+    verifyFile = (loadFile &&& bfmap snd) >>> bzipWith (==)
+    loadFile = bfmap fst >>> breadFile
+    writeFile = btrivial
 
--- | Write text to file as UTF-8.
+-- | Write text to file as UTF-8 (via Binary)
 bwriteFileText :: B (S FS (FilePath, Maybe Text)) (S FS Bool)
-bwriteFileText = bfmap (second (fmap Text.encodeUtf8)) >>> bwriteFile
+bwriteFileText = bfmap (second (fmap fromText)) >>> bwriteFile where
+    fromText = Text.encodeUtf8
 
--- | Write a string to file as UTF-8.
+-- | Write a string to file as UTF-8 (via Text)
 bwriteFileString :: B (S FS (FilePath, Maybe String)) (S FS Bool)
-bwriteFileString = bfmap (second (fmap Text.pack)) >>> bwriteFileText
-
+bwriteFileString = bfmap (second (fmap fromString)) >>> bwriteFile where
+    fromString = Text.encodeUtf8 . Text.pack
 
 -- | List contents of a directory, including relevant metadata.
 blistDirectory :: B (S FS FilePath) (S FS [FileDesc])
 blistDirectory = bundefined
 
 
-
-
-
-{-
--- CONSIDER:
---  easy access to directories (home, etc.)?
---  fixed working directory
-
 -- | Access ambient information about user directories or working
--- directory. Note: these values are constant during one run of the
--- Haskell process. Sirea does not allow runtime manipulation of 
--- working directory (it would be difficult to address reactively
--- due to potential use of local "." paths).
+-- directory. Note: these values are assumed constant during one 
+-- run of the Haskell process. Developers should not manipulate the
+-- working directory after starting a Sirea application.
 --
 --    bworkingDir : directory from which app was started; "." path
 --    bhomeDir : user's home directory
 --    bdesktopDir : user directory, based on OS
 --    bdocumentsDir : user directory, based on OS
 --
---    bappDataDirectory : application data with label.
---    
+-- Application data should instead be kept using sirea-state. Files
+-- are not well suited to RDP, but are useful for user interactions,
+-- so only user directories are provided here (to subtly discourage
+-- keeping app data in files).
 --
--- See the system-fileio Filesystem module for more info.
-
-bworkingDir, bhomeDir, bdesktopDir, bdocumentsDir :: B (S FS ()) (S FS FilePath)
-bappDataDir, bappCacheDir, bappConfigDir :: Text -> B (S FS ()) (S FS FilePath)
--}
-
-
+bworkingDir, bhomeDir, bdesktopDir, bdocumentsDir :: B (S p ()) (S p FilePath)
+bworkingDir = bioconst FS.getWorkingDirectory
+bhomeDir = bioconst FS.getHomeDirectory
+bdesktopDir = bioconst FS.getDesktopDirectory
+bdocumentsDir = bioconst FS.getDocumentsDirectory
 

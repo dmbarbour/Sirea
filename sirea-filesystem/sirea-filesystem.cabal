@@ -43,6 +43,7 @@ Library
     Sirea.Filesystem.OSManager
     Sirea.Filesystem.WorkerPool
     Sirea.Filesystem.KeyedSched
+    Sirea.Filesystem.LocalMirror
 
   Extensions: CPP
   ghc-options: -Wall -fno-warn-orphans

@@ -15,7 +15,6 @@ import Filesystem.Path (FilePath, (</>))
 import Filesystem.Path.CurrentOS (encodeString, decodeString)
 import qualified Filesystem as FS
 import Control.Concurrent.MVar
-import Control.Monad (unless)
 import Data.Maybe (catMaybes)
 import qualified Data.Map as M
 import qualified System.INotify as INo
@@ -39,7 +38,7 @@ newManager :: MkManager
 newManager eh =
     newMVar Nothing >>= \ rfW ->
     let lm = (L rfW eh) in
-    return (Manager $ setWatch lm)
+    return (Manager (setWatch lm))
     
 setWatch :: L -> [FilePath] -> IO ()
 setWatch l wl = modifyMVar_ (l_watch l) setw where
@@ -74,16 +73,18 @@ inoAddWatch ino dir action = INo.addWatch ino v dir' (catchIOE . eh) where
     catchIOE op = op `E.catch` printError dir
     eh (INo.Created bd n) = touched bd n        
     eh (INo.Closed bd (Just n) True) = touched bd n
-    eh (INo.MovedOut bd n _) = touched bd n
-    eh (INo.MovedIn bd n _) = removed bd n        
+    eh (INo.MovedOut bd n _) = removed bd n
+    eh (INo.MovedIn bd n _) = touched bd n        
     eh (INo.Deleted bd n) = removed bd n
     eh _ = action []
-    touched bDir name =
+    touched bDir n =
+        let name = decodeString n in
         let fullPath = dir </> name in
         FS.getModified fullPath >>= \ tMod ->
         let ev = Event True dir name bDir (fromUTC tMod) in
         action [ev]        
-    removed bDir name =
+    removed bDir n =
+        let name = decodeString n in
         getTime >>= \ tNow ->
         let tDel = tNow `subtractTime` 0.01 in
         let ev = Event False dir name bDir tDel in

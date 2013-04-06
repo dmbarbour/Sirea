@@ -171,12 +171,7 @@ The use of `Maybe` allows sequential signals to be combined on a single update s
 
 ### Representing Concrete Signals
 
-Sirea has gone through a few implementations of signals. The current representation is essentially the same as the list described above, except it is strict (on the head and spine) and slightly more efficiently packed.
-
-        data Sig a = Sig !(Maybe a) !(Seq (Maybe a))
-        data Seq a = Step {-# UNPACK #-} !T a !(Seq a) | Done
-
-A consequence of the spine-strict sequence is that Sirea cannot directly represent infinite signals unless they are constant. A changing signal, even one that is utterly predictable (like a logical clock that updates once a second on the second), will have updates over time. Advantages of this design are that it is easy to reason about memory and performance in a loop, and it generalizes well to networked systems. There is also no risk of divergence when eliminating false updates.
+Sirea has gone through a few implementations of signals. The current representation is essentially the same as the list described above, but slightly more compact and with an assumption that the list is of finite length or even spine-strict (such that we can safely filter false updates). Some operations will search for the end of the list. Sirea cannot directly represent infinite signals unless they are constant. This only impacts a few trivial behaviors that are time-varying but utterly predictable, such as logical clocks. Advantages of this constraint are that it is easy to reason about memory and performance in a loop, and it generalizes well to networked systems. There is also no risk of divergence when eliminating false updates.
 
 Signals have an abstract API. The representation is rarely accessed directly.
 

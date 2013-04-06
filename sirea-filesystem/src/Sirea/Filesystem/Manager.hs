@@ -6,44 +6,36 @@
 -- The manager tracks a set of directories, reporting updates to a
 -- single action passed to the manager upon construction. 
 module Sirea.Filesystem.Manager
-    ( FileDesc(..)
-    , fdIsFile, fdIsDir, fdModified, fdPath
-    , Event
+    ( Event(..)
+    , evDirPath, evFileName, evFullPath, evTime
+    , isExistsEvent, isDirectoryEvent
     , EventsHandler
     , Manager(..)
     , MkManager
     ) where
 
 import Prelude hiding (FilePath)
-import Filesystem.Path (FilePath)
+import Filesystem.Path (FilePath,(</>))
+import Filesystem.Path.CurrentOS()
 import Sirea.Time (T)
 
--- | A FileDesc contains a description of a file.
-data FileDesc = FD
-    { fd_type  :: !FType 
-    , fd_path  :: !FilePath
-    , fd_modT  :: {-# UNPACK #-} !T 
-    -- , fd_size  :: !Int
-    } deriving (Ord,Eq)
-data FType = Dir | File deriving (Ord, Eq)
-
-fdIsFile, fdIsDir :: FileDesc -> Bool
-fdModified :: FileDesc -> T
-fdPath :: FileDesc -> FilePath
-
-fdIsFile = isFile . fd_type
-fdIsDir = isDir . fd_type
-fdModified = fd_modT
-fdPath = fd_path
-
-isDir, isFile :: FType -> Bool
-isDir Dir = True
-isDir _ = False
-isFile File = True
-isFile _ = False
-
 -- | An event reports either the existence or non-existence of a file.
-type Event = Either FileDesc FilePath
+-- The time may be a best estimate. 
+data Event = Event !Exists !Dir !Name !IsDir !T deriving (Show,Eq,Ord)
+type Dir = FilePath  -- path of file in directory
+type Name = FilePath -- name of file in directory
+type Exists = Bool -- does the named file still exist?
+type IsDir = Bool  -- does Name refer to a child directory
+
+evDirPath, evFileName, evFullPath :: Event -> FilePath
+evDirPath (Event _ dp _ _ _) = dp
+evFileName (Event _ _ fn _ _) = fn
+evFullPath (Event _ dp fn _ _) = dp </> fn
+evTime :: Event -> T 
+evTime (Event _ _ _ _ tm) = tm
+isExistsEvent, isDirectoryEvent :: Event -> Bool
+isExistsEvent (Event bExists _ _ _ _) = bExists
+isDirectoryEvent (Event _ _ _ bDir _) = bDir
     
 -- Handle an event, or a bulk set of events. This operation must be
 -- mt-safe and non-blocking. Bulk sends will only be used if not
@@ -65,7 +57,7 @@ type EventsHandler = [Event] -> IO ()
 -- The given watch list should use directory paths in canonical form.
 --
 data Manager = Manager 
-    { setWatchList :: [FilePath] -> IO ()
+    { setWatchList :: [Dir] -> IO ()
     }
 
 -- Create a manager. One handler is used for all events for all

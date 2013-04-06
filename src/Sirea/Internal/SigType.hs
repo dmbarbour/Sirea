@@ -1,6 +1,11 @@
 
 -- | Most developers don't need direct access to the representation
--- of signals. The representation used now is a spine-strict list.
+-- of signals. The representation used now is basically:
+--   (Maybe a, [(T,Maybe a)])
+-- with an assumption that the list is of bounded length or even is
+-- spine-strict. The representation is slightly more compact, with a
+-- hope of efficiency.
+--
 -- The motivation for spine strictness mostly regards the difficulty
 -- of reasoning about how memory in lazy structures or closures; an
 -- earlier function-based model had trouble with loops: the signals
@@ -31,11 +36,13 @@ import Data.Maybe (isNothing)
 
 -- | Sig is an abstract type for discrete-varying signals in Sirea.
 -- A signal is defined for all times, but in practice the past is
--- dropped (collected) while the future is updated over time. 
-data Sig a = Sig !(Maybe a) !(Seq (Maybe a))
+-- dropped (collected) while the future is updated over time. At any
+-- given instant, a Sig is just a small snapshot of the present and
+-- near future (and should be bounded in size or duration).
+data Sig a = Sig !(Maybe a) (Seq (Maybe a))
 
--- seq is a spine-strict, compact sequence, with time in monotonic 
-data Seq a = Step {-# UNPACK #-} !T a !(Seq a) | Done
+-- seq is a compact sequence with monotonic time 
+data Seq a = Step {-# UNPACK #-} !T a (Seq a) | Done
 
 seqDone :: Seq a
 seqDone = Done

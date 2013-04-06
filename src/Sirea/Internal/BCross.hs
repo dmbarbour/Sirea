@@ -66,6 +66,8 @@ import Sirea.Behavior
 import Sirea.Signal
 import Sirea.Time
 
+import Debug.Trace
+
 type Event = IO ()
 type Work = IO ()
 
@@ -226,9 +228,10 @@ runGobStopper gs ev =
     readIORef (unGob gs) >>= \ lStoppers ->
     if (null lStoppers) then ev else
     newIORef (length lStoppers) >>= \ rfCD ->
-    let onStop = readIORef rfCD >>= \ cd ->
-                 writeIORef rfCD (cd - 1) >>
-                 when (0 == cd) ev
+    let onStop = readIORef rfCD >>= \ n ->
+                 let n' = n-1 in
+                 writeIORef rfCD n' >>
+                 when (0 == n') ev
     in 
     mapM_ (flip addStopperEvent onStop) lStoppers >>
     mapM_ runStopper lStoppers

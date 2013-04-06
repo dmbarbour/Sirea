@@ -175,8 +175,8 @@ mkClock cs _ ln =
     return (lnClock cs rf ln)
 
 dtClockStep, dtClockIdle :: DT
-dtClockStep = 2.4 -- affects how much is computed per an update step
-dtClockIdle = 0.6 -- how near end of last step before computing more
+dtClockStep = 1.2 -- affects how much is computed per an update step
+dtClockIdle = 0.3 -- how near end of last step before computing more
 
 lnClock :: ClockSpec -> IORef (Maybe T) -> LnkUp (Integer,T) -> LnkUp ()
 lnClock cs rf lu = LnkUp touch update idle cyc where
