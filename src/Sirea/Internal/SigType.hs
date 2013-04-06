@@ -1,8 +1,12 @@
 
 -- | Most developers don't need direct access to the representation
--- of signals. But for the few who do, here it is.
+-- of signals. The representation used now is a spine-strict list.
+-- The motivation for spine strictness mostly regards the difficulty
+-- of reasoning about how memory in lazy structures or closures; an
+-- earlier function-based model had trouble with loops: the signals
+-- would grow each loop, picking up new operations to perform when
+-- queried. 
 --
--- There are also a few operations on sequences. 
 module Sirea.Internal.SigType
     ( Sig(..)
     , Seq(..)

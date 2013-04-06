@@ -97,11 +97,36 @@ tickToTime (ClockSpec p o) n =
 
 -- find tick associated with particular time for a clock spec.
 timeToTick :: ClockSpec -> T -> Integer
-timeToTick cs@(ClockSpec p o) tm =
+timeToTick (ClockSpec p o) tm =
     let nanos = (tmDay tm) * nanosInDay + tmNanos tm in
     let rSecs = nanos % nanosInSec in
     let nF = (rSecs - o) / p in
     floor nF
+
+-- clockList will return a limited sequence of (tick,time) pairs for
+-- a logical clock, capturing the given low and high bounds. There
+-- will be at least two elements in this list (one on or before low,
+-- one on or after high).
+clockList :: ClockSpec -> T -> T -> [(Integer,T)]
+clockList cs tLo tHi = assert (tLo < tHi) $
+    let nLo = timeToTick cs tLo in
+    let tClockLo = tickToTime cs nLo in
+    assert (tLo >= tClockLo) $ -- sanity check
+    (nLo, tClockLo):clockListN cs tHi (nLo + 1)
+
+-- increment until we include tHi. Always returns a non-empty list.
+clockListN :: ClockSpec -> T -> Integer -> [(Integer,T)]
+clockListN cs tHi n =
+    let tN = tickToTime cs n in 
+    let cl = if (tN >= tHi) then [] else clockListN cs tHi (n+1) in
+    (n,tN):cl
+
+-- obtain clock signal from clock list:
+clockListToSig :: [(Integer,T)] -> Sig (Integer,T)
+clockListToSig [] = assert False $ Sig Nothing Done -- expect non-empty list
+clockListToSig (x:xs) = Sig (Just x) (seqFromList $ fmap cu xs) where
+    cu nt = (snd nt, Just nt)
+
 
 nanosInDay, nanosInSec :: Integer
 nanosInDay = 24*60*60 * nanosInSec
@@ -145,31 +170,41 @@ mkClockHF _ _ = error "TODO: support very high-frequency clocks"
 -- updates. The last reported tick/time is recorded.
 --
 mkClock :: ClockSpec -> pcx -> LnkUp (Integer,T) -> IO (LnkUp ())
-mkClock cs _ ln = error "TODO: finish implementing clocks"
-{-    newIORef Nothing >>= \ rf -> -- track time to consider updates.
+mkClock cs _ ln =     
+    newIORef Nothing >>= \ rf -> -- track time to consider updates.
     return (lnClock cs rf ln)
 
-
+dtClockStep, dtClockIdle :: DT
+dtClockStep = 2.4 -- affects how much is computed per an update step
+dtClockIdle = 0.6 -- how near end of last step before computing more
 
 lnClock :: ClockSpec -> IORef (Maybe T) -> LnkUp (Integer,T) -> LnkUp ()
-lnClock cs rf lu = LnkUp touch update idle cycle where
+lnClock cs rf lu = LnkUp touch update idle cyc where
     touch = ln_touch lu
-    update tS tU su = 
-        let tLo = min (inStableT tS) tU in
-        let (tEnd,bActiveEnd) = sigEnd tSegStart su in
-        let tHi = tEnd `addTime` dtClockStep in
-        let mem = if bActiveEnd then Just tHi else Nothing in
+    cyc = ln_cycle lu
+    idle tS = readIORef rf >>= idle' tS
+    idle' tS Nothing = ln_idle lu tS -- dead signal...
+    idle' tS (Just tLast) =
+        let dt = diffTime tLast (inStableT tS) in
+        if (dtClockIdle < dt) then ln_idle lu tS else
+        let tLo = tLast in
+        let tHi = tLo `addTime` dtClockStep in
+        let lClock = tail (clockList cs tLo tHi) in
+        let tU = (snd . head) lClock in
+        let sClock = clockListToSig lClock in
+        deliver tS tU sClock
+    update tS@(StableT tm) tU su = 
+        let tLo = min tm tU in 
+        let (tEnd,_) = sigEnd tLo su in
+        let tHi = (max tEnd $ max tm tU) `addTime` dtClockStep in
+        let lClock = clockList cs tLo tHi in
+        let sClock = clockListToSig lClock `s_mask` su in
+        deliver tS tU sClock
+    deliver tS tU sClock =
+        let (t,m) = sigEnd tU sClock in
+        let mem = if isNothing m then Nothing else Just t in
         writeIORef rf mem >>
-        let sClock = clockSig cs tLo tHi in
-    
-    
-        remember bActiveEnd tHi >>
-
-        if bActiveEnd then update1 tS tU su (tEnd `addTime` dtClockSeg)
-                      else update0 tS tU su tEnd
-    remember True tHi = writeIORef rf (Just tHi)
-    remember 
-        
+        ln_update lu tS tU sClock        
         
 -- Find the last values in a signal, given some
 -- proposed initial values.
@@ -181,37 +216,3 @@ seqEnd t a Done = (t,a)
 seqEnd _ _ (Step t a s) = seqEnd t a s
 
 
--- generate a segment of logical clock signal starting at given time
--- and stretching through another given time. This method is for low
--- frequency clocks.
-clockSig :: ClockSpec -> T -> (T,Sig (Integer,T))
-
--- An observation of a clock signal starting near a given instant.
--- Note that the clock signal does not depend on the time we begin
--- observing, nor on real time, only on the logical time of day and
--- the ClockSpec.
---
--- The goal with clockSig is to ensure O(1) computation and simple
--- real-time computation of the clock signal. 
-clockSig :: ClockSpec -> T -> Sig T
-clockSig cs t0 =
-    assert (clockSpecValid cs) $
-    let offsetNanos = dtToNanos (clock_offset cs) in
-    let nNanos = tmNanos t0 in
-    let nDays = tmDay t0 in
-    if (nNanos < offsetNanos) 
-        then clockSig' cs (pred nDays) (pred nanosInDay)
-        else clockSig' cs nDays nNanos
-    
-
-
--- Times after a given time. 
--- The series of updates is repeated each day. 
-timeAfterTime :: ClockSpec -> T -> [T]
-timeAfterTime cs t0 = t0 `seq` (t1:timeAfterTime cs t1)
-    where t1  = let t0' = addTime t0 (clock_period cs) in
-                if (tmDay t0' > tmDay t0)
-                  then mkTime (tmDay t0') (dtToNanos (clock_offset cs))
-                  else t0'
-
--}
