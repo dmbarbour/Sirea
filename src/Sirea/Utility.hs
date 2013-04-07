@@ -77,20 +77,23 @@ mkPrinter cp = findInPCX cp >>= return . doPrint . inPrintMem where
         mapM_ putStrLn (S.toAscList (S.difference ss ss0))
 
 -- | bioconst - Obtain a constant value using one-time IO. Might be 
--- suitable for environment variables or similar.
---
--- Note: this IO may be performed more than once due to restarts for
--- hibernation. It won't be performed unless the value is needed 
--- downstream. 
---   
-bioconst :: IO c -> B (S p a) (S p c)
+-- suitable for environment variables or similar. 
+-- 
+-- The IO operation should be idempotent, returning the same value
+-- on different calls. It should be 'safe' in the sense that it is
+-- not a problem if it is not called if the value is unnecessary. In
+-- particular, newUnique, newIORef, and the like are not compatible 
+-- with RDP's assumptions about internal identity or state, and will
+-- not behave robustly in dynamic behaviors or across restarts.
+-- 
+bioconst :: IO c -> B (S p ()) (S p c)
 bioconst mkC = unsafeLinkBL mkConst where
     mkConst _ lnc = 
         mkC >>= \ c -> 
         return (ln_sfmap (s_const c) lnc)
 
 -- | biofmap - Obtain a pure function using one-time IO. See notes
--- for bioconst. 
+-- for bioconst. This is much less likely to see use than bioconst. 
 biofmap :: IO (a -> b) -> B (S p a) (S p b)
 biofmap mkF = unsafeLinkBL mkFmap where
     mkFmap _ lnb =
