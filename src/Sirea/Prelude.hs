@@ -16,13 +16,13 @@ module Sirea.Prelude
     ) where
 
 import Sirea.Behavior 
+import Sirea.BDeep
 import Sirea.Activate (runSireaApp)
 import Sirea.B (B)
 import Sirea.Partition (BCross(..),Partition(..), Pt, P0)
-import Sirea.BDeep
 import Sirea.Time (T,DT)
-import Sirea.DemandMonitor (demandMonitor)
+import Sirea.DemandMonitor (bdemand, bmonitor, bactivate, bactive, bdemandl, bmonitorl)
 import Sirea.Utility
-import Sirea.Clock (bclockHours, bclockMinutes, bclockSeconds)
-import Sirea.TimeTrigger 
+import Sirea.Clock (bclockHours, bclockMinutes, bclockSeconds, bclockOfFreq, btickOfFreq)
+import Sirea.TimeTrigger (btimeTrigger)
 

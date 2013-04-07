@@ -15,12 +15,14 @@ import qualified Data.Set as S
 import Debug.Trace
 
 main :: IO ()
-main = runSireaApp tstCycle
+main = runSireaApp $ tstCycle |*| (bconst (int 0) >>> bdemand dm)
+
+dm :: String 
+dm = "TestCycle"
 
 tstCycle :: B (S P0 ()) (S P0 ())
-tstCycle = snd dm >>> bdelay 0.1 >>> bprint >>> bfmap addOne >>> fst dm
-     where dm = demandMonitor "tstCycle"
-           addOne = succ . S.findMax . S.insert (0 :: Int)
+tstCycle = bmonitor dm >>> bdelay 0.1 >>> bfmap addOne >>> bprint >>> bdemand dm
+     where addOne = succ . S.findMax . S.insert (minBound :: Int)
 
 -- 'int' is just a type annotation to help inference
 int :: Int -> Int

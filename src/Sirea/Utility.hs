@@ -76,23 +76,26 @@ mkPrinter cp = findInPCX cp >>= return . doPrint . inPrintMem where
         writeIORef rf ss >>
         mapM_ putStrLn (S.toAscList (S.difference ss ss0))
 
--- | bioconst - Obtain a constant value using one-time IO.
--- Might be suitable for environment variables or similar.
+-- | bioconst - Obtain a constant value using one-time IO. Might be 
+-- suitable for environment variables or similar.
+--
+-- Note: this IO may be performed more than once due to restarts for
+-- hibernation. It won't be performed unless the value is needed 
+-- downstream. 
+--   
 bioconst :: IO c -> B (S p a) (S p c)
 bioconst mkC = unsafeLinkBL mkConst where
     mkConst _ lnc = 
         mkC >>= \ c -> 
         return (ln_sfmap (s_const c) lnc)
 
--- | biofmap - Obtain a pure function using one-time IO.
--- Included for completeness with bioconst.
+-- | biofmap - Obtain a pure function using one-time IO. See notes
+-- for bioconst. 
 biofmap :: IO (a -> b) -> B (S p a) (S p b)
 biofmap mkF = unsafeLinkBL mkFmap where
     mkFmap _ lnb =
         mkF >>= \ f ->
         return (ln_sfmap (s_fmap f) lnb)
-
-
 
 -- | bundefined - exploratory programming often involves incomplete
 -- behaviors. `bundefined` serves a similar role to `undefined` in

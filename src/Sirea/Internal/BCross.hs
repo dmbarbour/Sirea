@@ -66,7 +66,7 @@ import Sirea.Behavior
 import Sirea.Signal
 import Sirea.Time
 
-import Debug.Trace
+--import Debug.Trace
 
 type Event = IO ()
 type Work = IO ()

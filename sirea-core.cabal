@@ -73,7 +73,6 @@ Library
     Sirea.UnsafeLink
     Sirea.UnsafeIO
     Sirea.DemandMonitor
-    Sirea.DemandListMonitor
     Sirea.AgentResource
     Sirea.Clock
     Sirea.TimeTrigger

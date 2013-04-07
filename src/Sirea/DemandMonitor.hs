@@ -34,7 +34,11 @@
 module Sirea.DemandMonitor 
     ( DemandMonitor
     , demandMonitor
-    , activityMonitor   
+    , bdemand, bmonitor
+    , activityMonitor 
+    , bactivate, bactive  
+    , demandListMonitor
+    , bdemandl, bmonitorl
     ) where
 
 -- TODO: Consider making DemandMonitor more compositional, by having
@@ -71,6 +75,20 @@ demandMonitor nm = fix $ \ dm ->
     let m = monitorFacetB $ fmap snd . cwToDMD in
     (d,m)
 
+-- | contribute demands to a set of demands, which can be observed
+-- by any 'bmonitor' with the same identifying string.
+--
+-- Note that if you use a demand monitor in this fashion, it is wise
+-- to use a common string variable to guard against spelling errors
+-- or inconsistency in refactoring. Each string discovers a distinct
+-- demand monitor resource.
+bdemand :: (Ord e, Typeable e, Partition p) => String -> B (S p e) (S p ())
+bdemand = fst . demandMonitor
+
+-- | observe set of active demands.
+bmonitor :: (Ord e, Typeable e, Partition p) => String -> B (S p ()) (S p (Set e))
+bmonitor = snd . demandMonitor
+
 -- | activityMonitor is a specialized demand monitor with unit type,
 -- which means it only monitors whether at least one input signal is
 -- active. This observed value is 'True' for durations where there
@@ -81,6 +99,14 @@ activityMonitor nm = fix $ \ dm ->
     let d = demandFacetB $ fmap fst . cwToAMon in
     let m = monitorFacetB $ fmap snd . cwToAMon in
     (d,m)
+
+-- | activate an activityMonitor resource
+bactivate :: (Partition p) => String -> B (S p ()) (S p ())
+bactivate = fst . activityMonitor
+
+-- | test whether an activityMonitor resource is active.
+bactive :: (Partition p) => String -> B (S p ()) (S p Bool)
+bactive = snd . activityMonitor
 
 -- load PCX for correct partition (type system tricks)
 getPCX :: (Partition p) => DemandMonitor b p e z -> PCX W -> IO (PCX p)
@@ -143,5 +169,54 @@ demandFacetB getDA = bvoid (unsafeLinkB_ lnDem) >>> bconst () where
 monitorFacetB :: (PCX W -> IO (MonitorDist z)) -> B (S p ()) (S p z)
 monitorFacetB getMD = unsafeLinkBL lnMon where
     lnMon cw lu = getMD cw >>= flip newMonitorLnk lu
+
+
+-- | demandListMonitor is necessary for types that cannot meet the
+-- Ord constraint. It behaves similar to demandMonitor, but there
+-- are some extra safety concerns: the resulting list has a non
+-- deterministic ordering, and may contain duplicates, neither of
+-- which should affect observable behavior. Developers must be
+-- careful to only use the monitored results in a context or manner
+-- where ordering or duplication is irrelevant.
+demandListMonitor :: (Partition p, Typeable e) => String -> DemandMonitor B p e [e]
+demandListMonitor nm = fix $ \ dm ->
+    let cwToDMD cw = getPCX dm cw >>= fmap getLDMD . findByNameInPCX nm in
+    let d = demandFacetB $ fmap fst . cwToDMD in
+    let m = monitorFacetB $ fmap snd . cwToDMD in
+    (d,m)
+
+-- | Contribute demand to a list; useful if type lacks Ord property.
+-- Demand lists are entirely distinct from demand sets of bdemand.
+bdemandl :: (Partition p, Typeable e) => String -> B (S p e) (S p ())
+bdemandl = fst . demandListMonitor
+
+-- | Monitor a list of demands. Note that the list should be treated
+-- as a set - i.e. ordering and duplication must not affect observed
+-- behavior (otherwise this introduces non-determinism).
+bmonitorl :: (Partition p, Typeable e) => String -> B (S p ()) (S p [e])
+bmonitorl = snd . demandListMonitor
+
+newtype LDMD e = LDMD { getLDMD :: (DemandAggr e [e], MonitorDist [e]) } deriving (Typeable)
+instance (Partition p, Typeable e) => Resource p (LDMD e) where
+    locateResource _ cp = LDMD <$> newLDMD cp
+instance (Partition p, Typeable e) => NamedResource p (LDMD e)
+ 
+-- newDMD will return a coupled DemandAggr and MonitorDist pair.
+newLDMD :: (Partition p) => PCX p -> IO (DemandAggr e [e], MonitorDist [e])
+newLDMD cp =     
+    getPSched cp >>= \ pd ->
+    newMonitorDist pd (s_always []) >>= \ md ->
+    let lu = primaryMonitorLnk md in
+    newDemandAggr pd lu sigZipLists >>= \ d ->
+    return (d,md)
+
+sigZipLists :: [Sig e] -> Sig [e]
+sigZipLists = foldr (s_full_zip jf) (s_always [])
+    where jf (Just x) (Just xs) = Just (x:xs)
+          jf _ xs = xs
+
+
+
+
 
 
