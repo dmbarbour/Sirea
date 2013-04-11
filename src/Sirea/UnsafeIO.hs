@@ -69,9 +69,8 @@ unsafeOnUpdateBLN = unsafeLinkBLN . mkOnUpdate
 
 mkOnUpdate :: (Eq a, Partition p) 
            => (PCX p -> IO (T -> a -> IO ()))
-           -> PCX W -> LnkUp a -> IO (LnkUp a)
-mkOnUpdate mkOp cw lu =
-    findInPCX cw >>= \ cp ->
+           -> PCX p -> LnkUp a -> IO (LnkUp a)
+mkOnUpdate mkOp cp lu =
     mkOp cp >>= \ op ->
     newIORef (P s_never (StableT tAncient)) >>= \ rfSig ->
     let lu' = luOnUpdate op rfSig lu in

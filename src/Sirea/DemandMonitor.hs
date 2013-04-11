@@ -49,7 +49,6 @@ module Sirea.DemandMonitor
 
 import Control.Applicative
 import Data.Maybe (isJust)
-import Data.Function (fix)
 import Data.Typeable
 import Data.Set (Set)
 import qualified Data.Set as S
@@ -69,10 +68,10 @@ type DemandMonitor b p e z = (b (S p e) (S p ()), b (S p ()) (S p z))
 --
 -- This demand monitor will return the set of active demands.
 demandMonitor :: (Ord e, Typeable e, Partition p) => String -> DemandMonitor B p e (Set e)
-demandMonitor nm = fix $ \ dm ->
-    let cwToDMD cw = getPCX dm cw >>= fmap getDMD . findByNameInPCX nm in
-    let d = demandFacetB $ fmap fst . cwToDMD in
-    let m = monitorFacetB $ fmap snd . cwToDMD in
+demandMonitor nm = 
+    let cpToDMD = fmap getDMD . findByNameInPCX nm in
+    let d = demandFacetB $ fmap fst . cpToDMD in
+    let m = monitorFacetB $ fmap snd . cpToDMD in
     (d,m)
 
 -- | contribute demands to a set of demands, which can be observed
@@ -94,10 +93,10 @@ bmonitor = snd . demandMonitor
 -- active. This observed value is 'True' for durations where there
 -- is at least one active demand.
 activityMonitor :: (Partition p) => String -> DemandMonitor B p () Bool 
-activityMonitor nm = fix $ \ dm ->
-    let cwToAMon cw = getPCX dm cw >>= fmap getAMon . findByNameInPCX nm in
-    let d = demandFacetB $ fmap fst . cwToAMon in
-    let m = monitorFacetB $ fmap snd . cwToAMon in
+activityMonitor nm = 
+    let cpToAMon = fmap getAMon . findByNameInPCX nm in
+    let d = demandFacetB $ fmap fst . cpToAMon in
+    let m = monitorFacetB $ fmap snd . cpToAMon in
     (d,m)
 
 -- | activate an activityMonitor resource
@@ -107,10 +106,6 @@ bactivate = fst . activityMonitor
 -- | test whether an activityMonitor resource is active.
 bactive :: (Partition p) => String -> B (S p ()) (S p Bool)
 bactive = snd . activityMonitor
-
--- load PCX for correct partition (type system tricks)
-getPCX :: (Partition p) => DemandMonitor b p e z -> PCX W -> IO (PCX p)
-getPCX _ = findInPCX
 
 newtype DMD e = DMD { getDMD :: (DemandAggr e (Set e), MonitorDist (Set e)) } 
     deriving (Typeable)
@@ -162,11 +157,11 @@ amonZip =
     s_const () .
     foldr s_merge s_never 
 
-demandFacetB :: (PCX W -> IO (DemandAggr e z)) -> B (S p e) (S p ())
+demandFacetB :: (Partition p) => (PCX p -> IO (DemandAggr e z)) -> B (S p e) (S p ())
 demandFacetB getDA = bvoid (unsafeLinkB_ lnDem) >>> bconst () where
     lnDem cw = getDA cw >>= newDemandLnk
 
-monitorFacetB :: (PCX W -> IO (MonitorDist z)) -> B (S p ()) (S p z)
+monitorFacetB :: (Partition p) => (PCX p -> IO (MonitorDist z)) -> B (S p ()) (S p z)
 monitorFacetB getMD = unsafeLinkBL lnMon where
     lnMon cw lu = getMD cw >>= flip newMonitorLnk lu
 
@@ -179,10 +174,10 @@ monitorFacetB getMD = unsafeLinkBL lnMon where
 -- careful to only use the monitored results in a context or manner
 -- where ordering or duplication is irrelevant.
 demandListMonitor :: (Partition p, Typeable e) => String -> DemandMonitor B p e [e]
-demandListMonitor nm = fix $ \ dm ->
-    let cwToDMD cw = getPCX dm cw >>= fmap getLDMD . findByNameInPCX nm in
-    let d = demandFacetB $ fmap fst . cwToDMD in
-    let m = monitorFacetB $ fmap snd . cwToDMD in
+demandListMonitor nm = 
+    let cpToDMD = fmap getLDMD . findByNameInPCX nm in
+    let d = demandFacetB $ fmap fst . cpToDMD in
+    let m = monitorFacetB $ fmap snd . cpToDMD in
     (d,m)
 
 -- | Contribute demand to a list; useful if type lacks Ord property.

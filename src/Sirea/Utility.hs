@@ -87,7 +87,7 @@ mkPrinter cp = findInPCX cp >>= return . doPrint . inPrintMem where
 -- not behave robustly in dynamic behaviors or across restarts.
 -- 
 bioconst :: IO c -> B (S p ()) (S p c)
-bioconst mkC = unsafeLinkBL mkConst where
+bioconst mkC = unsafeLinkWBL mkConst where
     mkConst _ lnc = 
         mkC >>= \ c -> 
         return (ln_sfmap (s_const c) lnc)
@@ -95,7 +95,7 @@ bioconst mkC = unsafeLinkBL mkConst where
 -- | biofmap - Obtain a pure function using one-time IO. See notes
 -- for bioconst. This is much less likely to see use than bioconst. 
 biofmap :: IO (a -> b) -> B (S p a) (S p b)
-biofmap mkF = unsafeLinkBL mkFmap where
+biofmap mkF = unsafeLinkWBL mkFmap where
     mkFmap _ lnb =
         mkF >>= \ f ->
         return (ln_sfmap (s_fmap f) lnb)
@@ -120,7 +120,7 @@ bundefined = bfmap (const ()) >>> undefinedB
 -- of the signal downstream. 
 -- 
 undefinedB :: (SigInP p y) => B (S p ()) y 
-undefinedB = unsafeLinkBL (const mkTestActivity) >>>
+undefinedB = unsafeLinkWBL (const mkTestActivity) >>>
              (wrapB . const) nullB0
 
 mkTestActivity :: LnkUp () -> IO (LnkUp ())

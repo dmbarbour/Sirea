@@ -201,7 +201,7 @@ unsafeInvokeAgent :: (AgentBehavior p duty) => duty -> B (S p ()) (S p ())
 unsafeInvokeAgent duty = fix $ \ b -> invokeDutyAR (getAR duty b)
 
 invokeDutyAR :: (PCX W -> IO (AR p duty)) -> B (S p ()) (S p ())
-invokeDutyAR findAR = bvoid (unsafeLinkB_ lnInvoke) where
+invokeDutyAR findAR = bvoid (unsafeLinkWB_ lnInvoke) where
     lnInvoke cw = findAR cw >>= newDemandLnk . ar_daggr
 
 getAR :: (AgentBehavior p duty) 

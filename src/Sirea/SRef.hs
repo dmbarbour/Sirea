@@ -24,7 +24,6 @@ module Sirea.SRef
 
 import Data.IORef
 import Data.Typeable
-import Data.Function (fix)
 import Control.Monad (unless,when)
 import Control.Exception (assert)
 
@@ -89,8 +88,8 @@ data SRID z = SRID
 sridZero :: SRID z
 sridZero = SRID Nothing s_never
 
-instance (Partition p, Typeable z) => Resource p (SRefI z) where
-    locateResource _ cp = newSRefI cp
+instance (Partition p, Typeable z) => Resource p (SRefI z) where 
+    locateResource _ = newSRefI
 instance (Partition p, Typeable z) => NamedResource p (SRefI z)
 
 newSRefI :: (Partition p) => PCX p -> IO (SRefI z)
@@ -273,23 +272,18 @@ addSRefEvent sri ev = modifyIORef (sri_data sri) addEvSRI where
 -- If the signal is not set by the partition for a period, watch 
 -- will report an active Nothing signal.
 bwatchSRef :: (Partition p, Typeable z) => String -> B (S p ()) (S p (Maybe z))
-bwatchSRef nm = fix $ \ b -> monitorFacetB $ \ cw ->
-    getPCX b cw >>= \ cp -> getSRefO cp nm >>= return . sro_mdist
+bwatchSRef nm = monitorFacetB $ \ cp -> sro_mdist `fmap` getSRefO cp nm
 
 -- | Send a signal to an input SRef to be observed in partition.
 -- Mutiple signals may be sent and processed concurrently.
 bsignalSRef :: (Partition p, Typeable z) => String -> B (S p z) (S p ())
-bsignalSRef nm = fix $ \ b -> demandFacetB $ \ cw ->
-    getPCX b cw >>= \ cp -> getSRefI cp nm >>= return . sri_daggr
+bsignalSRef nm = demandFacetB $ \ cp -> sri_daggr `fmap` getSRefI cp nm
 
-getPCX :: (Partition p) => B (S p a) z -> PCX W -> IO (PCX p)
-getPCX _ = findInPCX
-
-monitorFacetB :: (PCX W -> IO (MonitorDist z)) -> B (S p ()) (S p z)
+monitorFacetB :: (Partition p) => (PCX p -> IO (MonitorDist z)) -> B (S p ()) (S p z)
 monitorFacetB getMD = unsafeLinkBL lnMon
     where lnMon cw lu = getMD cw >>= flip newMonitorLnk lu
 
-demandFacetB :: (PCX W -> IO (DemandAggr e z)) -> B (S p e) (S p ())
+demandFacetB :: (Partition p) => (PCX p -> IO (DemandAggr e z)) -> B (S p e) (S p ())
 demandFacetB getDA = bvoid (unsafeLinkB_ lnDem) >>> bconst ()
     where lnDem cw = getDA cw >>= newDemandLnk
 
