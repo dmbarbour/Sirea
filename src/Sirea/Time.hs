@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveDataTypeable #-}
+
 module Sirea.Time
     ( T
     , tmDay,tmNanos
@@ -15,7 +15,6 @@ import Data.Ratio ((%),numerator,denominator)
 import qualified Data.Time.Clock as CW
 import qualified Data.Time.Calendar as Cal
 import Data.Function (on)
-import Data.Typeable
 import Control.Exception (assert)
 
 
@@ -33,7 +32,7 @@ import Control.Exception (assert)
 -- 
 -- Construct via mkTime, fromUTC, or getTime. 
 data T = T {-# UNPACK #-} !Int32 {-# UNPACK #-} !Int64
-    deriving (Typeable)
+    deriving (Eq, Ord)
 
 _tmDay :: T -> Int32
 _tmDay (T d _) = d
@@ -77,7 +76,7 @@ fromUTC utc =
 
 -- | DT - a representation of a difference in two times, accessible
 --   as a distance in nanoseconds. 
-newtype DT = DT { unDT :: T }
+newtype DT = DT { unDT :: T } deriving (Eq, Ord)
 
 dtToNanos :: DT -> Integer
 dtToNanos (DT tm) = (nanosInDay * tmDay tm) + tmNanos tm
@@ -87,12 +86,10 @@ nanosToDt = DT . mkTime 0
 
 -- | Add a difference in time to an absolute time.
 addTime :: T -> DT -> T
-addTime tm (DT dt) =
-    let d = _tmDay tm + _tmDay dt in 
-    let n = _tmNanos dt + _tmNanos tm in
-    if (n < nnid) then T d n 
-                  else T (d + 1) (n - nnid)
-    where nnid = fromInteger nanosInDay
+addTime (T tD tN) (DT (T dtD dtN)) =
+    let n = tN + dtN in
+    if (n < nnid) then T (tD + dtD) n
+                  else T (tD + dtD + 1) (n - nnid)
 
 -- | Subtract a difference in time from an absolute time
 subtractTime :: T -> DT -> T
@@ -100,36 +97,17 @@ subtractTime tm (DT dt) = unDT (diffTime tm dt)
 
 -- | Find the difference in time, diffTime a b = a - b
 diffTime :: T -> T -> DT
-diffTime tm tm' =
-    let d = _tmDay tm - _tmDay tm' in
-    let n = _tmNanos tm - _tmNanos tm' in
-    if (n < 0) then DT (T (d-1) (n+nnid))
-               else DT (T d n)
-    where nnid = fromInteger nanosInDay
+diffTime (T da na) (T db nb) =
+    if (na < nb) then DT (T ((da - db) - 1) ((na - nb) + nnid))
+                 else DT (T (da - db) (na - nb))
+
+nnid :: Int64
+nnid = fromInteger nanosInDay
 
 nanosInDay, secondsInDay, nanosInSec :: Integer
 nanosInDay = secondsInDay * nanosInSec
 secondsInDay = 24 * 60 * 60
 nanosInSec = 1000 * 1000 * 1000 
-
-instance Eq T where
-  (==) a b = eqNanos a b && eqMJD a b
-    where eqNanos = (==) `on` _tmNanos
-          eqMJD = (==) `on` _tmDay
-
-instance Eq DT where
-  (==) = (==) `on` unDT
-
-instance Ord T where
-  compare a b = 
-     case cmpDays a b of
-        EQ -> cmpNanos a b
-        x -> x
-     where cmpDays = compare `on` _tmDay
-           cmpNanos = compare `on` _tmNanos
-
-instance Ord DT where
-  compare = compare `on` unDT
 
 instance Num DT where
     (+) (DT a) b = DT (addTime a b)
@@ -143,7 +121,6 @@ instance Num DT where
         if (_tmNanos a == 0) 
             then DT (T (negate (_tmDay a)) 0) 
             else DT (T (negate (_tmDay a) - 1) (nnid - _tmNanos a))
-        where nnid = fromInteger nanosInDay
     abs (DT a) = if (_tmDay a < 0) then negate (DT a) else (DT a)
     signum (DT a) = 
         if (_tmDay a < 0) 
