@@ -9,10 +9,12 @@ module Sirea.Prelude
     , module Sirea.Partition
     , module Sirea.BDeep
     , module Sirea.Time
+    -- * utilities
     , module Sirea.DemandMonitor
     , module Sirea.Utility
     , module Sirea.Clock
     , module Sirea.TimeTrigger
+    , module Sirea.TimeStamp
     ) where
 
 import Sirea.Behavior 
@@ -25,4 +27,5 @@ import Sirea.DemandMonitor (bdemand, bmonitor, bactivate, bactive, bdemandl, bmo
 import Sirea.Utility
 import Sirea.Clock (bclockHours, bclockMinutes, bclockSeconds, bclockOfFreq, btickOfFreq)
 import Sirea.TimeTrigger (btimeTrigger)
+import Sirea.TimeStamp (btimeStamp, btimeStampMon)
 

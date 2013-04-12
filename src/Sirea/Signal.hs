@@ -24,6 +24,7 @@ module Sirea.Signal
  ( Sig
  , listToSig, sigToList
  , s_sample, s_sample_d, s_trim
+ , s_sample_prior, s_trim_prior
  , s_never, s_always
  , s_const 
  , s_fmap, s_full_map
@@ -123,6 +124,18 @@ sigToList (Sig hd tl) tLower tUpper =
     assert (tLower <= tUpper) $
     let (x,xs) = seqQuery hd tLower tl in
     (tLower,x):(seqTakeList tUpper xs)
+
+-- | sample a signal just before a given instant, i.e. ignoring any
+-- update that occurs at the exact given instant. This can be useful
+-- for working with state models.
+s_sample_prior :: Sig a -> T -> (Maybe a, Sig a)
+s_sample_prior s0 tq = let sf@(Sig hd _) = s_trim_prior s0 tq in (hd,sf)
+
+-- | trim a signal just before a given instant; can be useful when
+-- managing state models. 
+s_trim_prior :: Sig a -> T -> Sig a
+s_trim_prior (Sig x xs) tm = Sig x' xs' where
+    (x',xs') = seqQueryPrior x tm xs
 
 -- | a signal that is never active (`Nothing` at all times)
 -- Same as `empty` from Alternative.

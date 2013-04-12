@@ -488,6 +488,9 @@ schedCleanupMD md = schedCleanup where
 newMonitorLnk :: MonitorDist z -> LnkUp z -> IO (LnkUp ())
 newMonitorLnk md lzo = newMonitorLnk' md lzo <$> newUnique
 
+-- idea: I could provide a zip/mask function to the newMonitorLnk
+-- instead of assuming one. This would help at least for TimeStamp. 
+
 newMonitorLnk' :: MonitorDist z -> LnkUp z -> Unique -> LnkUp ()
 newMonitorLnk' md lu k = LnkUp touch update idle cyc where
     touch = touchMLN md lu k

@@ -51,16 +51,13 @@ import Debug.Trace (traceIO)
 -- and the response signal is ignored. 
 --
 --    main :: IO ()
---    main = runSireaApp $ foo |*| bar |*| baz
---
--- RDP supports multi-agent composition with the |*| operator, where
--- an agent is modeled as an RDP behavior that drops its response. A
--- suggestion is to limit main to a composition of agents behaviors.
+--    main = runSireaApp $ foo >>> bar >>> baz
 --
 -- runSireaApp will activate the behavior and keep it active until 
 -- interrupted by any AsyncException in the initial thread. Ctrl+C
 -- will cause such a exception. After interruption, runSireaApp will
--- begin a graceful shutdown.
+-- begin a graceful shutdown. (If you interrupt twice, the graceful
+-- shutdown will abort.)
 --
 runSireaApp :: B (S P0 ()) y -> IO ()
 runSireaApp app = buildSireaApp (app >>> btrivial) >>= beginSireaApp
@@ -97,15 +94,12 @@ data AppPeriodic = AppPeriodic
     }
 
 
--- | Build the SireaApp behavior, generating a SireaAppObject. Access
--- to the Stepper allows the user to embed the SireaApp in another
--- event loop, and access to Context supports integrating resources
--- controlled by the main event loop. 
---
--- If you don't already have a main event loop, I suggest using the
--- runSireaApp function and shifting resources to dedicated threads.
--- (Explicitly hooking up resources detracts from the declarative 
--- programming experience, and is not readily extensible.)
+-- | If you need an external main event loop, use buildSireaApp to
+-- integrate the Sirea events model with the external events model.
+-- Otherwise, favor use of runSireaApp. (Relying on ad-hoc behavior
+-- in the main thread results in systems that are less extensible 
+-- and reusable than tasks represented in partition typeclasses and
+-- controlled by external signals.)
 --
 buildSireaApp :: B (S P0 ()) S1 -> IO SireaAppObject
 buildSireaApp app = 

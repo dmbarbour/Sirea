@@ -75,6 +75,7 @@ Library
     Sirea.DemandMonitor
     Sirea.AgentResource
     Sirea.Clock
+    Sirea.TimeStamp
     Sirea.TimeTrigger
     Sirea.SRef
 
@@ -84,7 +85,6 @@ Library
     Sirea.Trans.Error
     Sirea.Trans.Reader
 
-  Other-Modules:
     -- implementation details
     Sirea.Internal.CC
     Sirea.Internal.B0Type

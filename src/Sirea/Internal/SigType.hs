@@ -20,6 +20,7 @@ module Sirea.Internal.SigType
     , seqConst0, seqConst1
     , seqMap
     , seqQuery, seqTrim
+    , seqQueryPrior
     , seqSigup
     , seqFilter
     , seqAdjeqf
@@ -101,6 +102,14 @@ seqQuery x _ Done = (x,Done)
 seqQuery x tq s@(Step t v s') = 
     if (tq < t) then (x,s) else 
     seqQuery v tq s'
+
+-- query a signal to obtain its value just prior to a given time and
+-- the rest of the signal starting from that point.
+seqQueryPrior :: a -> T -> Seq a -> (a, Seq a)
+seqQueryPrior x _ Done = (x,Done)
+seqQueryPrior x tq s@(Step t v s') =
+    if (tq <= t) then (x,s) else
+    seqQueryPrior v tq s'
 
 -- trim is same as query except with just the resulting sequence.
 seqTrim :: T -> Seq a -> Seq a
