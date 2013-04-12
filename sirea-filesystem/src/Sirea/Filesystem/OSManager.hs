@@ -16,7 +16,10 @@ import Sirea.Filesystem.OSX
 #endif
 
 #if defined(USE_POLLING)
+dtPoll :: DT 
+dtPoll = 3.0 -- seconds
+
 newManager :: MkManager
-newManager = newPollingManager
+newManager = newPollingManager dtPoll
 #endif
 

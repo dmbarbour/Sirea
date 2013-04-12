@@ -28,11 +28,22 @@
 -- files are persistent, declarative, and observed reactively. Files
 -- are a much closer fit for RDP than console or command-line IO.
 --
+-- NOTE: Sirea.Filesystem does not make any effort to be savvy with
+-- regards to symbolic links. This will not change. Sirea uses the
+-- filesystem in a simplistic way
+-- 
 module Sirea.Filesystem 
     ( FS
     -- * Basic File Operations
     , breadFile
     , bwriteFile
+
+    -- * Text Operations
+    , breadFileText
+    , bwriteFileText
+    , breadFileString
+    , bwriteFileString
+
     -- * Listing a directory
     , blistDirectory
     , FileDesc
@@ -41,15 +52,10 @@ module Sirea.Filesystem
     , fdModified
     , fdPath
 
-    -- , loadConfFile
-    -- , filePathDetails
-    -- , listDirectoryDetailed
-
-    -- * Text Operations
-    , breadFileText
-    , breadFileString
-    , bwriteFileText
-    , bwriteFileString
+    -- * Convenient Configuration Loading
+    , bloadConfig
+    , bloadConfigH
+    , bloadConfigW
 
     -- * Quick access to directories.
     , bworkingDir
@@ -59,8 +65,9 @@ module Sirea.Filesystem
     ) where 
 
 import Prelude hiding (FilePath)
-import Filesystem.Path (FilePath) 
+import Filesystem.Path (FilePath,(</>)) 
 import qualified Filesystem as FS
+import qualified Filesystem.Path as FS
 import Data.ByteString (ByteString)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -69,7 +76,9 @@ import qualified Data.Text.Encoding.Error as Text
 import Data.IORef
 import Data.Unique
 import Data.Typeable
-import Control.Arrow (second)
+import Data.Maybe (fromMaybe)
+import Control.Arrow (first, second)
+import Control.Monad (unless)
 import Control.Applicative
 
 import Sirea.Filesystem.LocalMirror
@@ -77,52 +86,68 @@ import Sirea.Filesystem.LocalMirror
 import Sirea.Prelude
 import Sirea.UnsafeLink
 import Sirea.PCX
+import Sirea.Partition
+import Sirea.Signal
 
 import Debug.Trace (traceIO)
 
-
 -- | Sirea performs FileSystem operations in the FS partition.
-type FS = Pt (Filesystem ()) -- simple loop partition.
-data Filesystem x deriving (Typeable)
+type FS = Pt Filesystem -- simple loop partition.
+data Filesystem deriving (Typeable)
     
-
-
---
--- sirea-filesystem leverages the events model of the underlying OS
--- where feasible. The OS is made aware of interest in a set of 
--- directories, and pumps all events back to the partition thread.
---
---
---     Notification Manager
---       | A  setWatchList up, events down
---       V |
---    Sirea FS Pt
---       ||||||
---       Loader Threads
---
--- 
+-- local-mirror resource
+newtype LM = LM LocalMirror deriving (Typeable)
+instance Resource (Pt Filesystem) LM where
+    locateResource _ cp =
+        getPSched cp >>= \ pd ->
+        newLocalMirror pd >>= \ lm ->
+        return (LM lm) 
 
 -- | Read the current contents of a file. If the file does not exist
 -- or there are errors (e.g. lack of permission), Nothing will be 
--- returned. Read cannot promise observation of every intermediate
--- state in the filesystem, but it will observe every state written
--- by this Sirea process.
+-- returned. Read does not promise observation of every intermediate
+-- state in the filesystem, but wil reliably provide a recent state
+-- (assuming you aren't moving directories around and other corner
+-- cases).
 breadFile :: B (S FS FilePath) (S FS (Maybe ByteString))
-breadFile = bundefined -- might want to substitute something here for now
+breadFile = bfmap cleanFilePath >>> unsafeLinkBL mkFileReader 
+
+-- any cleanup work I want to do on filepaths?
+cleanFilePath, cleanDirPath :: FilePath -> FilePath
+cleanFilePath = FS.collapse
+cleanDirPath = (</> FS.empty) . FS.collapse
+
+mkFileReader :: PCX W -> LnkUp (Maybe ByteString) -> IO (LnkUp FilePath)
+mkFileReader cw ln = do
+    cp <- getFSPCX cw
+    pd <- getPSched cp
+    k <- newUnique
+    rf <- newIORef Nothing
+    (LM lm) <- findInPCX cp 
+    return (readLink pd k rf lm ln)
+
+getFSPCX :: PCX W -> IO (PCX FS)
+getFSPCX = findInPCX
+
+-- read state
+type ReadSt = Maybe (Sig FilePath, StableT)
+
+readLink :: PSched -> Unique -> IORef ReadSt -> LocalMirror -> LnkUp (Maybe ByteString) -> LnkUp FilePath
+readLink pd k rf lm ln = error "TODO: read files"
 
 -- | Read a file as text. This simply maps a UTF-8 decode over the 
--- binary. Sequences that do not decode are dropped. If you need
--- something else, it's easy to implement:
+-- binary. Sequences that do not decode are replaced with U+FFFD,
+-- rather than throwing an exception. 
 --
 --   breadFileText = breadFile >>> bfmap (fmap toText)
---     where toText = decodeUtf8With ignore
+--     where toText = decodeUtf8With lenientDecode
 --
 -- Sirea.Filesystem treats binary as the primary view to simplify
 -- interaction between readers and writers of different kinds.
 -- 
 breadFileText :: B (S FS FilePath) (S FS (Maybe Text))
 breadFileText = breadFile >>> bfmap (fmap toText) where
-    toText = Text.decodeUtf8With Text.ignore
+    toText = Text.decodeUtf8With Text.lenientDecode
 
 -- | Read a file as a string. This is not ideal for performance, but
 -- is convenient. Note that this translates to Text first.
@@ -135,11 +160,10 @@ breadFileText = breadFile >>> bfmap (fmap toText) where
 -- Text type is much better for efficient processing.
 breadFileString :: B (S FS FilePath) (S FS (Maybe String))
 breadFileString = breadFile >>> bfmap (fmap toString) where
-    toString = Text.unpack . Text.decodeUtf8With Text.ignore
+    toString = Text.unpack . Text.decodeUtf8With Text.lenientDecode
 
-
--- | Write a file, or remove it. When writing a file, intermediate
--- directory structure will be created if it doesn't already exist.
+-- | Write a file, or remove it. Intermediate directory structure is
+-- created if necessary.
 -- To remove a file, write Nothing. RDP's resource paradigm excludes
 -- notions of creation or destruction, but 'does-not-exist' can be
 -- understood as just another file state, distinct from empty file.
@@ -161,10 +185,21 @@ breadFileString = breadFile >>> bfmap (fmap toString) where
 -- failure, whether due to permissions or write conflict, is False.
 --
 bwriteFile :: B (S FS (FilePath, Maybe ByteString)) (S FS Bool)
-bwriteFile = bvoid writeFile >>> verifyFile where
-    verifyFile = (loadFile &&& bfmap snd) >>> bzipWith (==)
-    loadFile = bfmap fst >>> breadFile
-    writeFile = btrivial
+bwriteFile = bfmap (first cleanFilePath) >>> bvoid wf >>> vf where
+    vf = (lf &&& bfmap snd) >>> bzipWith (==) -- verify by comparing read with write
+    lf = bfmap fst >>> breadFile -- read the file
+    wf = unsafeLinkB_ mkFileWriter -- try to write file (no direct return)
+
+-- it might be worth just hacking something out for now, i.e. that
+-- will not handle 
+mkFileWriter :: PCX W -> IO (LnkUp (FilePath,Maybe ByteString))
+mkFileWriter cw = do
+    k <- newUnique
+    cp <- getFSPCX cw
+    (LM lm) <- findInPCX cp
+    return (lnFileWriter k lm)
+
+lnFileWriter :: Unique -> LocalMirror -> 
 
 -- | Write text to file as UTF-8 (via Binary)
 bwriteFileText :: B (S FS (FilePath, Maybe Text)) (S FS Bool)
@@ -178,8 +213,43 @@ bwriteFileString = bfmap (second (fmap fromString)) >>> bwriteFile where
 
 -- | List contents of a directory, including relevant metadata.
 blistDirectory :: B (S FS FilePath) (S FS [FileDesc])
-blistDirectory = bundefined
+blistDirectory = bfmap cleanDirPath >>> unsafeLinkBL mkDirReader
 
+mkDirReader :: PCX W -> LnkUp [FileDesc] -> IO (LnkUp FilePath)
+mkDirReader = error "TODO: load directory info"
+
+-- | For user interaction, it would often be convenient to create or
+-- load a configuration file with default text. This is a utility
+-- operation to support that common pattern. If the file does not
+-- exist, it will be created in the filesystem with the given text.
+-- In case of read error, the given text is returned.
+bloadConfig :: IO FilePath -> Text -> B (S FS ()) (S FS Text)
+bloadConfig getPath txt = lc where
+    lc = unsafeLinkBL ini >>> breadFileText >>> bfmap (fromMaybe txt) 
+    ini cw ln = do
+        fp <- cleanFilePath <$> getPath
+        cp <- getFSPCX cw
+        (LM lm) <- findInPCX cp
+        lmSchedWork lm fp (initFile fp) 
+        return (ln_sfmap (s_const fp) ln)
+    initFile fp =
+        FS.isFile fp >>= \ bFile ->
+        unless bFile $
+            FS.createTree (FS.directory fp) >>
+            FS.writeTextFile fp txt
+
+-- load config relative to a directory.
+bloadConfigRel :: IO FilePath -> FilePath -> Text -> B (S FS ()) (S FS Text)
+bloadConfigRel getDirPath name txt = bloadConfig iodir txt where
+    iodir = if FS.absolute name then return name else
+            (</> name) <$> getDirPath
+
+-- | bloadConfigH, bloadConfigW - load configs relative to home or
+-- working directory, respectively. If absolute path is given, it is
+-- used as an absolute path.
+bloadConfigH, bloadConfigW :: FilePath -> Text -> B (S FS ()) (S FS Text)
+bloadConfigH = bloadConfigRel FS.getHomeDirectory
+bloadConfigW = bloadConfigRel FS.getWorkingDirectory 
 
 -- | Access ambient information about user directories or working
 -- directory. Note: these values are assumed constant during one 

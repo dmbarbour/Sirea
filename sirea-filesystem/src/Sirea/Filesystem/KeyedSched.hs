@@ -5,7 +5,6 @@
 -- filepath or directory path. Wraps another scheduler.
 module Sirea.Filesystem.KeyedSched 
     ( newKeyedSched
-    , addKeyedWork
     ) where
 
 import Control.Monad (join, void)
@@ -18,10 +17,11 @@ type Sched = Work -> IO ()
 type WorkMap k = M.Map k [Work]
 type Work = IO ()
 
-newKeyedSched :: (Work -> IO a) -> IO (KSched k)
+newKeyedSched :: (Ord k) => (Work -> IO ()) -> IO (k -> Work -> IO ())
 newKeyedSched sched =
     newIORef M.empty >>= \ rf ->
-    return (KS rf (void . sched))
+    let ks = KS rf sched in
+    return (addKeyedWork ks)
 
 addKeyedWork :: (Ord k) => KSched k -> k -> Work -> IO ()
 addKeyedWork ks@(KS rf _) k w = join $ atomicModifyIORef rf addw where

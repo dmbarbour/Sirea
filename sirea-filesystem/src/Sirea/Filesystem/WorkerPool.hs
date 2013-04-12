@@ -12,22 +12,19 @@
 -- the IO ops should catch them first (now asserted for debugging).
 --
 module Sirea.Filesystem.WorkerPool
-    ( WPD
-    , WPool
-    , newWPool
-    , addWork
+    ( newWorkerPool
     ) where
 
 import Data.IORef
-import Control.Monad (join, void)
+import Control.Monad (join, void, liftM)
 import Control.Exception (assert, try, SomeException)
 import Control.Concurrent (forkIO)
 
 type WPD = Either Int [IO ()]
 type WPool = IORef WPD 
 
-newWPool :: Int -> IO WPool
-newWPool n = assert (n > 0) $ newIORef (Left n)
+newWorkerPool :: Int -> IO (IO () -> IO ())
+newWorkerPool n = assert (n > 0) $ liftM addWork $ newIORef (Left n)
 
 addWork :: WPool -> IO () -> IO ()
 addWork wp op = join $ atomicModifyIORef wp addw where

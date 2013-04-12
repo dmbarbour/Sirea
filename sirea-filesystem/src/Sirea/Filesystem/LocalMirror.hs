@@ -3,24 +3,45 @@
 -- observed or manipulated portions of the Filesystem. Most of this
 -- is done in IO, but asynchronously and with tight control over 
 -- resource consumption (using workers and mt-safe operations).
-
+--
+-- LocalMirror 'belongs' to a particular partition, for which PSched
+-- is provided.
+--
+-- Readers must re-subscribe after every notification (i.e. each
+-- update is one-time only).
+--
 module Sirea.Filesystem.LocalMirror 
     ( FileDesc(..), FType(..)
     , fdIsFile, fdIsDir, fdModified, fdPath
+    , LocalMirror
+    , newLocalMirror
+    , lmSchedWork
     ) where
 
-import Prelude hiding (FilePath)
-import Filesystem.Path (FilePath)
-import Filesystem.Path.CurrentOS()
+import Prelude hiding (FilePath, catch)
+import Filesystem.Path.CurrentOS(FilePath)
 import qualified Filesystem as FS
-import qualified Filesystem.Path as FS
+import qualified Filesystem.Path.CurrentOS as FS
 import Sirea.Time (T)
 import qualified Data.Map.Strict as M
-import Data.Unique
 import qualified Data.ByteString as B
+import Data.Unique
+import Data.IORef
+import Control.Exception (catch, SomeException)
+import Control.Monad.Fix (mfix)
 
+import Sirea.Partition
 import Sirea.Filesystem.Manager
+import Sirea.Filesystem.OSManager
+import Sirea.Filesystem.WorkerPool
+import Sirea.Filesystem.KeyedSched
 
+import Debug.Trace
+
+-- TUNING
+-- How many files shall we allow to read or write concurrently?
+numFileLoaders :: Int
+numFileLoaders = 6
 
 -- | A FileDesc contains a simple description of a file.
 data FileDesc = FD !FType !FilePath !T deriving (Show,Ord,Eq)
@@ -41,25 +62,49 @@ isDir _ = False
 isFile File = True
 isFile _ = False
 
+-- local mirror has a few schedulers and some mutable data
+data LocalMirror = LocalMirror 
+    { lm_wsched :: !(FilePath -> IO () -> IO ())
+    , lm_psched :: !PSched
+    , lm_fsm    :: !Manager
+    , lm_data   :: !(IORef LMD)
+    }
 
--- Resource: I'll keep a basic reflection of the filesystem being
--- observed or manipulated.
-data FileRfl = FileRfl !FileSt !WriteMap !ObsMap
-type FileSt = Maybe B.ByteString
-type WriteMap = M.Map Unique (FileSt -> IO ())
-type ObsMap = M.Map Unique Alert
-type Alert = IO () -- alerts run once then must be rescheduled
-data DirRfl = DirRfl !FileRflMap !DirList !ObsMap
-type FileRflMap = M.Map FilePath FileRfl
-type DirList = M.Map FilePath FileDesc
+-- LMD models the filesystem as flat (no hierarchy)
+--   there is a pool of active write signals
+--   
+data LMD = LMD
 
+lmdZero :: LMD
+lmdZero = LMD
 
--- TUNING
--- How many files shall we allow to read or write concurrently?
--- (note: this doesn't limit the number of files accessed, just
--- the number of updates we can process at once, so even 1 or 2
--- should be sufficient.)
---numFileLoaders :: Int
---numFileLoaders = 6
+newLocalMirror :: PSched -> IO LocalMirror
+newLocalMirror pd = mfix $ \ lm ->
+    newIORef lmdZero >>= \ rf ->
+    newManager (eventsHandler lm) >>= \ fsm ->
+    newWorkerPool numFileLoaders >>= \ wp ->
+    newKeyedSched wp >>= \ ks ->
+    return (LocalMirror ks pd fsm rf)
+
+eventsHandler :: LocalMirror -> [Event] -> IO ()
+eventsHandler _ [] = return ()
+eventsHandler lm es = 
+    onNextStep (lm_psched lm) $ 
+        mapM_ (eventHandler lm) es
+
+eventHandler :: LocalMirror -> Event -> IO ()
+eventHandler _ e = traceIO ("TODO: handle event " ++ show e)
+
+-- Schedule work regarding a particular file. Will serialize with
+-- other work on the same file. Will be performed when a worker is
+-- available.
+lmSchedWork :: LocalMirror -> FilePath -> IO () -> IO ()
+lmSchedWork lm fp = lm_wsched lm fp . catchAll fp
+
+catchAll :: FilePath -> IO () -> IO ()
+catchAll fp op = op `catch` reportE fp
+
+reportE :: FilePath -> SomeException -> IO ()
+reportE fp e = traceIO ("sirea-filesystem error: " ++ show fp ++ " - " ++ show e)
 
 

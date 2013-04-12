@@ -26,7 +26,8 @@ import Sirea.Time
 import Debug.Trace (traceIO)
 
 data P = P
-    { p_sigup  :: !(MVar ()) -- signal watchlist update.
+    { p_dtPoll :: !DT
+    , p_sigup  :: !(MVar ()) -- signal watchlist update.
     , p_watch  :: !(IORef [FilePath])
     , p_action :: !(EventsHandler)
     }
@@ -48,20 +49,17 @@ data FileRec = FileRec
     , fr_mod   :: {-# UNPACK #-} !T
     }
 
-pollPeriod :: Int -- microseconds
-pollPeriod = 3 * 1000 * 1000
-
 -- if a file is younger than dtYoung, we'll report it for any new
 -- subscriptions as a new file, i.e. to make sure the subscriber 
 -- doesn't miss it due to a race condition.
 dtYoung :: DT
 dtYoung = 15 -- seconds
 
-newPollingManager :: MkManager
-newPollingManager eh = 
+newPollingManager :: DT -> MkManager
+newPollingManager dtPoll eh = 
     newEmptyMVar >>= \ w ->
     newIORef [] >>= \ rfL ->
-    let p = P w rfL eh in
+    let p = P dtPoll w rfL eh in
     forkIO (pollInit p) >>
     return (Manager (setWatch p))
 
@@ -69,7 +67,7 @@ newPollingManager eh =
 -- This will be handled the next time the poll thread tests for
 -- the signal. Does not block.
 setWatch :: P -> [FilePath] -> IO ()
-setWatch (P u w _) wl = void $ writeIORef w wl >> tryPutMVar u ()
+setWatch (P _ u w _) wl = void $ writeIORef w wl >> tryPutMVar u ()
 
 -- pollInit is the state when we don't have any active watches.
 pollInit :: P -> IO ()
@@ -101,8 +99,11 @@ pollCycle p oldMem =
         Nothing -> do
             tNow <- getTime
             newMem <- mainPollingAction tNow p oldMem
-            threadDelay pollPeriod
+            threadDelay (dtToUsec (p_dtPoll p))
             pollCycle p newMem
+
+dtToUsec :: DT -> Int
+dtToUsec = fromIntegral . (`div` 1000) . dtToNanos 
 
 expectedError :: IOE.IOError -> Bool
 expectedError ioe =
