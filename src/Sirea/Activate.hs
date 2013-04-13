@@ -19,7 +19,8 @@ import Control.Applicative
 import Control.Concurrent.MVar
 import Control.Monad (unless, when, void, liftM)
 import Control.Exception (catch, AsyncException)
-import Control.Concurrent (myThreadId, forkIO, killThread, threadDelay)
+import Control.Concurrent (myThreadId, forkIO, killThread, threadDelay
+                          ,rtsSupportsBoundThreads)
 import Sirea.Internal.LTypes
 import Sirea.Internal.B0Compile (compileB0)
 import Sirea.Internal.PTypes
@@ -103,6 +104,7 @@ data AppPeriodic = AppPeriodic
 --
 buildSireaApp :: B (S P0 ()) S1 -> IO SireaAppObject
 buildSireaApp app = 
+    warnIfNotCompiledWithThreadedFlag >>
     newPCX [] >>= \ cw -> -- new global resource context
     getPCX0 cw >>= \ cp0 -> -- partition context P0
     findInPCX cp0 >>= \ tc0 ->
@@ -118,6 +120,13 @@ buildSireaApp app =
     mkLn >>= \ lnk0 ->
     let lu = ln_lnkup lnk0 in
     buildSireaBLU cw lu
+
+-- Sirea expects the -threaded flag.
+warnIfNotCompiledWithThreadedFlag :: IO ()
+warnIfNotCompiledWithThreadedFlag =
+    unless rtsSupportsBoundThreads $
+        traceIO ("Warning! Sirea app was not compiled with -threaded. "
+                 ++ "May behave unpredictably, fail, or run slowly.")
 
 -- To help make resets a bit more robust, I'm going to leverage the
 -- dynamic behaviors model (which will basically compile the app per
