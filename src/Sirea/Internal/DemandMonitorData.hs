@@ -168,10 +168,11 @@ deliverDaggr da =
     let lst = M.toAscList (dd_table dd) in
     --traceIO ("deliverDaggr ct=" ++ (show . length) lst) >>
     let tMax = tNow `subtractTime` dtDaggrHist in  
-    let mbtSL = leastActiveStability tNow (fmap snd lst) in
+    let mbtSL = leastActiveStability (fmap snd lst) in
     let tS = ddStability dd mbtSL tMax in
+    assert (inStableT tS <= tMax) $
     --traceIO ("deliverDagger tgt=" ++ show mbtSL ++ " == tMax = " ++ show (inStableT tS == tMax)) >>
-    let lst' = mapMaybe (daggrTableGC (inStableT tS) tNow) lst in
+    let lst' = mapMaybe (daggrTableGC (inStableT tS)) lst in
     let tbl' = M.fromAscList lst' in
     let dd' = DemandData { dd_stableT = mbtSL
                          , dd_stableR = tS
@@ -210,10 +211,10 @@ ddNeedsFlush dd = maybe (not (M.null (dd_table dd))) -- GC flush?
 --
 -- Signals are evaluated as they are collected to help eliminate
 -- implicit state that might be part of a loop.
-daggrTableGC :: T -> T -> (k, SigSt e) -> Maybe (k, SigSt e)
-daggrTableGC tGC tT (k,st) =
-    let s' = s_tseq mbwhnf tGC (st_signal st) in
-    let bDone = s_term2 s' tGC tT in
+daggrTableGC :: T -> (k, SigSt e) -> Maybe (k, SigSt e)
+daggrTableGC tGC (k,st) =
+    let s' = s_tseq mbwhnf tGC (st_signal st) in  -- trims & sequences
+    let bDone = s_term s' tGC in
     let st' = st { st_signal = s' } in
     if bDone then Nothing 
              else st' `seq` Just (k, st')
@@ -449,7 +450,7 @@ schedCleanupMD md = schedCleanup where
         let tS = inStableT (mdd_stable mdd) in
         let tGC = min tMDH tS in
         let s' = s_trim (mdd_signal mdd) tGC in
-        let bActive = not (s_is_final2 s' tS tNow) in
+        let bActive = not (s_is_final s' tS) in
         let bFlush = not bActive && (tS > tMDH) in -- flush remaining data later?
         -- GC the observer signals. Recognize 'DoneT' for MDD might not be.
         let tDAH = tNow `subtractTime` dtDaggrHist in
@@ -467,7 +468,7 @@ schedCleanupMD md = schedCleanup where
         assert (not (st_expect st)) $
         let tGC = min tMDD (inStableT (st_stable st)) in
         let s' = s_trim (st_signal st) tGC in
-        let bDone = s_term2 s' tGC tMDD in
+        let bDone = s_term s' tGC in
         if bDone then Nothing else
         let st' = st { st_signal = s' } in
         let mln' = mln { mln_signal = st', mln_tmup = Nothing } in

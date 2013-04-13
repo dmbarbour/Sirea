@@ -346,13 +346,13 @@ respectsStability (StableT tS) tU = (tU >= tS)
 
 -- least stability of a non-terminal SigSt
 -- the first arg should be the test time.
-leastActiveStability :: T -> [SigSt a] -> Maybe StableT
-leastActiveStability tT = foldr (activeStability tT) Nothing
+leastActiveStability :: [SigSt a] -> Maybe StableT
+leastActiveStability = foldr activeStability Nothing
 
-activeStability :: T -> SigSt a -> Maybe StableT -> Maybe StableT
-activeStability tT st mbt =
+activeStability :: SigSt a -> Maybe StableT -> Maybe StableT
+activeStability st mbt =
     let tS = st_stable st in
-    let bDone = s_term2 (st_signal st) (inStableT tS) tT in
+    let bDone = s_term (st_signal st) (inStableT tS) in
     if bDone then mbt else
     Just $! maybe tS (min tS) mbt 
 

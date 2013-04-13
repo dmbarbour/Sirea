@@ -35,7 +35,7 @@ module Sirea.Signal
  , s_merge
  , s_switch, s_switch'
  , s_is_final, s_term
- , s_is_final2, s_term2
+ --, s_is_final2, s_term2
  , s_activeBefore
  , s_delay
  --, s_peek
@@ -249,31 +249,18 @@ s_is_final (Sig _ tl) tm =
         Done -> True
         _ -> False
 
--- | Same as s_is_final, but the time of the test is not the same as
--- the time for the query. s_is_final s tQuery tTest. tTest >= tQuery.
-s_is_final2 :: Sig a -> T -> T -> Bool
-s_is_final2 s tQ tT = assert (tT >= tQ) $ s_is_final s tQ -- current impl only needs one param
-
 -- | Test whether a signal has terminated after a given instant.
 --     s_term s t = isNothing (s_sample s t) && (s_is_final s t)
 s_term :: Sig a -> T -> Bool
-s_term s tQ = s_term2 s tQ tQ
-
--- | Test whether a signal has terminated after a given instant, but
--- time of test may be different from the time of query. This allows
--- testing further ahead to make the decision.
---     s_term s tQuery tTest. tTest >= tQuery.
-s_term2 :: Sig a -> T -> T -> Bool
-s_term2 (Sig hd tl) tQ tT = assert (tT >= tQ) $ 
+s_term (Sig hd tl) tQ = 
     let (x,xs) = seqQuery hd tQ tl in
-    isNothing x && termTail tT xs
+    isNothing x && termTail xs
 
-termTail :: T -> Seq (Maybe a) -> Bool
-termTail _ Done = True
-termTail tT (Step tx x xs) = 
-    if (tx > tT) then False else
-    if isNothing x then termTail tT xs
-                   else False
+-- current implementation of Seq is assumed to be a finite list.
+termTail :: Seq (Maybe a) -> Bool
+termTail Done = True -- terminated
+termTail (Step _ (Just _) _) = False -- active
+termTail (Step _ Nothing xs) = termTail xs -- false update
         
 -- | Test whether a signal is active before a given time. This is a
 -- test that helps discover lower-bounds for activity, but there is

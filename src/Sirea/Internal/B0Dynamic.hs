@@ -646,14 +646,12 @@ emitMergedSignal mln lu =
     assert (0 == mld_touchCt mld) $
     assert ((not . M.null . mld_table) mld) $
     let lst = M.toAscList (mld_table mld) in
-    let tSMax = inStableT (mld_upper mld) in
-    let tTest = (maybe tSMax (max tSMax) (mld_tmup mld)) `addTime` dtCompile in
-    let mbtGC = leastActiveStability tTest (fmap snd lst) in
+    let mbtGC = leastActiveStability (fmap snd lst) in
     -- trace ("Merging sigs: " ++ show (map fst lst)) $
     let tS0 = mld_stable mld in
     let tS = maybe (mld_upper mld) (max tS0) mbtGC in
     let tGC = inStableT tS in
-    let tbl' = M.fromAscList $ mapMaybe (mergeGC tGC tTest) lst in 
+    let tbl' = M.fromAscList $ mapMaybe (mergeGC tGC) lst in 
     let mld' = MLD 
             { mld_table = tbl'
             , mld_upper = (mld_upper mld)
@@ -674,10 +672,10 @@ emitMergedSignal mln lu =
    
 -- need to GC the table. An element can be removed once it no longer
 -- contributes to the result
-mergeGC :: T -> T -> (k,SigSt a) -> Maybe (k, SigSt a)
-mergeGC tGC tT (k,st) = 
+mergeGC :: T -> (k,SigSt a) -> Maybe (k, SigSt a)
+mergeGC tGC (k,st) = 
     let s' = s_trim (st_signal st) tGC in
-    let bDone = s_term2 s' tGC tT in
+    let bDone = s_term s' tGC in
     let st' = st { st_signal = s' } in
     if bDone then Nothing 
              else st' `seq` Just (k, st')
